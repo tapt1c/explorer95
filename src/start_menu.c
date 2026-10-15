@@ -211,6 +211,7 @@ void StartHide(void)
     if (popupActive) return;
     ShowWindow(env.start, SW_HIDE);
     SendMessageA(env.startButton, BM_SETSTATE, FALSE, 0);
+    InvalidateRect(env.startButton, NULL, TRUE);
 }
 void StartMeasure(int pins, int requestedRecent, StartLayout *layout)
 {
@@ -270,6 +271,7 @@ void StartToggle(void)
         ShowWindow(env.start, SW_SHOW); SetForegroundWindow(env.start);
         SetFocus(GetDlgItem(env.start, startPinCount ? ID_PINNED : ID_PROGRAMS));
         SendMessageA(env.startButton, BM_SETSTATE, TRUE, 0);
+        InvalidateRect(env.startButton, NULL, TRUE);
     }
 }
 

@@ -715,7 +715,9 @@ int EnvStartButtonWidth(void)
 static BOOL DrawStartButton(const DRAWITEMSTRUCT *item)
 {
     RECT frame = item->rcItem, text = frame; char label[32];
-    BOOL down = (item->itemState & ODS_SELECTED) != 0;
+    /* A button can lose its transient pushed state when focus enters the
+     * popup. Keep the classic latched appearance until Start actually closes. */
+    BOOL down = (item->itemState & ODS_SELECTED) != 0 || IsWindowVisible(env.start);
     int offset = down ? 1 : 0;
     HFONT font = CreateStartFont(), old;
     /* Select the real small icon resource instead of shrinking the 32px logo.
