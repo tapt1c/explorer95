@@ -34,7 +34,7 @@ ALLOWED = {
     "user32.dll": set("""
         AppendMenuA CreateMenu CreatePopupMenu CreateWindowExA DefWindowProcA
         CallWindowProcA CopyIcon DestroyIcon DrawIconEx ExitWindowsEx FindWindowExA
-        DestroyMenu DestroyWindow DispatchMessageA DrawEdge DrawFocusRect DrawTextA
+        DestroyMenu DestroyWindow DispatchMessageA DrawEdge DrawFrameControl DrawFocusRect DrawTextA
         BeginPaint EndPaint EnumWindows FillRect FindWindowA
         GetDC ReleaseDC GetClassLongA GetCapture GetClassNameA GetClientRect GetCursorPos GetDlgItem
         GetDlgItemTextA GetFocus GetForegroundWindow GetKeyState GetMessageA GetParent

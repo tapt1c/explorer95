@@ -691,23 +691,58 @@ void EnvironmentShutdown(void)
     if (desktopIcon) DestroyIcon(desktopIcon);
 }
 
+/* The classic shell uses the system caption font in bold for Start. The
+ * default GUI font can have different metrics, even at the same point size. */
+static HFONT CreateStartFont(void)
+{
+    NONCLIENTMETRICSA metrics; LOGFONTA font;
+    ZeroMemory(&metrics, sizeof(metrics)); metrics.cbSize = sizeof(metrics);
+    if (SystemParametersInfoA(SPI_GETNONCLIENTMETRICS, sizeof(metrics), &metrics, 0)) font = metrics.lfCaptionFont;
+    else GetObjectA(env.host.font, sizeof(font), &font);
+    font.lfWeight = FW_BOLD;
+    return CreateFontIndirectA(&font);
+}
 int EnvStartButtonWidth(void)
 {
-    HDC dc = GetDC(env.bar); SIZE size; HFONT old; LOGFONTA lf; HFONT font;
-    GetObjectA(env.host.font, sizeof(lf), &lf); lf.lfWeight = FW_BOLD; font = CreateFontIndirectA(&lf);
+    HDC dc = GetDC(env.bar); SIZE size = {0, 0}; HFONT old, font = CreateStartFont();
     old = SelectObject(dc, font ? font : env.host.font);
     GetTextExtentPoint32A(dc, env.options.startLabel, lstrlenA(env.options.startLabel), &size);
     SelectObject(dc, old); if (font) DeleteObject(font); ReleaseDC(env.bar, dc);
-    return Clamp(size.cx + 30, 54, 240);
+    /* 54 x 22 is the classic Start size at default Win95 font metrics.
+     * Keep that minimum while allowing the user's caption/font to grow. */
+    return Clamp(size.cx + 26, 54, 240);
+}
+static BOOL DrawStartButton(const DRAWITEMSTRUCT *item)
+{
+    RECT frame = item->rcItem, text = frame; char label[32];
+    BOOL down = (item->itemState & ODS_SELECTED) != 0;
+    int offset = down ? 1 : 0;
+    HFONT font = CreateStartFont(), old;
+    /* Select the real small icon resource instead of shrinking the 32px logo.
+     * LR_SHARED keeps the system-owned icon alive without per-paint copies. */
+    HICON icon = (HICON)LoadImageA(NULL, IDI_WINLOGO, IMAGE_ICON, 16, 16, LR_SHARED);
+    if (!icon) icon = LoadIconA(NULL, IDI_WINLOGO);
+    FillRect(item->hDC, &frame, (HBRUSH)(COLOR_BTNFACE + 1));
+    DrawFrameControl(item->hDC, &frame, DFC_BUTTON, DFCS_BUTTONPUSH | (down ? DFCS_PUSHED : 0));
+    DrawIconEx(item->hDC, frame.left + 3 + offset, frame.top + (frame.bottom - frame.top - 16) / 2 + offset,
+        icon, 16, 16, 0, NULL, DI_NORMAL);
+    old = SelectObject(item->hDC, font ? font : env.host.font);
+    SetBkMode(item->hDC, TRANSPARENT); SetTextColor(item->hDC, GetSysColor(COLOR_BTNTEXT));
+    GetWindowTextA(item->hwndItem, label, sizeof(label));
+    text.left += 23 + offset; text.right -= 3 - offset;
+    text.top += offset; text.bottom += offset;
+    DrawTextA(item->hDC, label, -1, &text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    if (item->itemState & ODS_FOCUS) { InflateRect(&frame, -3, -3); DrawFocusRect(item->hDC, &frame); }
+    SelectObject(item->hDC, old); if (font) DeleteObject(font); return TRUE;
 }
 BOOL EnvDrawBarButton(const DRAWITEMSTRUCT *item)
 {
     RECT rect = item->rcItem, text = rect; char label[160];
-    BOOL start = item->CtlID == ID_START, down = (item->itemState & ODS_SELECTED) != 0;
+    BOOL down = (item->itemState & ODS_SELECTED) != 0;
     HICON icon = NULL; HFONT font = NULL, old; LOGFONTA lf;
     int index = (int)item->CtlID - ID_TASK;
-    if (start) icon = LoadIconA(NULL, IDI_WINLOGO);
-    else if (index >= 0 && index < taskCount) {
+    if (item->CtlID == ID_START) return DrawStartButton(item);
+    if (index >= 0 && index < taskCount) {
         DWORD_PTR result = 0; HWND target = tasks[index].windows[0];
         down = down || tasks[index].active;
         SendMessageTimeoutA(target, WM_GETICON, ICON_SMALL, 0, SMTO_ABORTIFHUNG, 80, &result);
@@ -715,11 +750,11 @@ BOOL EnvDrawBarButton(const DRAWITEMSTRUCT *item)
         if (!icon) icon = (HICON)GetClassLongPtrA(target, GCLP_HICONSM);
         if (!icon) icon = (HICON)GetClassLongPtrA(target, GCLP_HICON);
     } else return FALSE;
-    FillRect(item->hDC, &rect, (HBRUSH)(INT_PTR)((down && !start ? COLOR_3DLIGHT : COLOR_BTNFACE) + 1));
+    FillRect(item->hDC, &rect, (HBRUSH)(INT_PTR)((down ? COLOR_3DLIGHT : COLOR_BTNFACE) + 1));
     DrawEdge(item->hDC, &rect, down ? EDGE_SUNKEN : EDGE_RAISED, BF_RECT);
     if (!icon) icon = LoadIconA(NULL, IDI_APPLICATION);
     DrawIconEx(item->hDC, 4 + (down ? 1 : 0), (rect.bottom - 16) / 2 + (down ? 1 : 0), icon, 16, 16, 0, NULL, DI_NORMAL);
-    if (start || down) {
+    if (down) {
         GetObjectA(env.host.font, sizeof(lf), &lf); lf.lfWeight = FW_BOLD; font = CreateFontIndirectA(&lf);
     }
     old = SelectObject(item->hDC, font ? font : env.host.font);
