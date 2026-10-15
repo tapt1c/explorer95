@@ -2,6 +2,7 @@
 
 static int Minimum(int a, int b) { return a < b ? a : b; }
 static int Maximum(int a, int b) { return a > b ? a : b; }
+int StartMenuWidth(BOOL largeIcons) { return largeIcons ? 440 : 400; }
 void CalculateStartLayout(const RECT *bounds, int anchorX, int anchorY,
     int frameX, int frameY, int fontHeight, int pins, int requestedRecent,
     int rightItems, BOOL largeIcons, StartLayout *out)
@@ -31,7 +32,7 @@ void CalculateStartLayout(const RECT *bounds, int anchorX, int anchorY,
     out->recentTop = header + out->pinRows * row + gap;
     out->programsY = clientHeight - footer - programs;
     out->footerY = clientHeight - footer;
-    out->window.right = Minimum(width, largeIcons ? 480 : 400);
+    out->window.right = Minimum(width, StartMenuWidth(largeIcons));
     out->window.bottom = Minimum(height, clientHeight + 2 * frameY);
     (void)frameX; /* Width includes the native dialog frame. */
     out->window.left = Maximum(bounds->left, Minimum(anchorX, bounds->right - out->window.right));

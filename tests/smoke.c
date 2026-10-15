@@ -2,6 +2,7 @@
  * Starts only the executable under test and cleans up its own temporary data.
  */
 #define WIN32_LEAN_AND_MEAN
+#define COBJMACROS
 #include <windows.h>
 #include <commctrl.h>
 #include <shellapi.h>
@@ -9,6 +10,7 @@
 #include "../src/environment.h"
 #include "../src/start_layout.h"
 #include "../src/paint.h"
+#include "../src/program_history.h"
 
 static PROCESS_INFORMATION process;
 static HWND child;
@@ -105,6 +107,59 @@ static void PaintTests(void)
     PaintShutdown(); PaintBufferFree(&buffer); DeleteObject(brush);
     SelectObject(source, old); DeleteObject(logo); DeleteDC(source); ReleaseDC(NULL, screen);
 }
+static BOOL Shortcut(const char *path, const char *target)
+{
+    IShellLinkA *link; IPersistFile *persist; WCHAR wide[MAX_PATH]; HRESULT result;
+    result = CoCreateInstance(&CLSID_ShellLink, NULL, CLSCTX_INPROC_SERVER, &IID_IShellLinkA, (void **)&link);
+    if (FAILED(result)) return FALSE;
+    result = IShellLinkA_SetPath(link, target);
+    if (SUCCEEDED(result)) result = IShellLinkA_QueryInterface(link, &IID_IPersistFile, (void **)&persist);
+    if (SUCCEEDED(result)) {
+        if (MultiByteToWideChar(CP_ACP, 0, path, -1, wide, MAX_PATH)) result = IPersistFile_Save(persist, wide, TRUE);
+        else result = E_FAIL;
+        IPersistFile_Release(persist);
+    }
+    IShellLinkA_Release(link); return SUCCEEDED(result);
+}
+static void HistoryTests(const char *directory, const char *module, const char *settings)
+{
+    char document[MAX_PATH], docLink[MAX_PATH], appLink[MAX_PATH], recent[MAX_PATH], path[MAX_PATH], target[MAX_PATH];
+    HANDLE file;
+    Check(SUCCEEDED(OleInitialize(NULL)), "initialize COM for shortcut history fixtures");
+    wsprintfA(document, "%s\\history-document.txt", directory);
+    file = CreateFileA(document, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
+    Check(file != INVALID_HANDLE_VALUE, "create isolated document history fixture"); CloseHandle(file);
+    wsprintfA(docLink, "%s\\document.lnk", directory); wsprintfA(appLink, "%s\\program.lnk", directory);
+    Check(Shortcut(docLink, document) && Shortcut(appLink, module), "create document and program shortcuts");
+    Check(!IsProgramHistoryEntry(document, NULL) && !IsProgramHistoryEntry(docLink, NULL),
+        "documents and shortcuts targeting documents are excluded from program history");
+    Check(IsProgramHistoryEntry(module, NULL) && IsProgramHistoryEntry(appLink, NULL),
+        "executables and shortcuts targeting executables remain eligible for history");
+    wsprintfA(path, "%s\\folder.exe", directory); CreateDirectoryA(path, NULL);
+    wsprintfA(target, "%s\\folder.lnk", directory);
+    Check(Shortcut(target, path) && !IsProgramHistoryEntry(path, NULL) && !IsProgramHistoryEntry(target, NULL),
+        "folders and their shortcuts do not become programs even with an exe suffix");
+    DeleteFileA(target); RemoveDirectoryA(path);
+    wsprintfA(recent, "%s\\Recent", directory); CreateDirectoryA(recent, NULL);
+    wsprintfA(path, "%s\\application.lnk", recent);
+    Check(Shortcut(path, module) && !IsProgramHistoryEntry(path, recent),
+        "Recent Documents entries are excluded even when their target is executable");
+    DeleteFileA(path); RemoveDirectoryA(recent);
+    wsprintfA(path, "%s\\RecentSibling.lnk", directory);
+    Check(Shortcut(path, module) && IsProgramHistoryEntry(path, recent),
+        "Recent Documents filtering respects directory boundaries"); DeleteFileA(path);
+    wsprintfA(path, "%s\\broken.lnk", directory);
+    file = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
+    Check(!IsProgramHistoryEntry(path, NULL), "malformed shortcuts are excluded without a resolution dialog"); DeleteFileA(path);
+    WritePrivateProfileStringA("Recent", "Format", "2", settings);
+    WritePrivateProfileStringA("Recent", "Program0", docLink, settings);
+    WritePrivateProfileStringA("Recent", "Program1", document, settings);
+    WritePrivateProfileStringA("Recent", "Program2", module, settings);
+    WritePrivateProfileStringA("Recent", "Arguments2", "!\"--child\"", settings);
+    WritePrivateProfileStringA("Recent", "Program3", appLink, settings);
+    OleUninitialize();
+}
 static void LayoutTests(void)
 {
     const int sizes[][2] = {{320,240}, {640,480}, {800,600}, {1024,768}, {1280,720}, {1920,1080}};
@@ -123,6 +178,7 @@ static void LayoutTests(void)
             okay &= layout.window.left >= bounds.left && layout.window.top >= bounds.top &&
                 layout.window.right <= bounds.right && layout.window.bottom <= bounds.bottom &&
                 layout.recentRows <= requested && layout.recentRows >= 0 && layout.pinRows <= pins &&
+                layout.window.right - layout.window.left == (bounds.right - bounds.left < StartMenuWidth(large) ? bounds.right - bounds.left : StartMenuWidth(large)) &&
                 layout.programsY >= layout.recentTop + layout.recentRows * layout.rowHeight &&
                 layout.rowHeight >= (large ? 40 : 28) && layout.footerY + layout.footerHeight <= layout.window.bottom - layout.window.top - 6;
         }
@@ -519,7 +575,7 @@ void start(void)
     wsprintfA(settingsDir, "%s profile", fixture);
     Check(CreateDirectoryA(settingsDir, NULL), "create isolated settings directory");
     wsprintfA(settings, "%s\\settings.ini", settingsDir);
-    PaintTests(); LayoutTests();
+    PaintTests(); LayoutTests(); HistoryTests(settingsDir, module, settings);
     ConfigTests(settingsDir);
     wsprintfA(command, "\"%s\" --settings=\"%s\"", executable, settings);
     ZeroMemory(&startup, sizeof(startup)); startup.cb = sizeof(startup);
@@ -527,6 +583,12 @@ void start(void)
     bar = WaitFor("Explorer95.Taskbar", NULL);
     desktop = WaitFor("Explorer95.Desktop", NULL);
     Check(bar && desktop, "taskbar and full desktop created");
+    GetPrivateProfileStringA("Recent", "Program0", "", actual, sizeof(actual), settings);
+    Check(!lstrcmpiA(actual, module), "existing history drops document shortcuts and compacts the remaining programs");
+    GetPrivateProfileStringA("Recent", "Arguments0", "", actual, sizeof(actual), settings);
+    Check(!lstrcmpA(actual, "!\"--child\""), "history cleanup preserves the surviving program arguments");
+    GetPrivateProfileStringA("Recent", "Program2", "", actual, sizeof(actual), settings);
+    Check(!actual[0], "filtered document entries are removed from the persisted program history");
     started = GetTickCount();
     while (!FindWindowExA(desktop, NULL, NULL, NULL) && GetTickCount() - started < 10000) Sleep(50);
     Check(FindWindowExA(desktop, NULL, NULL, NULL) != NULL, "desktop hosts the installed native shell view");
@@ -656,6 +718,9 @@ void start(void)
     Check(WaitForSingleObject(process.hProcess, 5000) == WAIT_OBJECT_0, "restarted shell exits cleanly");
     CloseHandle(process.hThread); CloseHandle(process.hProcess);
     DeleteFileA(settings);
+    wsprintfA(path, "%s\\history-document.txt", settingsDir); DeleteFileA(path);
+    wsprintfA(path, "%s\\document.lnk", settingsDir); DeleteFileA(path);
+    wsprintfA(path, "%s\\program.lnk", settingsDir); DeleteFileA(path);
     wsprintfA(path, "%s\\Quick Launch", settingsDir); RemoveDirectoryA(path);
     Check(RemoveDirectoryA(settingsDir), "temporary profile removed");
     wsprintfA(path, "%s\\sample.txt", fixture); DeleteFileA(path);

@@ -1,5 +1,6 @@
 #define WIN32_LEAN_AND_MEAN
 #include "shell_internal.h"
+#include "program_history.h"
 
 typedef struct RecentProgram { char path[MAX_PATH], arguments[512]; } RecentProgram;
 typedef struct ProgramItem { char path[MAX_PATH], label[MAX_PATH]; BOOL folder; HICON icon; } ProgramItem;
@@ -68,14 +69,14 @@ static HICON PathIcon(const char *path, BOOL large)
 }
 HICON EnvPathIcon(const char *path) { return PathIcon(path, FALSE); }
 static HICON MenuPathIcon(const char *path) { return PathIcon(path, env.options.largeStartIcons); }
-static HICON SpecialIcon(int csidl)
+static HICON SpecialIcon(int csidl, BOOL large)
 {
     LPITEMIDLIST pidl;
     SHFILEINFOA info;
     HICON icon = NULL;
     ZeroMemory(&info, sizeof(info));
     if (SUCCEEDED(SHGetSpecialFolderLocation(NULL, csidl, &pidl))) {
-        SHGetFileInfoA((LPCSTR)pidl, 0, &info, sizeof(info), SHGFI_PIDL | SHGFI_ICON | (env.options.largeStartIcons ? SHGFI_LARGEICON : SHGFI_SMALLICON));
+        SHGetFileInfoA((LPCSTR)pidl, 0, &info, sizeof(info), SHGFI_PIDL | SHGFI_ICON | (large ? SHGFI_LARGEICON : SHGFI_SMALLICON));
         icon = info.hIcon; CoTaskMemFree(pidl);
     }
     return icon;
@@ -93,9 +94,23 @@ static HICON SystemIcon(int resource, BOOL large)
 HICON EnvSystemIcon(int resource) { return SystemIcon(resource, FALSE); }
 static HICON MenuSystemIcon(int resource) { return SystemIcon(resource, env.options.largeStartIcons); }
 
+static void PruneRecent(void)
+{
+    int i, used = 0; BOOL changed = FALSE; char directory[MAX_PATH];
+    if (!env.host.specialPath(CSIDL_RECENT, directory)) directory[0] = 0;
+    for (i = 0; i < RECENT_LIMIT; ++i) {
+        if (!recent[i].path[0]) continue;
+        if (!IsProgramHistoryEntry(recent[i].path, directory)) { changed = TRUE; continue; }
+        if (used != i) { recent[used] = recent[i]; changed = TRUE; }
+        ++used;
+    }
+    ZeroMemory(recent + used, (RECENT_LIMIT - used) * sizeof(*recent));
+    if (changed) SaveRecent();
+}
 static void UpdateRecent(void)
 {
     int i; char caption[MAX_PATH];
+    PruneRecent();
     for (i = 0; i < RECENT_LIMIT; ++i) {
         HWND button = GetDlgItem(env.start, ID_RECENT + i);
         if (recentIcons[i]) DestroyIcon(recentIcons[i]);
@@ -110,11 +125,9 @@ static void UpdateRecent(void)
 void StartRecord(const char *path, const char *arguments)
 {
     int i, index = RECENT_LIMIT - 1;
-    const char *name = BaseName(path);
-    int length = lstrlenA(name);
-    /* Documents and folders belong in Recent Documents, not the program list. */
-    if (length < 4 || (lstrcmpiA(name + length - 4, ".exe") && lstrcmpiA(name + length - 4, ".com") &&
-        lstrcmpiA(name + length - 4, ".bat") && lstrcmpiA(name + length - 4, ".pif") && lstrcmpiA(name + length - 4, ".lnk"))) return;
+    char directory[MAX_PATH];
+    if (!env.host.specialPath(CSIDL_RECENT, directory)) directory[0] = 0;
+    if (!IsProgramHistoryEntry(path, directory)) return;
     for (i = 0; i < RECENT_LIMIT; ++i) if (!lstrcmpiA(recent[i].path, path)) { index = i; break; }
     for (i = index; i > 0; --i) recent[i] = recent[i - 1];
     lstrcpynA(recent[0].path, path, MAX_PATH);
@@ -164,7 +177,7 @@ static HMENU FolderMenu(const char *directory, int depth)
             int index = programCount++;
             ProgramItem *entry = &programs[index];
             lstrcpyA(entry->path, path); lstrcpyA(entry->label, label);
-            entry->folder = item->folder; entry->icon = MenuPathIcon(path);
+            entry->folder = item->folder; entry->icon = EnvPathIcon(path);
             if (item->folder && depth < 5) {
                 HMENU child = FolderMenu(path, depth + 1);
                 AppendMenuA(menu, MF_OWNERDRAW | MF_POPUP, (UINT_PTR)child, (LPCSTR)entry);
@@ -177,7 +190,7 @@ static HMENU FolderMenu(const char *directory, int depth)
         lstrcpynA(programs[programCount].path, directory, MAX_PATH);
         programs[programCount].folder = TRUE;
         lstrcpyA(programs[programCount].label, "Open this folder...");
-        programs[programCount].icon = MenuPathIcon(directory);
+        programs[programCount].icon = EnvPathIcon(directory);
         AppendMenuA(menu, MF_OWNERDRAW, 2000 + programCount, (LPCSTR)&programs[programCount]); ++programCount;
     }
     return menu;
@@ -196,7 +209,7 @@ static void ProgramsPopup(BOOL documents)
         if (programCount < 250) {
             ProgramItem *entry = &programs[programCount++]; HMENU child;
             lstrcpyA(entry->path, common); lstrcpyA(entry->label, "All Users");
-            entry->folder = TRUE; entry->icon = MenuPathIcon(common);
+            entry->folder = TRUE; entry->icon = EnvPathIcon(common);
             child = FolderMenu(common, 0);
             AppendMenuA(menu, MF_OWNERDRAW | MF_POPUP, (UINT_PTR)child, (LPCSTR)entry);
         }
@@ -256,7 +269,7 @@ static void MeasureStart(int pins, int requestedRecent, BOOL largeIcons, StartLa
     }
     if (env.options.edge == ABE_RIGHT) {
         if (bounds.right > bar.left) bounds.right = bar.left;
-        x = bounds.right - (largeIcons ? 480 : 400);
+        x = bounds.right - StartMenuWidth(largeIcons);
     }
     for (i = 0; i < 9; ++i) if (env.options.startItems & (1U << i)) ++right;
     CalculateStartLayout(&bounds, x, y, GetSystemMetrics(SM_CXDLGFRAME), GetSystemMetrics(SM_CYDLGFRAME),
@@ -335,12 +348,12 @@ static void LayoutStart(HWND window)
     ShowWindow(GetDlgItem(window, ID_SHUTDOWN), env.options.startItems & (1U << 11) ? SW_SHOW : SW_HIDE);
 }
 
-static HICON DosIcon(void)
+static HICON DosIcon(BOOL large)
 {
     char directory[MAX_PATH], path[MAX_PATH]; HICON icon = NULL;
     GetSystemDirectoryA(directory, MAX_PATH);
-    if (EnvJoin(path, directory, "pifmgr.dll")) ExtractIconExA(path, 0, env.options.largeStartIcons ? &icon : NULL, env.options.largeStartIcons ? NULL : &icon, 1);
-    return icon ? icon : MenuSystemIcon(3);
+    if (EnvJoin(path, directory, "pifmgr.dll")) ExtractIconExA(path, 0, large ? &icon : NULL, large ? NULL : &icon, 1);
+    return icon ? icon : SystemIcon(3, large);
 }
 void StartRefresh(void)
 {
@@ -356,7 +369,7 @@ void StartRefresh(void)
         if (pinIcons[i]) DestroyIcon(pinIcons[i]);
         pinIcons[i] = NULL;
         SetWindowTextA(GetDlgItem(env.start, ID_PINNED + i), startPins[i].label);
-        if (i < startPinCount) pinIcons[i] = startPins[i].path[0] == '@' ? (!lstrcmpA(startPins[i].path, "@explorer") ? MenuSystemIcon(5) : DosIcon()) : MenuPathIcon(startPins[i].path);
+        if (i < startPinCount) pinIcons[i] = startPins[i].path[0] == '@' ? (!lstrcmpA(startPins[i].path, "@explorer") ? MenuSystemIcon(5) : DosIcon(env.options.largeStartIcons)) : MenuPathIcon(startPins[i].path);
     }
     if (IsWindowVisible(env.start)) StartPosition();
     LayoutStart(env.start); InvalidateRect(env.start, NULL, FALSE);
@@ -365,7 +378,7 @@ static BOOL DrawProgramItem(const DRAWITEMSTRUCT *draw)
 {
     DRAWITEMSTRUCT buffered = *draw; HDC target = draw->hDC;
     ProgramItem *entry = (ProgramItem *)draw->itemData; RECT text = draw->rcItem;
-    int iconSize = IconSize();
+    const int iconSize = 16;
     BOOL selected = (draw->itemState & ODS_SELECTED) != 0;
     if (!entry) return FALSE;
     buffered.hDC = PaintBufferBegin(&itemBuffer, target, &draw->rcItem); draw = &buffered;
@@ -410,13 +423,22 @@ static void MorePopup(BOOL pins)
         if (!pins && !(env.options.startItems & (1U << i))) continue;
         if (visible++ < skip) continue;
         GetWindowTextA(GetDlgItem(env.start, id), entries[used].label, MAX_PATH);
-        entries[used].icon = StartIcon(id);
+        if (pins) {
+            entries[used].icon = startPins[i].path[0] == '@' ?
+                (!lstrcmpA(startPins[i].path, "@explorer") ? SystemIcon(5, FALSE) : DosIcon(FALSE)) : EnvPathIcon(startPins[i].path);
+        } else {
+            static const int folders[] = {CSIDL_PERSONAL, CSIDL_RECENT, CSIDL_DRIVES, CSIDL_NETWORK, CSIDL_CONTROLS, CSIDL_PRINTERS};
+            static const int resources[] = {24, 23, 25};
+            entries[used].icon = i == 0 ? SystemIcon(4, FALSE) :
+                i < 6 ? SpecialIcon(folders[i], FALSE) : SystemIcon(resources[i - 6], FALSE);
+        }
         AppendMenuA(menu, MF_OWNERDRAW, id, (LPCSTR)&entries[used++]);
     }
     GetWindowRect(GetDlgItem(env.start, pins ? ID_MOREPINS : ID_MORECOMMANDS), &rect);
     popupActive = TRUE;
     command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, rect.right, rect.top, 0, env.start, NULL);
     popupActive = FALSE; DestroyMenu(menu);
+    for (i = 0; i < used; ++i) if (entries[i].icon) { DestroyIcon(entries[i].icon); entries[i].icon = NULL; }
     if (command) SendMessageA(env.start, WM_COMMAND, command, 0);
 }
 static void ProgramContext(HWND button, LPARAM coordinates)
@@ -450,9 +472,9 @@ static void LoadItemIcons(void)
 {
     int i;
     for (i = 0; i < 16; ++i) { if (itemIcons[i]) DestroyIcon(itemIcons[i]); itemIcons[i] = NULL; }
-    itemIcons[0] = SpecialIcon(CSIDL_DRIVES); itemIcons[1] = MenuSystemIcon(4);
-    itemIcons[2] = SpecialIcon(CSIDL_NETWORK); itemIcons[3] = SpecialIcon(CSIDL_CONTROLS);
-    itemIcons[4] = SpecialIcon(CSIDL_PRINTERS); itemIcons[5] = SpecialIcon(CSIDL_RECENT);
+    itemIcons[0] = SpecialIcon(CSIDL_DRIVES, env.options.largeStartIcons); itemIcons[1] = MenuSystemIcon(4);
+    itemIcons[2] = SpecialIcon(CSIDL_NETWORK, env.options.largeStartIcons); itemIcons[3] = SpecialIcon(CSIDL_CONTROLS, env.options.largeStartIcons);
+    itemIcons[4] = SpecialIcon(CSIDL_PRINTERS, env.options.largeStartIcons); itemIcons[5] = SpecialIcon(CSIDL_RECENT, env.options.largeStartIcons);
     itemIcons[6] = MenuSystemIcon(37); itemIcons[7] = MenuSystemIcon(24);
     itemIcons[8] = MenuSystemIcon(23); itemIcons[9] = MenuSystemIcon(25);
     itemIcons[10] = MenuSystemIcon(28); itemIcons[11] = MenuSystemIcon(45);
@@ -507,8 +529,8 @@ static LRESULT CALLBACK StartProc(HWND window, UINT message, WPARAM wp, LPARAM l
             old = SelectObject(dc, env.host.font);
             GetTextExtentPoint32A(dc, entry->label, lstrlenA(entry->label), &size);
             SelectObject(dc, old); ReleaseDC(window, dc);
-            item->itemWidth = size.cx + IconSize() + 28;
-            item->itemHeight = size.cy + 4 > IconSize() + 6 ? size.cy + 4 : IconSize() + 6; return TRUE;
+            item->itemWidth = size.cx + 44;
+            item->itemHeight = size.cy + 4 > 22 ? size.cy + 4 : 22; return TRUE;
         }
         break;
     }
