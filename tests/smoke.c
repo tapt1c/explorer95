@@ -4,6 +4,9 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <commctrl.h>
+#include <shellapi.h>
+#include <stddef.h>
+#include "../src/environment.h"
 
 static PROCESS_INFORMATION process;
 static HWND child;
@@ -26,7 +29,11 @@ static void Check(BOOL okay, const char *description)
     Log(okay ? "PASS: " : "FAIL: "); Log(description); Log("\r\n");
     if (!okay) {
         if (child) PostMessageA(child, WM_CLOSE, 0, 0);
-        if (process.hProcess) TerminateProcess(process.hProcess, 1);
+        if (process.hProcess) {
+            HWND bar = FindWindowA("Explorer95.Taskbar", NULL);
+            if (bar) PostMessageA(bar, WM_CLOSE, 0, 0);
+            if (WaitForSingleObject(process.hProcess, 3000) != WAIT_OBJECT_0) TerminateProcess(process.hProcess, 1);
+        }
         ExitProcess(1);
     }
 }
@@ -37,7 +44,7 @@ static HWND WaitFor(const char *kind, const char *title)
     HWND window;
     do {
         window = FindWindowA(kind, title);
-        if (window) return window;
+        if (window && IsWindowVisible(window)) return window;
         Sleep(50);
     } while (GetTickCount() - started < 10000);
     return NULL;
@@ -51,17 +58,187 @@ static void Navigate(HWND browser, const char *path)
 
 static LRESULT CALLBACK ChildProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam)
 {
+    if (message == WM_APP + 33) { SetWindowTextA(window, "Explorer95 tray callback received"); return 0; }
+    if (message == WM_APP + 34) {
+        CreateWindowA("Explorer95.SmokeChild", "Explorer95 second task", WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+            120, 120, 320, 200, NULL, NULL, GetModuleHandleA(NULL), NULL);
+        return 0;
+    }
+    if (message == WM_APP + 35) {
+        const char *command = GetCommandLineA();
+        int length = lstrlenA(command);
+        return length >= 9 && !lstrcmpA(command + length - 9, "\"--child\"");
+    }
     if (message == WM_DESTROY) { PostQuitMessage(0); return 0; }
     return DefWindowProcA(window, message, wParam, lParam);
 }
 
+static void ConfigTests(const char *directory)
+{
+    char ini[MAX_PATH], backup[MAX_PATH], recovery[MAX_PATH], text[128];
+    wsprintfA(ini, "%s\\boot-test.ini", directory);
+    wsprintfA(backup, "%s\\backup-test.ini", directory);
+    wsprintfA(recovery, "%s\\recovery-test.ini", directory);
+    WritePrivateProfileStringA("boot", "shell", "EXPLORER.EXE /n", ini);
+    WritePrivateProfileStringA("boot", "other", "keep me", ini);
+    Check(ConfigureBootShell(ini, backup, recovery, "EXPLR95.EXE", FALSE) == ERROR_SUCCESS,
+          "shell installer writes selection in a temporary INI");
+    GetPrivateProfileStringA("boot", "shell", "", text, sizeof(text), backup);
+    Check(!lstrcmpA(text, "EXPLORER.EXE /n"), "full backup retains original shell including arguments");
+    Check(ConfigureBootShell(ini, backup, recovery, "EXPLR95.EXE", FALSE) == ERROR_SUCCESS,
+          "shell installation is repeatable without replacing the original backup");
+    WritePrivateProfileStringA("boot", "other", "changed later", ini);
+    Check(ConfigureBootShell(ini, backup, recovery, "EXPLR95.EXE", TRUE) == ERROR_SUCCESS,
+          "restore writes the original shell");
+    GetPrivateProfileStringA("boot", "shell", "", text, sizeof(text), ini);
+    Check(!lstrcmpA(text, "EXPLORER.EXE /n"), "restore preserves exact original shell command");
+    GetPrivateProfileStringA("boot", "other", "", text, sizeof(text), ini);
+    Check(!lstrcmpA(text, "changed later"), "restore preserves unrelated INI edits made after installation");
+    WritePrivateProfileStringA("boot", "shell", "OTHER.EXE", ini);
+    Check(ConfigureBootShell(ini, backup, recovery, "EXPLR95.EXE", TRUE) == ERROR_ALREADY_EXISTS,
+          "restore refuses to overwrite a subsequently selected third-party shell");
+    WritePrivateProfileStringA("boot", "shell", "EXPLORER.EXE /n", ini);
+    SetFileAttributesA(ini, FILE_ATTRIBUTE_READONLY);
+    Check(ConfigureBootShell(ini, backup, recovery, "EXPLR95.EXE", FALSE) == ERROR_ACCESS_DENIED,
+          "read-only boot configuration is left unchanged");
+    SetFileAttributesA(ini, FILE_ATTRIBUTE_NORMAL);
+    DeleteFileA(recovery);
+    Check(ConfigureBootShell(ini, backup, recovery, "EXPLR95.EXE", FALSE) != ERROR_SUCCESS,
+          "an unknown pre-existing backup is never overwritten");
+    DeleteFileA(ini); DeleteFileA(backup); DeleteFileA(recovery);
+    WritePrivateProfileStringA("boot", "shell", "\"C:\\OLD SHELL\\shell.exe\"", ini);
+    Check(ConfigureBootShell(ini, backup, recovery, "EXPLR95.EXE", FALSE) == ERROR_SUCCESS &&
+          ConfigureBootShell(ini, backup, recovery, "EXPLR95.EXE", TRUE) == ERROR_SUCCESS,
+          "install and restore a shell whose executable path is enclosed in quotes");
+    { char section[512];
+      GetPrivateProfileSectionA("boot", section, sizeof(section), ini);
+      Check(!lstrcmpA(section, "shell=\"C:\\OLD SHELL\\shell.exe\""), "shell restoration preserves enclosing quotes"); }
+    DeleteFileA(ini); DeleteFileA(backup); DeleteFileA(recovery);
+}
+
+static void EnvironmentTests(HWND bar, HWND browser, HWND childWindow, HWND menu, const char *settings)
+{
+    typedef struct Packet { DWORD signature, operation; NOTIFYICONDATAA icon; } Packet;
+    Packet packet;
+    COPYDATASTRUCT copy;
+    HWND tray, notification, properties;
+    RECT rect;
+    char title[128], value[MAX_PATH], quickPath[MAX_PATH], module[MAX_PATH];
+    DWORD started;
+    GetWindowTextA(GetDlgItem(menu, 800), title, sizeof(title));
+    Check(title[0] != 0, "Run updates the recent-program list in Start");
+    GetPrivateProfileStringA("Recent", "Program0", "", value, sizeof(value), settings);
+    Check(value[0] != 0, "recent-program history is persisted");
+
+    ZeroMemory(&packet, sizeof(packet));
+    packet.signature = 0x34753423; packet.operation = NIM_ADD;
+    packet.icon.cbSize = offsetof(NOTIFYICONDATAA, szTip) + 64;
+    packet.icon.hWnd = childWindow; packet.icon.uID = 95;
+    /* Wine's private tray transport transfers bitmap pixels rather than icon
+     * handles across processes. Test Win95 packet/callback semantics here;
+     * cross-process HICON transfer requires the native Win95 test matrix. */
+    packet.icon.uFlags = NIF_MESSAGE | NIF_TIP;
+    packet.icon.uCallbackMessage = WM_APP + 33;
+    packet.icon.hIcon = LoadIconA(NULL, IDI_APPLICATION);
+    lstrcpyA(packet.icon.szTip, "Explorer95 smoke notification");
+    copy.dwData = 1; copy.cbData = offsetof(Packet, icon) + packet.icon.cbSize; copy.lpData = &packet;
+    Check(SendMessageA(bar, WM_COPYDATA, (WPARAM)childWindow, (LPARAM)&copy), "tray accepts a Win95 ANSI NIM_ADD packet");
+    tray = FindWindowExA(bar, NULL, "TrayNotifyWnd", NULL);
+    notification = FindWindowExA(tray, NULL, "Explorer95.TrayIcon", NULL);
+    while (notification && GetWindowTextA(notification, title, sizeof(title)))
+        notification = FindWindowExA(tray, notification, "Explorer95.TrayIcon", NULL);
+    Check(notification && IsWindowVisible(notification), "tray displays a visible slot for the registered notification");
+    SendMessageA(notification, WM_RBUTTONUP, 0, 0);
+    started = GetTickCount();
+    do { Sleep(50); GetWindowTextA(childWindow, title, sizeof(title)); }
+    while (lstrcmpA(title, "Explorer95 tray callback received") && GetTickCount() - started < 3000);
+    Check(!lstrcmpA(title, "Explorer95 tray callback received"), "tray forwards mouse callbacks with the application message");
+    packet.operation = NIM_MODIFY; packet.icon.uFlags = NIF_TIP;
+    lstrcpyA(packet.icon.szTip, "Updated tooltip");
+    Check(SendMessageA(bar, WM_COPYDATA, (WPARAM)childWindow, (LPARAM)&copy), "tray accepts NIM_MODIFY");
+    packet.signature = 0;
+    Check(!SendMessageA(bar, WM_COPYDATA, (WPARAM)childWindow, (LPARAM)&copy), "tray rejects an invalid signature");
+    packet.signature = 0x34753423; copy.cbData = 8;
+    Check(!SendMessageA(bar, WM_COPYDATA, (WPARAM)childWindow, (LPARAM)&copy), "tray rejects truncated notification data");
+    copy.cbData = offsetof(Packet, icon) + packet.icon.cbSize; packet.operation = NIM_DELETE;
+    Check(SendMessageA(bar, WM_COPYDATA, (WPARAM)childWindow, (LPARAM)&copy), "tray accepts NIM_DELETE");
+    Check(!IsWindow(notification), "deleted notification window is removed");
+
+    lstrcpyA(value, settings);
+    { int length = lstrlenA(value); while (length && value[length - 1] != '\\') --length; value[length] = 0; }
+    wsprintfA(quickPath, "%sQuick Launch\\quick-child.exe", value);
+    GetModuleFileNameA(NULL, module, MAX_PATH);
+    Check(CopyFileA(module, quickPath, TRUE), "add a real executable to the Quick Launch folder");
+
+    SendMessageA(bar, WM_COMMAND, 609, 0); Sleep(200);
+    Check(IsIconic(browser) && IsIconic(childWindow), "Show Desktop minimizes application windows");
+    SendMessageA(bar, WM_COMMAND, 609, 0); Sleep(200);
+    Check(!IsIconic(browser) && !IsIconic(childWindow), "Show Desktop restores only the saved windows");
+    SendMessageA(bar, WM_COMMAND, 600, 0);
+    properties = WaitFor("Explorer95.Properties", NULL);
+    Check(properties != NULL, "taskbar properties open");
+    SendMessageA(GetDlgItem(properties, 601), BM_SETCHECK, BST_UNCHECKED, 0);
+    SendMessageA(GetDlgItem(properties, 620), CB_SETCURSEL, 1, 0);
+    SendMessageA(GetDlgItem(properties, 621), CB_SETCURSEL, 1, 0);
+    SendMessageA(GetDlgItem(properties, 606), BM_SETCHECK, BST_CHECKED, 0);
+    SetDlgItemInt(properties, 622, 188, FALSE);
+    SendMessageA(properties, WM_COMMAND, 0x3021, 0);
+    GetWindowRect(bar, &rect);
+    Check(rect.top <= 2 && rect.bottom - rect.top >= 55, "properties dock taskbar to the top with two rows");
+    Check(GetPrivateProfileIntA("Taskbar", "Rows", 0, settings) == 2 &&
+          GetPrivateProfileIntA("Taskbar", "TaskWidth", 0, settings) == 188, "taskbar options are persisted");
+    Check(IsWindowVisible(GetDlgItem(bar, 700)), "Quick Launch displays programs from its folder");
+    SendMessageA(childWindow, WM_APP + 34, 0, 0);
+    Check(WaitFor("Explorer95.SmokeChild", "Explorer95 second task") != NULL, "fixture opens a second window in the same process");
+    started = GetTickCount();
+    do {
+        int id; BOOL grouped = FALSE;
+        Sleep(100);
+        for (id = 200; id < 264; ++id) {
+            GetWindowTextA(GetDlgItem(bar, id), title, sizeof(title));
+            if (!lstrcmpA(title, "Explorer95 second task (2)") || !lstrcmpA(title, "Explorer95 tray callback received (2)")) grouped = TRUE;
+        }
+        if (grouped) break;
+    } while (GetTickCount() - started < 3000);
+    Check(GetTickCount() - started < 3000, "taskbar groups windows belonging to the same process");
+    SendMessageA(bar, WM_COMMAND, 862, 0); GetWindowRect(bar, &rect);
+    Check(rect.right >= GetSystemMetrics(SM_CXSCREEN) - 2 && rect.right - rect.left >= 140,
+          "unlocked taskbar can dock to the right");
+    SendMessageA(bar, WM_COMMAND, 860, 0); GetWindowRect(bar, &rect);
+    Check(rect.left <= 2, "unlocked taskbar can dock to the left");
+    SendMessageA(bar, WM_COMMAND, 861, 0);
+    SendMessageA(bar, WM_COMMAND, 601, 0);
+    SendMessageA(bar, WM_COMMAND, 862, 0); GetWindowRect(bar, &rect);
+    Check(rect.top <= 2 && rect.right - rect.left > 500, "locked taskbar rejects position changes");
+    SendMessageA(properties, WM_COMMAND, IDCANCEL, 0);
+    SendMessageA(bar, WM_COMMAND, 602, 0);
+    SetCursorPos(GetSystemMetrics(SM_CXSCREEN) / 2, GetSystemMetrics(SM_CYSCREEN) - 80);
+    Sleep(2200); GetWindowRect(bar, &rect);
+    Check(rect.bottom - rect.top <= 3, "auto-hide collapses the taskbar to an edge strip");
+    SetCursorPos(GetSystemMetrics(SM_CXSCREEN) / 2, 0);
+    Sleep(800); GetWindowRect(bar, &rect);
+    Check(rect.bottom - rect.top >= 55, "moving to the edge reveals the taskbar");
+    SendMessageA(bar, WM_COMMAND, 602, 0);
+    PostMessageA(childWindow, WM_CLOSE, 0, 0);
+    started = GetTickCount(); while (IsWindow(childWindow) && GetTickCount() - started < 3000) Sleep(50);
+    SendMessageA(GetDlgItem(bar, 700), BM_CLICK, 0, 0);
+    child = WaitFor("Explorer95.SmokeChild", "Explorer95 smoke child");
+    Check(child != NULL, "Quick Launch starts the selected program");
+    PostMessageA(child, WM_CLOSE, 0, 0);
+    started = GetTickCount(); while (IsWindow(child) && GetTickCount() - started < 3000) Sleep(50);
+    started = GetTickCount();
+    while (!DeleteFileA(quickPath) && GetTickCount() - started < 3000) Sleep(50);
+    Check(GetFileAttributesA(quickPath) == INVALID_FILE_ATTRIBUTES, "Quick Launch test executable removed");
+}
+
 void start(void)
 {
-    char module[MAX_PATH], executable[MAX_PATH], command[MAX_PATH * 2];
+    static char module[MAX_PATH], executable[MAX_PATH], command[1024], settings[MAX_PATH], settingsDir[MAX_PATH];
     char fixture[MAX_PATH], temp[MAX_PATH], path[MAX_PATH], title[MAX_PATH + 32];
     char actual[MAX_PATH + 32];
     STARTUPINFOA startup;
-    HWND bar, browser, files, menu, run, dialog, task;
+    HWND bar, browser, files, menu, run, dialog, task, desktop;
+    RECT originalWork;
     HANDLE file;
     int i, length;
     DWORD started;
@@ -70,7 +247,9 @@ void start(void)
     command[0] = 0;
     lstrcpynA(command, GetCommandLineA(), sizeof(command));
     length = lstrlenA(command);
-    if (length >= 7 && !lstrcmpA(command + length - 7, "--child")) {
+    if ((length >= 7 && !lstrcmpA(command + length - 7, "--child")) ||
+        (length >= 9 && !lstrcmpA(command + length - 9, "\"--child\"")) ||
+        (lstrlenA(module) >= 15 && !lstrcmpiA(module + lstrlenA(module) - 15, "quick-child.exe"))) {
         WNDCLASSA cls;
         MSG message;
         ZeroMemory(&cls, sizeof(cls));
@@ -88,8 +267,9 @@ void start(void)
     }
 
     Check(!FindWindowA("Explorer95.Taskbar", NULL), "test starts without an existing Explorer95 instance");
+    SystemParametersInfoA(SPI_GETWORKAREA, 0, &originalWork, 0);
     GetTempPathA(MAX_PATH, temp);
-    wsprintfA(fixture, "%sexplorer95 smoke %lu", temp, GetCurrentProcessId());
+    wsprintfA(fixture, "%sexplorer95 smoke %lu-%lu", temp, GetCurrentProcessId(), GetTickCount());
     Check(CreateDirectoryA(fixture, NULL), "create isolated folder with spaces in its path");
     wsprintfA(path, "%s\\empty", fixture); CreateDirectoryA(path, NULL);
     wsprintfA(path, "%s\\sub", fixture); CreateDirectoryA(path, NULL);
@@ -101,12 +281,22 @@ void start(void)
     length = lstrlenA(executable);
     while (length && executable[length - 1] != '\\') --length;
     lstrcpyA(executable + length, "explorer95.exe");
-    wsprintfA(command, "\"%s\"", executable);
+    wsprintfA(settingsDir, "%s profile", fixture);
+    Check(CreateDirectoryA(settingsDir, NULL), "create isolated settings directory");
+    wsprintfA(settings, "%s\\settings.ini", settingsDir);
+    ConfigTests(settingsDir);
+    wsprintfA(command, "\"%s\" --settings=\"%s\"", executable, settings);
     ZeroMemory(&startup, sizeof(startup)); startup.cb = sizeof(startup);
     Check(CreateProcessA(NULL, command, NULL, NULL, FALSE, 0, NULL, NULL, &startup, &process), "launch built EXE");
     bar = WaitFor("Explorer95.Taskbar", NULL);
+    desktop = WaitFor("Explorer95.Desktop", NULL);
+    Check(bar && desktop, "taskbar and full desktop created");
+    started = GetTickCount();
+    while (!FindWindowExA(desktop, NULL, NULL, NULL) && GetTickCount() - started < 10000) Sleep(50);
+    Check(FindWindowExA(desktop, NULL, NULL, NULL) != NULL, "desktop hosts the installed native shell view");
+    SendMessageA(bar, WM_COMMAND, 315, 0);
     browser = WaitFor("Explorer95.Files", NULL);
-    Check(bar && browser, "taskbar and file window created");
+    Check(browser != NULL, "Explorer opens an independent file window");
     files = GetDlgItem(browser, 404);
     Navigate(browser, fixture);
     wsprintfA(title, "%s - Explorer95", fixture);
@@ -157,11 +347,12 @@ void start(void)
     SendMessageA(menu, WM_COMMAND, 305, 0);
     run = WaitFor("Explorer95.Run", NULL);
     Check(run != NULL, "Run dialog opens");
-    wsprintfA(command, "\"%s\" --child", module);
+    wsprintfA(command, "\"%s\" \"--child\"", module);
     SendMessageA(GetDlgItem(run, 403), WM_SETTEXT, 0, (LPARAM)command);
     SendMessageA(run, WM_COMMAND, IDOK, 0);
     child = WaitFor("Explorer95.SmokeChild", NULL);
     Check(child && !IsWindow(run), "Run launches quoted executable with arguments and closes on success");
+    Check(SendMessageA(child, WM_APP + 35, 0, 0), "Run preserves a fully quoted argument");
 
     task = NULL;
     started = GetTickCount();
@@ -177,11 +368,40 @@ void start(void)
     ShowWindow(child, SW_MINIMIZE);
     Check(IsIconic(child), "fixture window minimized");
     SendMessageA(task, BM_CLICK, 0, 0);
+    started = GetTickCount(); while (IsIconic(child) && GetTickCount() - started < 3000) Sleep(50);
     Check(!IsIconic(child), "task button restores minimized window");
+    EnvironmentTests(bar, browser, child, menu, settings);
     PostMessageA(child, WM_CLOSE, 0, 0);
     PostMessageA(bar, WM_CLOSE, 0, 0);
     Check(WaitForSingleObject(process.hProcess, 5000) == WAIT_OBJECT_0, "Exit shuts down application");
     CloseHandle(process.hThread); CloseHandle(process.hProcess);
+    {
+        RECT work;
+        SystemParametersInfoA(SPI_GETWORKAREA, 0, &work, 0);
+        Check(EqualRect(&work, &originalWork), "exit restores the original desktop work area");
+    }
+    wsprintfA(command, "\"%s\" --settings=\"%s\"", executable, settings);
+    Check(CreateProcessA(NULL, command, NULL, NULL, FALSE, 0, NULL, NULL, &startup, &process), "restart with saved profile");
+    bar = WaitFor("Explorer95.Taskbar", NULL);
+    Check(bar != NULL, "shell restarts successfully");
+    {
+        RECT bounds;
+        GetWindowRect(bar, &bounds);
+        Check(bounds.top <= 2 && bounds.bottom - bounds.top >= 55, "saved docking and row count restored after restart");
+    }
+    menu = FindWindowA("Explorer95.Start", NULL);
+    GetWindowTextA(GetDlgItem(menu, 800), actual, sizeof(actual));
+    Check(actual[0] != 0, "recent programs survive restart");
+    SendMessageA(menu, WM_COMMAND, 801, 0);
+    child = WaitFor("Explorer95.SmokeChild", "Explorer95 smoke child");
+    Check(child != NULL && SendMessageA(child, WM_APP + 35, 0, 0), "reloaded recent command preserves fully quoted arguments");
+    PostMessageA(child, WM_CLOSE, 0, 0);
+    PostMessageA(bar, WM_CLOSE, 0, 0);
+    Check(WaitForSingleObject(process.hProcess, 5000) == WAIT_OBJECT_0, "restarted shell exits cleanly");
+    CloseHandle(process.hThread); CloseHandle(process.hProcess);
+    DeleteFileA(settings);
+    wsprintfA(path, "%s\\Quick Launch", settingsDir); RemoveDirectoryA(path);
+    Check(RemoveDirectoryA(settingsDir), "temporary profile removed");
     wsprintfA(path, "%s\\sample.txt", fixture); DeleteFileA(path);
     wsprintfA(path, "%s\\new.txt", fixture); DeleteFileA(path);
     wsprintfA(path, "%s\\empty", fixture); RemoveDirectoryA(path);

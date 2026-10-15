@@ -47,5 +47,5 @@ jobs:
             --verify-tag \
             --prerelease \
             --title "Explorer95 $RELEASE_TAG — classic shell prototype" \
-            --notes-file .github/release-notes/prototype.md \
+            --notes-file .github/release-notes/environment.md \
             release/explorer95.exe release/*.zip release/SHA256SUMS.txt

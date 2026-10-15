@@ -13,3 +13,16 @@ jobs:
         with:
           name: explorer95-prototype
           path: build/explorer95.exe
+  ui-smoke:
+    name: Source UI smoke (Wine64)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install GUI test dependencies
+        run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64 wine wine64 xvfb xauth
+      - name: Test source UI in an isolated Wine prefix
+        env:
+          WINEPREFIX: ${{ runner.temp }}/explorer95-wine
+          WINEDEBUG: -all
+          WINEDLLOVERRIDES: mscoree,mshtml=
+        run: xvfb-run -a make ui64-smoke WINE=wine

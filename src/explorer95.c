@@ -7,6 +7,7 @@
 #include <commctrl.h>
 #include <shellapi.h>
 #include <shlobj.h>
+#include "environment.h"
 
 #define APP "Explorer95"
 #define BAR_CLASS "Explorer95.Taskbar"
@@ -47,18 +48,9 @@ typedef struct Browser {
     char path[MAX_PATH];
 } Browser;
 
-typedef struct Task {
-    HWND target, button;
-} Task;
-
 static HINSTANCE instance;
 static HFONT uiFont;
-static HWND bar, startMenu, clockWindow, startButton;
-static HWND runWindow;
-static HWND hoveredStartItem;
-static Task tasks[TASK_LIMIT];
-static int taskCount;
-static UINT taskbarCreated;
+static HWND bar, runWindow;
 
 /* Windows headers expand ZeroMemory to memset. Provide it locally instead
  * of importing a C runtime that may not exist on the target machine. */
@@ -66,6 +58,14 @@ void *memset(void *destination, int value, size_t count)
 {
     volatile unsigned char *bytes = (volatile unsigned char *)destination;
     while (count--) *bytes++ = (unsigned char)value;
+    return destination;
+}
+
+void *memcpy(void *destination, const void *source, size_t count)
+{
+    unsigned char *out = destination;
+    const unsigned char *in = source;
+    while (count--) *out++ = *in++;
     return destination;
 }
 
@@ -133,23 +133,15 @@ static BOOL SpecialPath(int folder, char *path)
 
 static void Execute(HWND owner, const char *path, const char *directory)
 {
-    HINSTANCE result = ShellExecuteA(owner, "open", path, NULL, directory, SW_SHOWNORMAL);
-    if ((INT_PTR)result <= 32) {
-        char text[384];
-        wsprintfA(text, "Windows could not open:\r\n%s\r\n\r\nShell error %ld.",
-                  path, (LONG)(INT_PTR)result);
-        MessageBoxA(owner, text, APP, MB_OK | MB_ICONEXCLAMATION);
-    }
+    EnvironmentLaunch(owner, path, NULL, directory);
 }
 
 static void About(HWND owner)
 {
-    MessageBoxA(owner,
-        "Explorer95 - classic shell prototype\r\n\r\n"
-        "An independent implementation inspired by Windows XP.\r\n"
-        "Runs alongside your existing shell; no system settings are changed.\r\n\r\n"
-        "This version includes a taskbar, Start menu and file browser.\r\n"
-        "Desktop replacement and notification area are not implemented yet.",
+    MessageBoxA(owner, "Explorer95 - classic desktop environment\r\n\r\n"
+        "Desktop and system folder views use the installed Windows Shell32.\r\n"
+        "Right-click the desktop or taskbar for properties.\r\n"
+        "System shell switching is available on Windows 95 only.",
         "About Explorer95", MB_OK | MB_ICONINFORMATION);
 }
 
@@ -459,43 +451,6 @@ static HWND OpenBrowser(const char *path)
     return window;
 }
 
-static void OpenSpecial(int folder)
-{
-    char path[MAX_PATH];
-    if (SpecialPath(folder, path)) OpenBrowser(path);
-    else MessageBoxA(bar, "This special folder is unavailable.", APP, MB_OK | MB_ICONEXCLAMATION);
-}
-
-static void HideStart(void)
-{
-    ShowWindow(startMenu, SW_HIDE);
-    SendMessageA(startButton, BM_SETSTATE, FALSE, 0);
-}
-
-static void PositionStart(void)
-{
-    RECT rect;
-    RECT area;
-    int width = 372, height = 304, top;
-    GetWindowRect(bar, &rect);
-    SystemParametersInfoA(SPI_GETWORKAREA, 0, &area, 0);
-    top = rect.top - height;
-    if (top < area.top) top = area.top;
-    SetWindowPos(startMenu, HWND_TOPMOST, rect.left, top, width, height, SWP_NOACTIVATE);
-}
-
-static void ToggleStart(void)
-{
-    if (IsWindowVisible(startMenu)) HideStart();
-    else {
-        PositionStart();
-        ShowWindow(startMenu, SW_SHOW);
-        SetForegroundWindow(startMenu);
-        SetFocus(GetDlgItem(startMenu, ID_COMPUTER));
-        SendMessageA(startButton, BM_SETSTATE, TRUE, 0);
-    }
-}
-
 static LRESULT CALLBACK RunProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam)
 {
     switch (message) {
@@ -517,12 +472,19 @@ static LRESULT CALLBACK RunProc(HWND window, UINT message, WPARAM wParam, LPARAM
             char input[512], expanded[1024], program[MAX_PATH];
             char *cursor, *arguments;
             int length = 0;
-            HINSTANCE result;
+
             GetDlgItemTextA(window, ID_ADDRESS, input, sizeof(input));
             if (!input[0]) return 0;
-            if (ExpandEnvironmentStringsA(input, expanded, sizeof(expanded)) > sizeof(expanded)) {
-                ErrorMessage(window, "The command is too long.", ERROR_FILENAME_EXCED_RANGE);
-                return 0;
+            {
+                DWORD expandedLength = ExpandEnvironmentStringsA(input, expanded, sizeof(expanded));
+                if (!expandedLength) {
+                    ErrorMessage(window, "Cannot expand the command.", GetLastError());
+                    return 0;
+                }
+                if (expandedLength > sizeof(expanded)) {
+                    ErrorMessage(window, "The command is too long.", ERROR_FILENAME_EXCED_RANGE);
+                    return 0;
+                }
             }
             cursor = expanded;
             while (*cursor == ' ') ++cursor;
@@ -547,10 +509,7 @@ static LRESULT CALLBACK RunProc(HWND window, UINT message, WPARAM wParam, LPARAM
             while (*cursor == ' ') ++cursor;
             arguments = cursor;
             if (!program[0]) return 0;
-            result = ShellExecuteA(window, "open", program, *arguments ? arguments : NULL, NULL, SW_SHOWNORMAL);
-            if ((INT_PTR)result > 32) DestroyWindow(window);
-            else MessageBoxA(window, "Windows could not open that command. Check the name and try again.",
-                             APP, MB_OK | MB_ICONEXCLAMATION);
+            if (EnvironmentLaunch(window, program, *arguments ? arguments : NULL, NULL)) DestroyWindow(window);
         }
         return 0;
     case WM_DESTROY: runWindow = NULL; return 0;
@@ -558,248 +517,15 @@ static LRESULT CALLBACK RunProc(HWND window, UINT message, WPARAM wParam, LPARAM
     return DefWindowProcA(window, message, wParam, lParam);
 }
 
-static LRESULT CALLBACK StartProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam)
+static void ShowRun(void)
 {
-    switch (message) {
-    case WM_CREATE: {
-        Control(window, "BUTTON", "My Computer", WS_TABSTOP | BS_OWNERDRAW, ID_COMPUTER);
-        Control(window, "BUTTON", "My Documents", WS_TABSTOP | BS_OWNERDRAW, ID_DOCUMENTS);
-        Control(window, "BUTTON", "All Programs...", WS_TABSTOP | BS_OWNERDRAW, ID_PROGRAMS);
-        Control(window, "BUTTON", "Desktop", WS_TABSTOP | BS_OWNERDRAW, ID_DESKTOP);
-        Control(window, "BUTTON", "Run...", WS_TABSTOP | BS_OWNERDRAW, ID_RUN);
-        Control(window, "BUTTON", "Control Panel", WS_TABSTOP | BS_OWNERDRAW, ID_CONTROL);
-        Control(window, "BUTTON", "About Explorer95", WS_TABSTOP | BS_OWNERDRAW, ID_ABOUT);
-        Control(window, "BUTTON", "Exit Explorer95", WS_TABSTOP | BS_OWNERDRAW, ID_EXIT);
-        MoveWindow(GetDlgItem(window, ID_COMPUTER), 10, 48, 168, 42, TRUE);
-        MoveWindow(GetDlgItem(window, ID_PROGRAMS), 10, 98, 168, 42, TRUE);
-        MoveWindow(GetDlgItem(window, ID_RUN), 10, 148, 168, 42, TRUE);
-        MoveWindow(GetDlgItem(window, ID_ABOUT), 10, 198, 168, 42, TRUE);
-        MoveWindow(GetDlgItem(window, ID_DOCUMENTS), 190, 48, 168, 42, TRUE);
-        MoveWindow(GetDlgItem(window, ID_DESKTOP), 190, 98, 168, 42, TRUE);
-        MoveWindow(GetDlgItem(window, ID_CONTROL), 190, 148, 168, 42, TRUE);
-        MoveWindow(GetDlgItem(window, ID_EXIT), 190, 248, 168, 36, TRUE);
-        SetTimer(window, 1, 80, NULL);
-        return 0;
-    }
-    case WM_PAINT: {
-        PAINTSTRUCT paint;
-        RECT rect, header;
-        HDC dc = BeginPaint(window, &paint);
-        GetClientRect(window, &rect);
-        FillRect(dc, &rect, (HBRUSH)(COLOR_BTNFACE + 1));
-        rect.right = 182; rect.top = 40; rect.bottom = 242;
-        FillRect(dc, &rect, (HBRUSH)(COLOR_MENU + 1));
-        SetRect(&header, 0, 0, 368, 38);
-        FillRect(dc, &header, (HBRUSH)(COLOR_ACTIVECAPTION + 1));
-        SelectObject(dc, uiFont);
-        SetBkMode(dc, TRANSPARENT);
-        SetTextColor(dc, GetSysColor(COLOR_CAPTIONTEXT));
-        header.left = 12;
-        DrawTextA(dc, APP, -1, &header, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        SetRect(&rect, 182, 44, 184, 240);
-        DrawEdge(dc, &rect, EDGE_ETCHED, BF_LEFT);
-        SetRect(&rect, 8, 242, 358, 244);
-        DrawEdge(dc, &rect, EDGE_ETCHED, BF_TOP);
-        EndPaint(window, &paint);
-        return 0;
-    }
-    case WM_DRAWITEM: {
-        DRAWITEMSTRUCT *item = (DRAWITEMSTRUCT *)lParam;
-        BOOL selected = (item->itemState & (ODS_SELECTED | ODS_FOCUS)) || item->hwndItem == hoveredStartItem;
-        RECT text = item->rcItem;
-        char label[64];
-        int background = selected ? COLOR_HIGHLIGHT : (item->CtlID == ID_COMPUTER ||
-            item->CtlID == ID_PROGRAMS || item->CtlID == ID_RUN || item->CtlID == ID_ABOUT ? COLOR_MENU : COLOR_BTNFACE);
-        FillRect(item->hDC, &item->rcItem, (HBRUSH)(INT_PTR)(background + 1));
-        SetBkMode(item->hDC, TRANSPARENT);
-        SetTextColor(item->hDC, GetSysColor(selected ? COLOR_HIGHLIGHTTEXT : COLOR_MENUTEXT));
-        SelectObject(item->hDC, uiFont);
-        text.left += 10;
-        GetWindowTextA(item->hwndItem, label, sizeof(label));
-        DrawTextA(item->hDC, label, -1, &text, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        if (item->itemState & ODS_FOCUS) {
-            InflateRect(&text, -2, -4);
-            DrawFocusRect(item->hDC, &text);
-        }
-        return TRUE;
-    }
-    case WM_TIMER: {
-        POINT point;
-        HWND hovered;
-        GetCursorPos(&point);
-        hovered = WindowFromPoint(point);
-        if (GetParent(hovered) != window) hovered = NULL;
-        if (hovered != hoveredStartItem) {
-            if (hoveredStartItem) InvalidateRect(hoveredStartItem, NULL, TRUE);
-            hoveredStartItem = hovered;
-            if (hovered) InvalidateRect(hovered, NULL, TRUE);
-        }
-        return 0;
-    }
-    case WM_DESTROY: KillTimer(window, 1); return 0;
-    case WM_ACTIVATE:
-        if (LOWORD(wParam) == WA_INACTIVE && (HWND)lParam != bar) HideStart();
-        return 0;
-    case WM_CLOSE: HideStart(); return 0;
-    case WM_COMMAND: {
-        int id = LOWORD(wParam);
-        char path[MAX_PATH];
-        HideStart();
-        switch (id) {
-        case ID_COMPUTER:
-            GetWindowsDirectoryA(path, MAX_PATH);
-            if (path[1] == ':') path[3] = 0;
-            OpenBrowser(path);
-            break;
-        case ID_DOCUMENTS: OpenSpecial(CSIDL_PERSONAL); break;
-        case ID_DESKTOP: OpenSpecial(CSIDL_DESKTOPDIRECTORY); break;
-        case ID_PROGRAMS: OpenSpecial(CSIDL_PROGRAMS); break;
-        case ID_CONTROL: Execute(bar, "control.exe", NULL); break;
-        case ID_RUN: {
-            if (!runWindow)
-                runWindow = CreateWindowExA(WS_EX_DLGMODALFRAME, RUN_CLASS, "Run",
-                    WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT,
-                    420, 150, bar, NULL, instance, NULL);
-            ShowWindow(runWindow, SW_SHOWNORMAL);
-            SetForegroundWindow(runWindow);
-            SetFocus(GetDlgItem(runWindow, ID_ADDRESS));
-            break;
-        }
-        case ID_ABOUT: About(bar); break;
-        case ID_EXIT: PostMessageA(bar, WM_CLOSE, 0, 0); break;
-        }
-        return 0;
-    }
-    }
-    return DefWindowProcA(window, message, wParam, lParam);
-}
-
-static BOOL CALLBACK CollectTasks(HWND window, LPARAM context)
-{
-    HWND *windows = (HWND *)context;
-    LONG style = GetWindowLongA(window, GWL_EXSTYLE);
-    char title[2];
-    int i;
-    if (window == bar || window == startMenu || !IsWindowVisible(window) ||
-        (style & WS_EX_TOOLWINDOW)) return TRUE;
-    if (GetWindow(window, GW_OWNER) && !(style & WS_EX_APPWINDOW)) return TRUE;
-    if (!GetWindowTextA(window, title, sizeof(title))) return TRUE;
-    for (i = 0; i < TASK_LIMIT; ++i) {
-        if (!windows[i]) { windows[i] = window; break; }
-    }
-    return TRUE;
-}
-
-static void LayoutBar(void)
-{
-    RECT rect;
-    int i, width, available;
-    GetClientRect(bar, &rect);
-    MoveWindow(startButton, 4, 4, 64, 24, TRUE);
-    MoveWindow(clockWindow, rect.right - 76, 5, 72, 22, TRUE);
-    available = rect.right - 156;
-    width = taskCount ? available / taskCount : 0;
-    if (width > 160) width = 160;
-    for (i = 0; i < taskCount; ++i)
-        MoveWindow(tasks[i].button, 74 + i * width, 4, width > 3 ? width - 3 : 1, 24, TRUE);
-}
-
-static void UpdateTasks(void)
-{
-    HWND windows[TASK_LIMIT];
-    HWND foreground = GetForegroundWindow();
-    int count, i;
-    BOOL changed;
-    SYSTEMTIME now;
-    char text[128];
-    ZeroMemory(windows, sizeof(windows));
-    EnumWindows(CollectTasks, (LPARAM)windows);
-    for (count = 0; count < TASK_LIMIT && windows[count]; ++count) {}
-    /* Keep enumeration order changes from destroying a pressed button mid-click. */
-    changed = count != taskCount;
-    if (!changed) {
-        for (i = 0; i < taskCount; ++i) {
-            int j;
-            for (j = 0; j < count && tasks[i].target != windows[j]; ++j) {}
-            if (j == count) { changed = TRUE; break; }
-        }
-    }
-    if (changed && GetCapture() == NULL) {
-        for (i = 0; i < taskCount; ++i) DestroyWindow(tasks[i].button);
-        taskCount = count;
-        for (i = 0; i < taskCount; ++i) {
-            tasks[i].target = windows[i];
-            tasks[i].button = Control(bar, "BUTTON", "", BS_PUSHLIKE | BS_CHECKBOX, ID_TASK + i);
-        }
-        LayoutBar();
-    }
-    for (i = 0; i < taskCount; ++i) {
-        GetWindowTextA(tasks[i].target, text, sizeof(text));
-        SetWindowTextA(tasks[i].button, text);
-        SendMessageA(tasks[i].button, BM_SETCHECK, foreground == tasks[i].target ? BST_CHECKED : BST_UNCHECKED, 0);
-    }
-    GetLocalTime(&now);
-    wsprintfA(text, "%02u:%02u", now.wHour, now.wMinute);
-    SetWindowTextA(clockWindow, text);
-}
-
-static void PositionBar(void)
-{
-    RECT area;
-    SystemParametersInfoA(SPI_GETWORKAREA, 0, &area, 0);
-    /* Stay above the existing taskbar without changing the global work area. */
-    SetWindowPos(bar, HWND_TOPMOST, area.left, area.bottom - BAR_HEIGHT,
-                 area.right - area.left, BAR_HEIGHT, SWP_NOACTIVATE);
-    if (IsWindowVisible(startMenu)) PositionStart();
-}
-
-static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam)
-{
-    if (taskbarCreated && message == taskbarCreated) { PositionBar(); return 0; }
-    switch (message) {
-    case WM_CREATE:
-        bar = window;
-        startButton = Control(window, "BUTTON", "Start", BS_PUSHBUTTON, ID_START);
-        clockWindow = Control(window, "STATIC", "", SS_CENTER | SS_CENTERIMAGE | SS_SUNKEN, 1);
-        SetTimer(window, 1, 500, NULL);
-        return 0;
-    case WM_SIZE: LayoutBar(); return 0;
-    case WM_SETTINGCHANGE: case WM_DISPLAYCHANGE: PositionBar(); return 0;
-    case WM_TIMER: UpdateTasks(); return 0;
-    case WM_LBUTTONDOWN: HideStart(); return 0;
-    case WM_COMMAND:
-        if (LOWORD(wParam) == ID_START) ToggleStart();
-        else if (LOWORD(wParam) >= ID_TASK && LOWORD(wParam) < ID_TASK + taskCount) {
-            HWND target = tasks[LOWORD(wParam) - ID_TASK].target;
-            HideStart();
-            if (IsWindow(target)) {
-                if (IsIconic(target)) ShowWindow(target, SW_RESTORE);
-                SetForegroundWindow(target);
-            }
-        }
-        return 0;
-    case WM_CONTEXTMENU: {
-        HMENU menu = CreatePopupMenu();
-        POINT point;
-        int command;
-        GetCursorPos(&point);
-        AppendMenuA(menu, MF_STRING, ID_ABOUT, "About Explorer95");
-        AppendMenuA(menu, MF_STRING, ID_EXIT, "Exit Explorer95");
-        SetForegroundWindow(window);
-        command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
-                                 point.x, point.y, 0, window, NULL);
-        DestroyMenu(menu);
-        if (command == ID_ABOUT) About(window);
-        if (command == ID_EXIT) PostMessageA(window, WM_CLOSE, 0, 0);
-        return 0;
-    }
-    case WM_DESTROY:
-        KillTimer(window, 1);
-        if (startMenu) DestroyWindow(startMenu);
-        PostQuitMessage(0);
-        return 0;
-    }
-    return DefWindowProcA(window, message, wParam, lParam);
+    if (!runWindow)
+        runWindow = CreateWindowExA(WS_EX_DLGMODALFRAME, RUN_CLASS, "Run",
+            WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT,
+            420, 150, bar, NULL, instance, NULL);
+    ShowWindow(runWindow, SW_SHOWNORMAL);
+    SetForegroundWindow(runWindow);
+    SetFocus(GetDlgItem(runWindow, ID_ADDRESS));
 }
 
 static BOOL RegisterClassFor(const char *name, WNDPROC procedure, HBRUSH brush, HICON icon)
@@ -821,7 +547,7 @@ void start(void)
     MSG message;
     HWND previous;
     HICON icon;
-    char initial[MAX_PATH];
+    EnvironmentHost host;
     HRESULT ole;
     instance = GetModuleHandleA(NULL);
     previous = FindWindowA(BAR_CLASS, NULL);
@@ -834,25 +560,13 @@ void start(void)
     InitCommonControls();
     uiFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
     icon = LoadIconA(NULL, IDI_APPLICATION);
-    if (!RegisterClassFor(BAR_CLASS, BarProc, (HBRUSH)(COLOR_BTNFACE + 1), NULL) ||
-        !RegisterClassFor(START_CLASS, StartProc, (HBRUSH)(COLOR_BTNFACE + 1), NULL) ||
-        !RegisterClassFor(RUN_CLASS, RunProc, (HBRUSH)(COLOR_BTNFACE + 1), icon) ||
+    if (!RegisterClassFor(RUN_CLASS, RunProc, (HBRUSH)(COLOR_BTNFACE + 1), icon) ||
         !RegisterClassFor(FILE_CLASS, BrowserProc, (HBRUSH)(COLOR_BTNFACE + 1), icon))
         ExitProcess(1);
-    taskbarCreated = RegisterWindowMessageA("TaskbarCreated");
-    bar = CreateWindowExA(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, BAR_CLASS, APP,
-                          WS_POPUP | WS_DLGFRAME | WS_CLIPCHILDREN,
-                          0, 0, 640, BAR_HEIGHT, NULL, NULL, instance, NULL);
-    startMenu = CreateWindowExA(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, START_CLASS, "Start",
-                                WS_POPUP | WS_DLGFRAME, 0, 0, 372, 304,
-                                bar, NULL, instance, NULL);
-    if (!bar || !startMenu) ExitProcess(1);
-    PositionBar();
-    ShowWindow(bar, SW_SHOWNOACTIVATE);
-    GetWindowsDirectoryA(initial, MAX_PATH);
-    if (initial[1] == ':') initial[3] = 0;
-    OpenBrowser(initial);
-    UpdateTasks();
+    host.instance = instance; host.font = uiFont;
+    host.openFolder = OpenBrowser; host.specialPath = SpecialPath; host.showRun = ShowRun;
+    bar = EnvironmentCreate(&host);
+    if (!bar) { EnvironmentShutdown(); ExitProcess(1); }
     while (GetMessageA(&message, NULL, 0, 0) > 0) {
         HWND root = RootWindow(message.hwnd);
         char kind[64];
@@ -879,14 +593,12 @@ void start(void)
         if (message.message == WM_SYSKEYDOWN && message.wParam == VK_UP && !lstrcmpA(kind, FILE_CLASS)) {
             ParentFolder(root); continue;
         }
-        if (message.message == WM_KEYDOWN && message.wParam == VK_ESCAPE && IsWindowVisible(startMenu)) {
-            HideStart(); continue;
-        }
-        if (IsWindowVisible(startMenu) && IsDialogMessageA(startMenu, &message)) continue;
+        if (EnvironmentTranslate(&message)) continue;
         if (runWindow && IsDialogMessageA(runWindow, &message)) continue;
         TranslateMessage(&message);
         DispatchMessageA(&message);
     }
+    EnvironmentShutdown();
     if (SUCCEEDED(ole)) OleUninitialize();
     ExitProcess(0);
 }

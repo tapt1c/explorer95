@@ -11,30 +11,40 @@ from pathlib import Path
 
 
 ALLOWED = {
+    "advapi32.dll": {"GetUserNameA", "RegOpenKeyExA", "RegQueryValueExA", "RegCloseKey"},
     "comctl32.dll": {"InitCommonControls"},
-    "gdi32.dll": {"GetStockObject", "SelectObject", "SetBkMode", "SetTextColor"},
+    "gdi32.dll": {"GetStockObject", "SelectObject", "SetBkMode", "SetTextColor", "BitBlt",
+                  "CreateCompatibleDC", "DeleteDC", "DeleteObject", "GetObjectA"},
     "kernel32.dll": set("""
-        ExitProcess ExpandEnvironmentStringsA FindClose FindFirstFileA
+        CloseHandle CopyFileA CreateDirectoryA CreateFileA ExitProcess ExpandEnvironmentStringsA FindClose FindFirstFileA
         FindNextFileA FormatMessageA GetFileAttributesA GetFullPathNameA
         GetLastError GetLocalTime GetLogicalDriveStringsA GetModuleHandleA
         GetProcessHeap GetWindowsDirectoryA HeapAlloc HeapFree SetErrorMode
+        GetCommandLineA GetEnvironmentVariableA GetModuleFileNameA GetPrivateProfileIntA
+        GetPrivateProfileStringA GetPrivateProfileSectionA GetTickCount GetVersion MultiByteToWideChar WritePrivateProfileStringA
         lstrcatA lstrcmpA lstrcmpiA lstrcpyA lstrcpynA lstrlenA
     """.split()),
-    "ole32.dll": {"OleInitialize", "OleUninitialize"},
+    "ole32.dll": {"OleInitialize", "OleUninitialize", "CoCreateInstance", "CoTaskMemFree", "ReleaseStgMedium"},
     "shell32.dll": set("""
         SHGetFileInfoA SHGetMalloc SHGetPathFromIDListA
-        SHGetSpecialFolderLocation ShellExecuteA
+        SHGetSpecialFolderLocation ShellExecuteA SHAppBarMessage SHGetDesktopFolder
+        DragAcceptFiles DragQueryFileA DragFinish
     """.split()),
     "user32.dll": set("""
         AppendMenuA CreateMenu CreatePopupMenu CreateWindowExA DefWindowProcA
+        CallWindowProcA CopyIcon DestroyIcon DrawIconEx ExitWindowsEx FindWindowExA
         DestroyMenu DestroyWindow DispatchMessageA DrawEdge DrawFocusRect DrawTextA
         BeginPaint EndPaint EnumWindows FillRect FindWindowA
         GetCapture GetClassNameA GetClientRect GetCursorPos GetDlgItem
         GetDlgItemTextA GetForegroundWindow GetKeyState GetMessageA GetParent
+        GetDlgCtrlID GetDlgItemInt GetMenuItemCount GetMenuStringA GetPropA GetSystemMenu InsertMenuA
+        GetSystemMetrics GetWindowThreadProcessId IsChild LoadImageA PtInRect
         GetSysColor GetWindow GetWindowLongA GetWindowRect GetWindowTextA InflateRect InvalidateRect
         IsDialogMessageA IsIconic IsWindow IsWindowVisible KillTimer
         LoadCursorA LoadIconA MessageBoxA MoveWindow PostMessageA PostQuitMessage
         RegisterClassA RegisterWindowMessageA SendDlgItemMessageA SendMessageA
+        RegisterHotKey ReleaseCapture RemovePropA ScreenToClient SendNotifyMessageA
+        SetCapture SetDlgItemInt SetPropA ShowWindowAsync UnregisterHotKey WinHelpA
         SetFocus SetForegroundWindow SetMenu SetRect SetTimer SetWindowLongA SetWindowPos
         SetWindowTextA ShowWindow SystemParametersInfoA TrackPopupMenu
         TranslateMessage UpdateWindow WindowFromPoint wsprintfA
