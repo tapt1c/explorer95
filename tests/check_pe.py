@@ -15,7 +15,7 @@ ALLOWED = {
     "comctl32.dll": {"InitCommonControls"},
     "comdlg32.dll": {"GetOpenFileNameA"},
     "gdi32.dll": {"GetStockObject", "SelectObject", "SetBkMode", "SetTextColor", "BitBlt",
-                  "CreateFontIndirectA", "GetTextExtentPoint32A", "CreateCompatibleDC", "DeleteDC", "DeleteObject", "GetObjectA"},
+                  "CreateFontIndirectA", "GetTextExtentPoint32A", "GetTextMetricsA", "CreateCompatibleDC", "DeleteDC", "DeleteObject", "GetObjectA"},
     "kernel32.dll": set("""
         CloseHandle CopyFileA CreateDirectoryA CreateFileA ExitProcess ExpandEnvironmentStringsA FindClose FindFirstFileA
         FindNextFileA FormatMessageA GetFileAttributesA GetFullPathNameA
@@ -37,13 +37,13 @@ ALLOWED = {
         DestroyMenu DestroyWindow DispatchMessageA DrawEdge DrawFocusRect DrawTextA
         BeginPaint EndPaint EnumWindows FillRect FindWindowA
         GetDC ReleaseDC GetClassLongA GetCapture GetClassNameA GetClientRect GetCursorPos GetDlgItem
-        GetDlgItemTextA GetForegroundWindow GetKeyState GetMessageA GetParent
+        GetDlgItemTextA GetFocus GetForegroundWindow GetKeyState GetMessageA GetParent
         GetDlgCtrlID GetDlgItemInt GetMenuItemCount GetMenuStringA GetPropA GetSystemMenu InsertMenuA
         GetSystemMetrics GetWindowThreadProcessId IsChild LoadImageA PtInRect
         GetSysColor GetWindow GetWindowLongA GetWindowRect GetWindowTextA InflateRect InvalidateRect
         IsDialogMessageA IsIconic IsWindow IsWindowVisible KillTimer
         LoadCursorA LoadIconA MessageBoxA MoveWindow PostMessageA PostQuitMessage
-        RegisterClassA RegisterWindowMessageA SendDlgItemMessageA SendMessageA
+        RedrawWindow RegisterClassA RegisterWindowMessageA SendDlgItemMessageA SendMessageA
         RegisterHotKey ReleaseCapture RemovePropA ScreenToClient SendNotifyMessageA
         SetCapture SetDlgItemInt SetPropA ShowWindowAsync UnregisterHotKey WinHelpA
         SetFocus SetForegroundWindow SetMenu SetRect SetTimer SetWindowLongA SetWindowPos

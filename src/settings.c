@@ -18,6 +18,7 @@ void EnvSaveOptions(void)
     SaveNumber("HideInactive", env.options.hideInactive);
     { char value[24]; wsprintfA(value, "%u", env.options.startItems);
       WritePrivateProfileStringA("Start", "VisibleItems", value, env.ini);
+      wsprintfA(value, "%d", env.options.recentCount); WritePrivateProfileStringA("Start", "RecentCount", value, env.ini);
       WritePrivateProfileStringA("Start", "ButtonLabel", env.options.startLabel, env.ini); }
 }
 

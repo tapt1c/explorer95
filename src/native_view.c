@@ -391,7 +391,13 @@ void NativeViewDestroy(NativeView *view)
 }
 
 void NativeViewResize(NativeView *view, const RECT *rect)
-{ if (view) MoveWindow(view->window, rect->left, rect->top, rect->right - rect->left, rect->bottom - rect->top, TRUE); }
+{
+    if (!view) return;
+    MoveWindow(view->window, rect->left, rect->top, rect->right - rect->left, rect->bottom - rect->top, TRUE);
+    /* A parent erase must not leave the Win95 view waiting for selection to
+     * invalidate its icons. Paint the whole view hierarchy after sizing. */
+    RedrawWindow(view->window, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+}
 void NativeViewRefresh(NativeView *view)
 {
     if (!view) return;
@@ -431,12 +437,18 @@ HWND OpenNativeFolder(LPCITEMIDLIST absolute)
     ZeroMemory(&info, sizeof(info));
     SHGetFileInfoA((LPCSTR)absolute, 0, &info, sizeof(info), SHGFI_PIDL | SHGFI_DISPLAYNAME);
     window = CreateWindowExA(0, frameClass, info.szDisplayName[0] ? info.szDisplayName : "Explorer95",
-                             WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 700, 470, NULL, NULL, host.instance, NULL);
+                             WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT, 700, 470, NULL, NULL, host.instance, NULL);
     if (!window) return NULL;
     view = NativeViewCreate(window, absolute, FALSE);
     if (!view) { DestroyWindow(window); return NULL; }
     SetWindowLongPtrA(window, GWLP_USERDATA, (LONG_PTR)view);
-    ShowWindow(window, SW_SHOWNORMAL); UpdateWindow(window); return window;
+    ShowWindow(window, SW_SHOWNORMAL);
+    {
+        RECT rect; GetClientRect(window, &rect); NativeViewResize(view, &rect);
+        IShellView_UIActivate(view->view, SVUIA_ACTIVATE_NOFOCUS);
+        RedrawWindow(window, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
+    }
+    return window;
 }
 
 void NativeViewSetHost(const EnvironmentHost *callbacks)

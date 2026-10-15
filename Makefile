@@ -5,8 +5,8 @@ CFLAGS_COMMON = -std=c99 -Os -Wall -Wextra -Werror -ffreestanding -fno-builtin -
 CFLAGS = $(CFLAGS_COMMON) -march=i386 -mtune=i386
 LDFLAGS = -nostdlib -mwindows -Wl,--entry,_start -Wl,--subsystem,windows:4.0 -Wl,--major-os-version,4 -Wl,--minor-os-version,0 -Wl,--disable-dynamicbase -Wl,--disable-nxcompat
 LDLIBS = -luuid -lcomctl32 -lcomdlg32 -lshell32 -lole32 -ladvapi32 -lgdi32 -luser32 -lkernel32
-SOURCES = src/explorer95.c src/environment.c src/native_view.c src/start_menu.c src/start_settings.c src/tray.c src/settings.c src/shell_config.c
-HEADERS = src/environment.h src/native_view.h src/shell_internal.h
+SOURCES = src/explorer95.c src/environment.c src/native_view.c src/start_menu.c src/start_layout.c src/start_settings.c src/tray.c src/settings.c src/shell_config.c
+HEADERS = src/environment.h src/native_view.h src/shell_internal.h src/start_layout.h
 
 .PHONY: all clean check smoke ui64-smoke
 all: build/explorer95.exe
@@ -18,9 +18,9 @@ build/explorer95.exe: $(SOURCES) $(HEADERS)
 check: all
 	python3 tests/check_pe.py build/explorer95.exe
 
-build/smoke.exe: tests/smoke.c src/shell_config.c src/environment.h
+build/smoke.exe: tests/smoke.c src/shell_config.c src/start_layout.c src/start_layout.h src/environment.h
 	mkdir -p build
-	$(CC) $(CPPFLAGS) $(CFLAGS) tests/smoke.c src/shell_config.c -nostdlib -Wl,--entry,_start -luser32 -lkernel32 -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) tests/smoke.c src/shell_config.c src/start_layout.c -nostdlib -Wl,--entry,_start -lgdi32 -luser32 -lkernel32 -o $@
 
 # Requires Wine with working 32-bit support and a display. Use a disposable prefix.
 WINE = wine
@@ -34,9 +34,9 @@ build/ui64/explorer95.exe: $(SOURCES) $(HEADERS)
 	mkdir -p build/ui64
 	$(CC64) $(CPPFLAGS) $(CFLAGS_COMMON) $(SOURCES) -nostdlib -mwindows -Wl,--entry,start $(LDLIBS) -o $@
 
-build/ui64/smoke.exe: tests/smoke.c src/shell_config.c src/environment.h
+build/ui64/smoke.exe: tests/smoke.c src/shell_config.c src/start_layout.c src/start_layout.h src/environment.h
 	mkdir -p build/ui64
-	$(CC64) $(CPPFLAGS) $(CFLAGS_COMMON) tests/smoke.c src/shell_config.c -nostdlib -Wl,--entry,start -luser32 -lkernel32 -o $@
+	$(CC64) $(CPPFLAGS) $(CFLAGS_COMMON) tests/smoke.c src/shell_config.c src/start_layout.c -nostdlib -Wl,--entry,start -lgdi32 -luser32 -lkernel32 -o $@
 
 ui64-smoke: build/ui64/explorer95.exe build/ui64/smoke.exe
 	$(WINE) build/ui64/smoke.exe

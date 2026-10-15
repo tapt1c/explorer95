@@ -7,7 +7,10 @@ static RecentProgram recent[RECENT_LIMIT];
 static ProgramItem programs[256];
 static int programCount;
 static HWND hovered;
-static HICON itemIcons[64];
+static HICON itemIcons[16], recentIcons[RECENT_LIMIT], pinIcons[PIN_LIMIT];
+static StartLayout geometry;
+static BOOL showingRecent;
+static const int rightCommands[] = {ID_DOCUMENTS, ID_RECENTDOCS, ID_COMPUTER, ID_NETWORK, ID_CONTROL, ID_PRINTERS, ID_HELP, ID_FIND, ID_RUN};
 static char user[128];
 static BOOL popupActive;
 
@@ -86,12 +89,12 @@ static void UpdateRecent(void)
     int i; char caption[MAX_PATH];
     for (i = 0; i < RECENT_LIMIT; ++i) {
         HWND button = GetDlgItem(env.start, ID_RECENT + i);
-        if (itemIcons[16 + i]) DestroyIcon(itemIcons[16 + i]);
-        itemIcons[16 + i] = NULL;
+        if (recentIcons[i]) DestroyIcon(recentIcons[i]);
+        recentIcons[i] = NULL;
         Caption(recent[i].path, caption, sizeof(caption));
         SetWindowTextA(button, caption);
         ShowWindow(button, recent[i].path[0] ? SW_SHOW : SW_HIDE);
-        if (recent[i].path[0]) itemIcons[16 + i] = EnvPathIcon(recent[i].path);
+        if (recent[i].path[0]) recentIcons[i] = EnvPathIcon(recent[i].path);
     }
     StartRefresh();
 }
@@ -209,22 +212,55 @@ void StartHide(void)
     ShowWindow(env.start, SW_HIDE);
     SendMessageA(env.startButton, BM_SETSTATE, FALSE, 0);
 }
+void StartMeasure(int pins, int requestedRecent, StartLayout *layout)
+{
+    RECT bounds, bar, screen; int x, y, i, right = 0, fontHeight = 14;
+    HDC dc = GetDC(env.bar); TEXTMETRICA metrics; HGDIOBJ old = SelectObject(dc, env.host.font);
+    if (GetTextMetricsA(dc, &metrics)) fontHeight = metrics.tmHeight;
+    SelectObject(dc, old); ReleaseDC(env.bar, dc);
+    SetRect(&screen, 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
+    if (!SystemParametersInfoA(SPI_GETWORKAREA, 0, &bounds, 0)) bounds = screen;
+    if (!GetWindowRect(env.bar, &bar) || !IsWindowVisible(env.bar)) {
+        bar = env.anchor;
+        if (bar.right <= bar.left || bar.bottom <= bar.top) {
+            bar = screen;
+            if (env.options.edge == ABE_BOTTOM) bar.top = bar.bottom - 28;
+            if (env.options.edge == ABE_TOP) bar.bottom = bar.top + 28;
+            if (env.options.edge == ABE_LEFT) bar.right = bar.left + 140;
+            if (env.options.edge == ABE_RIGHT) bar.left = bar.right - 140;
+        }
+    }
+    if (bounds.left < 0) bounds.left = 0;
+    if (bounds.top < 0) bounds.top = 0;
+    if (bounds.right > screen.right) bounds.right = screen.right;
+    if (bounds.bottom > screen.bottom) bounds.bottom = screen.bottom;
+    x = bar.left; y = bar.top;
+    if (env.options.edge == ABE_BOTTOM && bounds.bottom > bar.top) bounds.bottom = bar.top;
+    if (env.options.edge == ABE_TOP) {
+        if (bounds.top < bar.bottom) bounds.top = bar.bottom;
+        y = bounds.top;
+    }
+    if (env.options.edge == ABE_LEFT) {
+        if (bounds.left < bar.right) bounds.left = bar.right;
+        x = bar.right;
+    }
+    if (env.options.edge == ABE_RIGHT) {
+        if (bounds.right > bar.left) bounds.right = bar.left;
+        x = bounds.right - 400;
+    }
+    for (i = 0; i < 9; ++i) if (env.options.startItems & (1U << i)) ++right;
+    CalculateStartLayout(&bounds, x, y, GetSystemMetrics(SM_CXDLGFRAME), GetSystemMetrics(SM_CYDLGFRAME),
+        fontHeight, pins, requestedRecent, right, layout);
+}
+int StartMaximumRecent(int pins)
+{
+    StartLayout layout; StartMeasure(pins, RECENT_LIMIT, &layout); return layout.recentRows;
+}
 void StartPosition(void)
 {
-    RECT bar, area; int width, height, x, y;
-    GetWindowRect(env.bar, &bar);
-    SetRect(&area, 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
-    width = area.right >= 800 ? 400 : 372;
-    height = area.bottom >= 600 ? 440 : 400;
-    x = bar.left; y = bar.top - height;
-    if (env.options.edge == ABE_TOP) y = bar.bottom;
-    if (env.options.edge == ABE_LEFT) { x = bar.right; y = bar.top; }
-    if (env.options.edge == ABE_RIGHT) { x = bar.left - width; y = bar.top; }
-    if (x + width > area.right) x = area.right - width;
-    if (y + height > area.bottom) y = area.bottom - height;
-    if (x < 0) x = 0;
-    if (y < 0) y = 0;
-    SetWindowPos(env.start, HWND_TOPMOST, x, y, width, height, SWP_NOACTIVATE);
+    StartMeasure(startPinCount, env.options.recentCount, &geometry);
+    SetWindowPos(env.start, HWND_TOPMOST, geometry.window.left, geometry.window.top,
+        geometry.window.right - geometry.window.left, geometry.window.bottom - geometry.window.top, SWP_NOACTIVATE);
 }
 void StartToggle(void)
 {
@@ -242,32 +278,37 @@ static void Item(HWND window, const char *text, int id)
 
 static void LayoutStart(HWND window)
 {
-    RECT rect; int half, row, i;
-    const int right[] = {ID_DOCUMENTS, ID_RECENTDOCS, ID_COMPUTER, ID_NETWORK, ID_CONTROL, ID_PRINTERS, ID_HELP, ID_FIND, ID_RUN};
-    GetClientRect(window, &rect); half = rect.right / 2;
-    row = (rect.bottom - 138) / 9;
+    RECT rect; int half, row, i, visible = 0, pinShown, rightShown;
+    StartMeasure(startPinCount, env.options.recentCount, &geometry);
+    GetClientRect(window, &rect); half = rect.right / 2; row = geometry.rowHeight;
+    pinShown = geometry.pinRows - (geometry.morePins ? 1 : 0);
+    if (pinShown < 0) pinShown = 0;
     for (i = 0; i < PIN_LIMIT; ++i) {
         HWND button = GetDlgItem(window, ID_PINNED + i);
-        ShowWindow(button, i < startPinCount ? SW_SHOW : SW_HIDE);
-        if (i < startPinCount) MoveWindow(button, 5, 48 + i * row, half - 10, row, TRUE);
+        ShowWindow(button, i < pinShown ? SW_SHOW : SW_HIDE);
+        if (i < pinShown) MoveWindow(button, 5, geometry.bodyTop + i * row, half - 10, row, TRUE);
     }
+    ShowWindow(GetDlgItem(window, ID_MOREPINS), geometry.morePins && geometry.pinRows ? SW_SHOW : SW_HIDE);
+    MoveWindow(GetDlgItem(window, ID_MOREPINS), 5, geometry.bodyTop + pinShown * row, half - 10, row, TRUE);
     for (i = 0; i < RECENT_LIMIT; ++i) {
         HWND button = GetDlgItem(window, ID_RECENT + i);
-        BOOL show = recent[i].path[0] && startPinCount + i < 9;
+        BOOL show = recent[i].path[0] && visible < geometry.recentRows && StartFindPin(recent[i].path, recent[i].arguments) < 0;
         ShowWindow(button, show ? SW_SHOW : SW_HIDE);
-        if (show) MoveWindow(button, 5, 56 + row * (startPinCount + i), half - 10, row, TRUE);
+        if (show) MoveWindow(button, 5, geometry.recentTop + row * visible++, half - 10, row, TRUE);
     }
-    MoveWindow(GetDlgItem(window, ID_PROGRAMS), 5, rect.bottom - 70, half - 10, 28, TRUE);
-    { int visible = 0;
-      for (i = 0; i < 9; ++i) {
-        BOOL show = (env.options.startItems & (1U << i)) != 0;
-        ShowWindow(GetDlgItem(window, right[i]), show ? SW_SHOW : SW_HIDE);
-        if (show) MoveWindow(GetDlgItem(window, right[i]), half + 5, 48 + visible++ * row, half - 10, row, TRUE);
-      }
+    showingRecent = visible != 0;
+    MoveWindow(GetDlgItem(window, ID_PROGRAMS), 5, geometry.programsY + 2, half - 10, 28, TRUE);
+    visible = 0; rightShown = geometry.rightRows - (geometry.moreRight ? 1 : 0);
+    for (i = 0; i < 9; ++i) {
+        BOOL show = (env.options.startItems & (1U << i)) && visible < rightShown;
+        ShowWindow(GetDlgItem(window, rightCommands[i]), show ? SW_SHOW : SW_HIDE);
+        if (show) MoveWindow(GetDlgItem(window, rightCommands[i]), half + 5, geometry.bodyTop + visible++ * row, half - 10, row, TRUE);
     }
-    MoveWindow(GetDlgItem(window, ID_EXIT), 5, rect.bottom - 34, 62, 28, TRUE);
-    MoveWindow(GetDlgItem(window, ID_LOGOFF), half - 4, rect.bottom - 34, 82, 28, TRUE);
-    MoveWindow(GetDlgItem(window, ID_SHUTDOWN), half + 82, rect.bottom - 34, half - 88, 28, TRUE);
+    ShowWindow(GetDlgItem(window, ID_MORECOMMANDS), geometry.moreRight && geometry.rightRows ? SW_SHOW : SW_HIDE);
+    MoveWindow(GetDlgItem(window, ID_MORECOMMANDS), half + 5, geometry.bodyTop + visible * row, half - 10, row, TRUE);
+    MoveWindow(GetDlgItem(window, ID_EXIT), 5, geometry.footerY + 4, 62, 28, TRUE);
+    MoveWindow(GetDlgItem(window, ID_LOGOFF), half - 4, geometry.footerY + 4, 82, 28, TRUE);
+    MoveWindow(GetDlgItem(window, ID_SHUTDOWN), half + 82, geometry.footerY + 4, half - 88, 28, TRUE);
     ShowWindow(GetDlgItem(window, ID_EXIT), env.options.startItems & (1U << 9) ? SW_SHOW : SW_HIDE);
     ShowWindow(GetDlgItem(window, ID_LOGOFF), env.options.startItems & (1U << 10) ? SW_SHOW : SW_HIDE);
     ShowWindow(GetDlgItem(window, ID_SHUTDOWN), env.options.startItems & (1U << 11) ? SW_SHOW : SW_HIDE);
@@ -284,11 +325,12 @@ void StartRefresh(void)
 {
     int i; if (!env.start) return;
     for (i = 0; i < PIN_LIMIT; ++i) {
-        if (itemIcons[32 + i]) DestroyIcon(itemIcons[32 + i]);
-        itemIcons[32 + i] = NULL;
+        if (pinIcons[i]) DestroyIcon(pinIcons[i]);
+        pinIcons[i] = NULL;
         SetWindowTextA(GetDlgItem(env.start, ID_PINNED + i), startPins[i].label);
-        if (i < startPinCount) itemIcons[32 + i] = startPins[i].path[0] == '@' ? (!lstrcmpA(startPins[i].path, "@explorer") ? EnvSystemIcon(5) : DosIcon()) : EnvPathIcon(startPins[i].path);
+        if (i < startPinCount) pinIcons[i] = startPins[i].path[0] == '@' ? (!lstrcmpA(startPins[i].path, "@explorer") ? EnvSystemIcon(5) : DosIcon()) : EnvPathIcon(startPins[i].path);
     }
+    if (IsWindowVisible(env.start)) StartPosition();
     LayoutStart(env.start); InvalidateRect(env.start, NULL, TRUE);
 }
 static BOOL DrawProgramItem(const DRAWITEMSTRUCT *draw)
@@ -306,6 +348,73 @@ static BOOL DrawProgramItem(const DRAWITEMSTRUCT *draw)
     return TRUE;
 }
 
+static HICON StartIcon(int id)
+{
+    switch (id) {
+    case ID_COMPUTER: return itemIcons[0];
+    case ID_DOCUMENTS: return itemIcons[1];
+    case ID_NETWORK: return itemIcons[2];
+    case ID_CONTROL: return itemIcons[3];
+    case ID_PRINTERS: return itemIcons[4];
+    case ID_RECENTDOCS: return itemIcons[5];
+    case ID_PROGRAMS: case ID_MOREPINS: case ID_MORECOMMANDS: return itemIcons[6];
+    case ID_HELP: return itemIcons[7];
+    case ID_FIND: return itemIcons[8];
+    case ID_RUN: return itemIcons[9];
+    case ID_EXIT: case ID_SHUTDOWN: return itemIcons[10];
+    case ID_LOGOFF: return itemIcons[11];
+    default:
+        if (id >= ID_PINNED && id < ID_PINNED + PIN_LIMIT) return pinIcons[id - ID_PINNED];
+        if (id >= ID_RECENT && id < ID_RECENT + RECENT_LIMIT) return recentIcons[id - ID_RECENT];
+        return NULL;
+    }
+}
+static void MorePopup(BOOL pins)
+{
+    static ProgramItem entries[9];
+    HMENU menu = CreatePopupMenu(); RECT rect; int i, used = 0, visible = 0, command;
+    int skip = pins ? geometry.pinRows - 1 : geometry.rightRows - 1;
+    for (i = 0; i < (pins ? startPinCount : 9); ++i) {
+        int id = pins ? ID_PINNED + i : rightCommands[i];
+        if (!pins && !(env.options.startItems & (1U << i))) continue;
+        if (visible++ < skip) continue;
+        GetWindowTextA(GetDlgItem(env.start, id), entries[used].label, MAX_PATH);
+        entries[used].icon = StartIcon(id);
+        AppendMenuA(menu, MF_OWNERDRAW, id, (LPCSTR)&entries[used++]);
+    }
+    GetWindowRect(GetDlgItem(env.start, pins ? ID_MOREPINS : ID_MORECOMMANDS), &rect);
+    popupActive = TRUE;
+    command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, rect.right, rect.top, 0, env.start, NULL);
+    popupActive = FALSE; DestroyMenu(menu);
+    if (command) SendMessageA(env.start, WM_COMMAND, command, 0);
+}
+static void ProgramContext(HWND button, LPARAM coordinates)
+{
+    int id = GetDlgCtrlID(button), index, command; BOOL pinned;
+    PinnedProgram pin; HMENU menu; POINT point;
+    if (id >= ID_PINNED && id < ID_PINNED + startPinCount) {
+        pin = startPins[id - ID_PINNED]; pinned = TRUE;
+    } else if (id >= ID_RECENT && id < ID_RECENT + RECENT_LIMIT && recent[id - ID_RECENT].path[0]) {
+        ZeroMemory(&pin, sizeof(pin)); index = id - ID_RECENT; pinned = FALSE;
+        lstrcpyA(pin.path, recent[index].path); lstrcpyA(pin.arguments, recent[index].arguments);
+        Caption(pin.path, pin.label, sizeof(pin.label));
+    } else return;
+    if (coordinates == (LPARAM)-1) { RECT rect; GetWindowRect(button, &rect); point.x = rect.left; point.y = rect.bottom; }
+    else { point.x = (short)LOWORD(coordinates); point.y = (short)HIWORD(coordinates); }
+    menu = CreatePopupMenu();
+    if (pinned) AppendMenuA(menu, MF_STRING, ID_CONTEXT_UNPIN, "Unpin from Start menu");
+    else AppendMenuA(menu, MF_STRING | (startPinCount >= PIN_LIMIT || StartFindPin(pin.path, pin.arguments) >= 0 ? MF_GRAYED : 0),
+        ID_CONTEXT_PIN, startPinCount >= PIN_LIMIT ? "Pin to Start menu (list full)" : "Pin to Start menu");
+    popupActive = TRUE;
+    command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, 0, env.start, NULL);
+    popupActive = FALSE; DestroyMenu(menu);
+    if (command == ID_CONTEXT_PIN) StartAddPin(&pin);
+    if (command == ID_CONTEXT_UNPIN) {
+        index = StartFindPin(pin.path, pin.arguments); if (index >= 0) StartRemovePin(index);
+    }
+    if (IsWindowVisible(env.start)) SetFocus(GetDlgItem(env.start, startPinCount ? ID_PINNED : ID_PROGRAMS));
+}
+
 static LRESULT CALLBACK StartProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
 {
     switch (message) {
@@ -314,6 +423,7 @@ static LRESULT CALLBACK StartProc(HWND window, UINT message, WPARAM wp, LPARAM l
         if (!GetUserNameA(user, &bytes)) lstrcpyA(user, "Explorer95");
         for (i = 0; i < PIN_LIMIT; ++i) Item(window, "", ID_PINNED + i);
         Item(window, "All Programs   >", ID_PROGRAMS);
+        Item(window, "More pinned...   >", ID_MOREPINS); Item(window, "More...   >", ID_MORECOMMANDS);
         Item(window, "My Documents", ID_DOCUMENTS); Item(window, "Recent Documents   >", ID_RECENTDOCS);
         Item(window, "My Computer", ID_COMPUTER); Item(window, "Network Neighborhood", ID_NETWORK);
         Item(window, "Control Panel", ID_CONTROL); Item(window, "Printers", ID_PRINTERS);
@@ -329,17 +439,27 @@ static LRESULT CALLBACK StartProc(HWND window, UINT message, WPARAM wp, LPARAM l
         SetTimer(window, 1, 80, NULL); return 0;
     }
     case WM_SIZE: LayoutStart(window); return 0;
+    case WM_CONTEXTMENU: {
+        HWND button = (HWND)wp;
+        if (button == window) button = GetFocus();
+        if (button && GetParent(button) == window) ProgramContext(button, lp);
+        return 0;
+    }
     case WM_PAINT: {
         PAINTSTRUCT paint; RECT rect, part; HDC dc = BeginPaint(window, &paint);
         GetClientRect(window, &rect);
         FillRect(dc, &rect, (HBRUSH)(COLOR_BTNFACE + 1));
-        SetRect(&part, 0, 42, rect.right / 2, rect.bottom - 38); FillRect(dc, &part, (HBRUSH)(COLOR_MENU + 1));
+        SetRect(&part, 0, 42, rect.right / 2, geometry.footerY); FillRect(dc, &part, (HBRUSH)(COLOR_MENU + 1));
         SetRect(&part, 0, 0, rect.right, 40); FillRect(dc, &part, (HBRUSH)(COLOR_ACTIVECAPTION + 1));
         SelectObject(dc, env.host.font); SetBkMode(dc, TRANSPARENT); SetTextColor(dc, GetSysColor(COLOR_CAPTIONTEXT));
         part.left = 12; DrawTextA(dc, user, -1, &part, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-        SetRect(&part, rect.right / 2, 46, rect.right / 2 + 2, rect.bottom - 42); DrawEdge(dc, &part, EDGE_ETCHED, BF_LEFT);
-        SetRect(&part, 7, rect.bottom - 40, rect.right - 7, rect.bottom - 38); DrawEdge(dc, &part, EDGE_ETCHED, BF_TOP);
-        SetRect(&part, 7, rect.bottom - 74, rect.right / 2 - 7, rect.bottom - 72); DrawEdge(dc, &part, EDGE_ETCHED, BF_TOP);
+        SetRect(&part, rect.right / 2, 44, rect.right / 2 + 2, geometry.footerY - 4); DrawEdge(dc, &part, EDGE_ETCHED, BF_LEFT);
+        SetRect(&part, 7, geometry.footerY, rect.right - 7, geometry.footerY + 2); DrawEdge(dc, &part, EDGE_ETCHED, BF_TOP);
+        SetRect(&part, 7, geometry.programsY, rect.right / 2 - 7, geometry.programsY + 2); DrawEdge(dc, &part, EDGE_ETCHED, BF_TOP);
+        if (showingRecent && geometry.separatorY >= 0) {
+            SetRect(&part, 7, geometry.separatorY, rect.right / 2 - 7, geometry.separatorY + 2);
+            DrawEdge(dc, &part, EDGE_ETCHED, BF_TOP);
+        }
         EndPaint(window, &paint); return 0;
     }
     case WM_MEASUREITEM: {
@@ -358,28 +478,12 @@ static LRESULT CALLBACK StartProc(HWND window, UINT message, WPARAM wp, LPARAM l
         if (item->CtlType == ODT_MENU) return DrawProgramItem(item);
         RECT text = item->rcItem; char label[MAX_PATH]; HICON icon = NULL;
         BOOL selected = (item->itemState & (ODS_SELECTED | ODS_FOCUS)) || item->hwndItem == hovered;
-        BOOL left = (item->CtlID >= ID_PINNED && item->CtlID < ID_PINNED + PIN_LIMIT) || item->CtlID == ID_PROGRAMS ||
+        BOOL left = (item->CtlID >= ID_PINNED && item->CtlID < ID_PINNED + PIN_LIMIT) || item->CtlID == ID_PROGRAMS || item->CtlID == ID_MOREPINS ||
                     (item->CtlID >= ID_RECENT && item->CtlID < ID_RECENT + RECENT_LIMIT);
         FillRect(item->hDC, &text, (HBRUSH)(INT_PTR)((selected ? COLOR_HIGHLIGHT : left ? COLOR_MENU : COLOR_BTNFACE) + 1));
         SetBkMode(item->hDC, TRANSPARENT); SelectObject(item->hDC, env.host.font);
         SetTextColor(item->hDC, GetSysColor(selected ? COLOR_HIGHLIGHTTEXT : COLOR_MENUTEXT));
-        switch (item->CtlID) {
-        case ID_COMPUTER: case ID_EXPLORER: icon = itemIcons[0]; break;
-        case ID_DOCUMENTS: icon = itemIcons[1]; break;
-        case ID_NETWORK: icon = itemIcons[2]; break;
-        case ID_CONTROL: icon = itemIcons[3]; break;
-        case ID_PRINTERS: icon = itemIcons[4]; break;
-        case ID_RECENTDOCS: icon = itemIcons[5]; break;
-        case ID_PROGRAMS: icon = itemIcons[6]; break;
-        case ID_HELP: icon = itemIcons[7]; break;
-        case ID_FIND: icon = itemIcons[8]; break;
-        case ID_RUN: icon = itemIcons[9]; break;
-        case ID_EXIT: case ID_SHUTDOWN: icon = itemIcons[10]; break;
-        case ID_LOGOFF: icon = itemIcons[11]; break;
-        default: if (item->CtlID >= ID_PINNED && item->CtlID < ID_PINNED + PIN_LIMIT) icon = itemIcons[32 + item->CtlID - ID_PINNED];
-            if (item->CtlID >= ID_RECENT && item->CtlID < ID_RECENT + RECENT_LIMIT) icon = itemIcons[16 + item->CtlID - ID_RECENT];
-            break;
-        }
+        icon = StartIcon(item->CtlID);
         if (!icon) icon = LoadIconA(NULL, IDI_APPLICATION);
         if (icon) DrawIconEx(item->hDC, text.left + 5, text.top + (text.bottom - text.top - 16) / 2, icon, 16, 16, 0, NULL, DI_NORMAL);
         text.left += icon ? 28 : 8;
@@ -402,6 +506,7 @@ static LRESULT CALLBACK StartProc(HWND window, UINT message, WPARAM wp, LPARAM l
     case WM_COMMAND: {
         int id = LOWORD(wp);
         if (id == ID_PROGRAMS || id == ID_RECENTDOCS) { ProgramsPopup(id == ID_RECENTDOCS); return 0; }
+        if (id == ID_MOREPINS || id == ID_MORECOMMANDS) { MorePopup(id == ID_MOREPINS); return 0; }
         StartHide();
         if (id >= ID_RECENT && id < ID_RECENT + RECENT_LIMIT) {
             RecentProgram *copy = EnvAlloc(sizeof(*copy));
@@ -427,7 +532,7 @@ static LRESULT CALLBACK StartProc(HWND window, UINT message, WPARAM wp, LPARAM l
 BOOL StartCreate(void)
 {
     if (!EnvRegister("Explorer95.Start", StartProc, (HBRUSH)(COLOR_BTNFACE + 1))) return FALSE;
-    env.start = CreateWindowExA(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, "Explorer95.Start", "Start", WS_POPUP | WS_DLGFRAME,
+    env.start = CreateWindowExA(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, "Explorer95.Start", "Start", WS_POPUP | WS_DLGFRAME | WS_CLIPCHILDREN,
         0, 0, 400, 440, env.bar, NULL, env.host.instance, NULL);
     StartLoadPins(); LoadRecent(); UpdateRecent(); return env.start != NULL;
 }
@@ -441,5 +546,7 @@ void StartDestroy(void)
 {
     int i;
     if (env.start) DestroyWindow(env.start);
-    for (i = 0; i < 64; ++i) if (itemIcons[i]) { DestroyIcon(itemIcons[i]); itemIcons[i] = NULL; }
+    for (i = 0; i < 16; ++i) if (itemIcons[i]) { DestroyIcon(itemIcons[i]); itemIcons[i] = NULL; }
+    for (i = 0; i < RECENT_LIMIT; ++i) if (recentIcons[i]) { DestroyIcon(recentIcons[i]); recentIcons[i] = NULL; }
+    for (i = 0; i < PIN_LIMIT; ++i) if (pinIcons[i]) { DestroyIcon(pinIcons[i]); pinIcons[i] = NULL; }
 }

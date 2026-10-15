@@ -85,6 +85,7 @@ static void SettingsPath(void)
     env.options.topmost = !!Option("AlwaysOnTop", TRUE); env.options.clock = !!Option("Clock", TRUE);
     env.options.quick = !!Option("QuickLaunch", TRUE); env.options.largeIcons = !!Option("LargeIcons", FALSE);
     env.options.group = !!Option("GroupTasks", FALSE); env.options.hideInactive = !!Option("HideInactive", FALSE);
+    env.options.recentCount = Clamp((int)GetPrivateProfileIntA("Start", "RecentCount", 7, env.ini), 0, RECENT_LIMIT);
     env.options.startItems = GetPrivateProfileIntA("Start", "VisibleItems", (1U << START_OPTION_COUNT) - 1, env.ini);
     GetPrivateProfileStringA("Start", "ButtonLabel", "Start", env.options.startLabel, sizeof(env.options.startLabel), env.ini);
     if (!env.options.startLabel[0]) lstrcpyA(env.options.startLabel, "Start");
@@ -548,6 +549,7 @@ static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
     case WM_DRAWITEM: return EnvDrawBarButton((DRAWITEMSTRUCT *)lp);
     case WM_COPYDATA: return TrayCopyData((const COPYDATASTRUCT *)lp);
     case WM_SETTINGCHANGE: case WM_DISPLAYCHANGE:
+        StartRefresh();
         if (message == WM_DISPLAYCHANGE && env.primary) SetRect(&env.originalArea, 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
         EnvPositionBar(); return 0;
     case WM_APPBAR:

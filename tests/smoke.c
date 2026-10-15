@@ -7,6 +7,7 @@
 #include <shellapi.h>
 #include <stddef.h>
 #include "../src/environment.h"
+#include "../src/start_layout.h"
 
 static PROCESS_INFORMATION process;
 static HWND child;
@@ -71,6 +72,113 @@ static LRESULT CALLBACK ChildProc(HWND window, UINT message, WPARAM wParam, LPAR
     }
     if (message == WM_DESTROY) { PostQuitMessage(0); return 0; }
     return DefWindowProcA(window, message, wParam, lParam);
+}
+
+static void LayoutTests(void)
+{
+    const int sizes[][2] = {{320,240}, {640,480}, {800,600}, {1024,768}, {1280,720}, {1920,1080}};
+    const int fonts[] = {14, 24, 70};
+    int size, font, edge, pins, requested; char description[128];
+    for (size = 0; size < 6; ++size) for (font = 0; font < 3; ++font) {
+        BOOL okay = TRUE;
+        for (edge = 0; edge < 4; ++edge) for (pins = 0; pins <= 6; pins += 2) for (requested = 0; requested <= 30; requested += 5) {
+            RECT bounds = {0, 0, sizes[size][0], sizes[size][1]}; StartLayout layout;
+            if (edge == 0) bounds.left += 100;
+            if (edge == 1) bounds.top += 28;
+            if (edge == 2) bounds.right -= 100;
+            if (edge == 3) bounds.bottom -= 28;
+            CalculateStartLayout(&bounds, edge == 2 ? bounds.right - 400 : bounds.left,
+                edge == 3 ? bounds.bottom : bounds.top, 3, 3, fonts[font], pins, requested, 9, &layout);
+            okay &= layout.window.left >= bounds.left && layout.window.top >= bounds.top &&
+                layout.window.right <= bounds.right && layout.window.bottom <= bounds.bottom &&
+                layout.recentRows <= requested && layout.recentRows >= 0 && layout.pinRows <= pins &&
+                layout.programsY >= layout.recentTop + layout.recentRows * layout.rowHeight &&
+                layout.footerY + 38 <= layout.window.bottom - layout.window.top - 6;
+        }
+        wsprintfA(description, "Start fits %dx%d with font height %d, all edges, pin counts and recent limits", sizes[size][0], sizes[size][1], fonts[font]);
+        Check(okay, description);
+    }
+}
+static int PaintedSamples(HWND list)
+{
+    HDC dc = GetDC(list); RECT rect; int x, y, samples = 0;
+    COLORREF background = GetSysColor(COLOR_WINDOW);
+    GetClientRect(list, &rect);
+    for (y = 4; y < 160 && y < rect.bottom; y += 5) for (x = 4; x < 240 && x < rect.right; x += 5) {
+        COLORREF pixel = GetPixel(dc, x, y);
+        if (pixel != CLR_INVALID && pixel != background) ++samples;
+    }
+    ReleaseDC(list, dc); return samples;
+}
+static void NativeFolderTests(HWND menu)
+{
+    HWND frame, view, list; int pass;
+    for (pass = 0; pass < 2; ++pass) {
+        DWORD started; int samples = 0;
+        SendMessageA(menu, WM_COMMAND, 304, 0);
+        frame = WaitFor("Explorer95.Namespace", NULL);
+        Check(frame != NULL, "Start opens the native Control Panel window");
+        view = FindWindowExA(frame, NULL, "SHELLDLL_DefView", NULL);
+        list = FindWindowExA(view, NULL, WC_LISTVIEWA, NULL);
+        Check(view && list, "native folder contains the actual Shell32 list view");
+        started = GetTickCount();
+        do { Sleep(50); samples = PaintedSamples(list); }
+        while ((SendMessageA(list, LVM_GETITEMCOUNT, 0, 0) == 0 || samples < 8) && GetTickCount() - started < 10000);
+        Check(samples >= 8, "native icons paint on initial opening without selection or mouse input");
+        RedrawWindow(frame, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_NOCHILDREN);
+        Check(PaintedSamples(list) >= 8, "repainting only the parent preserves the already painted native icons");
+        MoveWindow(frame, 30, 30, 420, 300, TRUE); Sleep(150);
+        Check(PaintedSamples(list) >= 8, "native icons remain painted after resizing");
+        SendMessageA(frame, WM_CLOSE, 0, 0);
+        Check(!IsWindow(frame), "native folder closes cleanly before reopening");
+    }
+}
+static void CheckStartFits(HWND bar, HWND menu)
+{
+    RECT rect, taskbar, item; BOOL okay; int id;
+    SendMessageA(GetDlgItem(bar, 100), BM_CLICK, 0, 0);
+    GetWindowRect(menu, &rect); GetWindowRect(bar, &taskbar);
+    okay = rect.left >= 0 && rect.top >= 0 && rect.right <= GetSystemMetrics(SM_CXSCREEN) && rect.bottom <= GetSystemMetrics(SM_CYSCREEN) &&
+        (rect.right <= taskbar.left || rect.left >= taskbar.right || rect.bottom <= taskbar.top || rect.top >= taskbar.bottom);
+    for (id = 300; id < 910; ++id) {
+        HWND button = GetDlgItem(menu, id);
+        if (button && IsWindowVisible(button)) {
+            GetWindowRect(button, &item);
+            if (item.left < rect.left || item.top < rect.top || item.right > rect.right || item.bottom > rect.bottom) okay = FALSE;
+        }
+    }
+    Check(okay, "actual Start window and its visible entries fit the screen beside the current taskbar");
+    SendMessageA(GetDlgItem(bar, 100), BM_CLICK, 0, 0);
+}
+
+static void ContextPinTest(HWND bar, HWND menu, const char *settings)
+{
+    HWND popup; DWORD started; char value[600];
+    SendMessageA(GetDlgItem(bar, 100), BM_CLICK, 0, 0);
+    Check(IsWindowVisible(GetDlgItem(menu, 800)), "recent program is visible before pinning");
+    PostMessageA(GetDlgItem(menu, 800), WM_RBUTTONDOWN, 0, MAKELPARAM(5,5));
+    PostMessageA(GetDlgItem(menu, 800), WM_RBUTTONUP, 0, MAKELPARAM(5,5));
+    popup = WaitFor("#32768", NULL);
+    Check(popup != NULL, "right-clicking a recent program opens its context menu");
+    PostMessageA(menu, WM_KEYDOWN, VK_DOWN, 0); PostMessageA(menu, WM_KEYDOWN, VK_RETURN, 0);
+    started = GetTickCount();
+    while (GetPrivateProfileIntA("Pinned", "Count", 0, settings) != 3 && GetTickCount() - started < 5000) Sleep(50);
+    Check(GetPrivateProfileIntA("Pinned", "Count", 0, settings) == 3, "context action pins the recent program and saves immediately");
+    GetPrivateProfileStringA("Pinned", "Arguments2", "", value, sizeof(value), settings);
+    Check(!lstrcmpA(value, "!\"--child\""), "pinning preserves fully quoted launch arguments");
+    Check(!IsWindowVisible(GetDlgItem(menu, 800)), "a pinned command is no longer duplicated in the recent list");
+    PostMessageA(menu, WM_CONTEXTMENU, (WPARAM)GetDlgItem(menu, 902), (LPARAM)-1);
+    popup = WaitFor("#32768", NULL);
+    Check(popup != NULL, "pinned program supports a keyboard context menu");
+    PostMessageA(menu, WM_KEYDOWN, VK_DOWN, 0); PostMessageA(menu, WM_KEYDOWN, VK_RETURN, 0);
+    started = GetTickCount();
+    while (GetPrivateProfileIntA("Pinned", "Count", 0, settings) != 2 && GetTickCount() - started < 5000) Sleep(50);
+    Check(GetPrivateProfileIntA("Pinned", "Count", 0, settings) == 2, "context action unpins without deleting history");
+    Check(IsWindowVisible(GetDlgItem(menu, 800)), "unpinning makes the preserved recent program visible again");
+    { RECT pin, recent;
+      GetWindowRect(GetDlgItem(menu, 901), &pin); GetWindowRect(GetDlgItem(menu, 800), &recent);
+      Check(recent.top >= pin.bottom + 8, "pin and recent lists leave room for a visible separator"); }
+    SendMessageA(GetDlgItem(bar, 100), BM_CLICK, 0, 0);
 }
 
 static void ConfigTests(const char *directory)
@@ -157,6 +265,8 @@ static void EnvironmentTests(HWND bar, HWND browser, HWND childWindow, HWND menu
     GetPrivateProfileStringA("Recent", "Program0", "", value, sizeof(value), settings);
     Check(value[0] != 0, "recent-program history is persisted");
 
+    CheckStartFits(bar, menu);
+    ContextPinTest(bar, menu, settings);
     ZeroMemory(&packet, sizeof(packet));
     packet.signature = 0x34753423; packet.operation = NIM_ADD;
     packet.icon.cbSize = offsetof(NOTIFYICONDATAA, szTip) + 64;
@@ -237,6 +347,22 @@ static void EnvironmentTests(HWND bar, HWND browser, HWND childWindow, HWND menu
         SendMessageA(customize, WM_COMMAND, IDCANCEL, 0);
         GetWindowTextA(GetDlgItem(menu, 901), title, sizeof(title));
         Check(!lstrcmpA(title, "Pinned smoke program"), "Cancel discards pending pinned-list changes");
+        SendMessageA(properties, WM_COMMAND, 626, 0);
+        customize = WaitFor("Explorer95.StartSettings", NULL);
+        SetDlgItemInt(customize, 627, 0, FALSE); SendMessageA(customize, WM_COMMAND, IDOK, 0);
+        SendMessageA(GetDlgItem(bar, 100), BM_CLICK, 0, 0);
+        { int i; BOOL none = TRUE;
+          for (i = 800; i < 830; ++i) if (IsWindowVisible(GetDlgItem(menu, i))) none = FALSE;
+          Check(none && IsWindowVisible(GetDlgItem(menu, 900)), "zero recent count hides history while preserving pins"); }
+        SendMessageA(GetDlgItem(bar, 100), BM_CLICK, 0, 0);
+        SendMessageA(properties, WM_COMMAND, 626, 0); customize = WaitFor("Explorer95.StartSettings", NULL);
+        GetWindowTextA(GetDlgItem(customize, 628), title, sizeof(title));
+        Check(title[0] != 0, "settings display the calculated screen limit for recent programs");
+        SetDlgItemInt(customize, 627, 99, FALSE); PostMessageA(customize, WM_COMMAND, IDOK, 0);
+        { HWND error = WaitFor("#32770", "Start Menu");
+          Check(error != NULL, "recent count beyond the screen limit is rejected"); SendMessageA(error, WM_COMMAND, IDOK, 0); }
+        SetDlgItemInt(customize, 627, 2, FALSE); SendMessageA(customize, WM_COMMAND, IDOK, 0);
+        Check(GetPrivateProfileIntA("Start", "RecentCount", -1, settings) == 2, "custom recent count is persisted");
     }
     SendMessageA(GetDlgItem(properties, 601), BM_SETCHECK, BST_UNCHECKED, 0);
     SendMessageA(GetDlgItem(properties, 620), CB_SETCURSEL, 1, 0);
@@ -248,6 +374,7 @@ static void EnvironmentTests(HWND bar, HWND browser, HWND childWindow, HWND menu
     Check(rect.top <= 2 && rect.bottom - rect.top >= 55, "properties dock taskbar to the top with two rows");
     Check(GetPrivateProfileIntA("Taskbar", "Rows", 0, settings) == 2 &&
           GetPrivateProfileIntA("Taskbar", "TaskWidth", 0, settings) == 188, "taskbar options are persisted");
+    CheckStartFits(bar, menu);
     Check(IsWindowVisible(GetDlgItem(bar, 700)), "Quick Launch displays programs from its folder");
     SendMessageA(childWindow, WM_APP + 34, 0, 0);
     Check(WaitFor("Explorer95.SmokeChild", "Explorer95 second task") != NULL, "fixture opens a second window in the same process");
@@ -265,8 +392,10 @@ static void EnvironmentTests(HWND bar, HWND browser, HWND childWindow, HWND menu
     SendMessageA(bar, WM_COMMAND, 862, 0); GetWindowRect(bar, &rect);
     Check(rect.right >= GetSystemMetrics(SM_CXSCREEN) - 2 && rect.right - rect.left >= 140,
           "unlocked taskbar can dock to the right");
+    CheckStartFits(bar, menu);
     SendMessageA(bar, WM_COMMAND, 860, 0); GetWindowRect(bar, &rect);
     Check(rect.left <= 2, "unlocked taskbar can dock to the left");
+    CheckStartFits(bar, menu);
     SendMessageA(bar, WM_COMMAND, 861, 0);
     SendMessageA(bar, WM_COMMAND, 601, 0);
     SendMessageA(bar, WM_COMMAND, 862, 0); GetWindowRect(bar, &rect);
@@ -345,6 +474,7 @@ void start(void)
     wsprintfA(settingsDir, "%s profile", fixture);
     Check(CreateDirectoryA(settingsDir, NULL), "create isolated settings directory");
     wsprintfA(settings, "%s\\settings.ini", settingsDir);
+    LayoutTests();
     ConfigTests(settingsDir);
     wsprintfA(command, "\"%s\" --settings=\"%s\"", executable, settings);
     ZeroMemory(&startup, sizeof(startup)); startup.cb = sizeof(startup);
@@ -405,6 +535,7 @@ void start(void)
     SendMessageA(GetDlgItem(bar, 100), BM_CLICK, 0, 0);
     Check(!IsWindowVisible(menu), "Start button toggles the menu closed");
 
+    NativeFolderTests(menu);
     SendMessageA(menu, WM_COMMAND, 305, 0);
     run = WaitFor("Explorer95.Run", NULL);
     Check(run != NULL, "Run dialog opens");
@@ -445,6 +576,7 @@ void start(void)
     Check(CreateProcessA(NULL, command, NULL, NULL, FALSE, 0, NULL, NULL, &startup, &process), "restart with saved profile");
     bar = WaitFor("Explorer95.Taskbar", NULL);
     Check(bar != NULL, "shell restarts successfully");
+    Check(GetPrivateProfileIntA("Start", "RecentCount", -1, settings) == 2, "recent count survives restart");
     {
         RECT bounds;
         GetWindowRect(bar, &bounds);

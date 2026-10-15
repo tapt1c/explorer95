@@ -7,6 +7,7 @@
 #include <shlobj.h>
 #include "environment.h"
 #include "native_view.h"
+#include "start_layout.h"
 
 #define ID_START 100
 #define ID_TASK 200
@@ -46,6 +47,8 @@
 #define ID_RESTORESHELL 624
 #define ID_STARTLABEL 625
 #define ID_CUSTOMSTART 626
+#define ID_RECENTCOUNT 627
+#define ID_RECENTLIMIT 628
 #define ID_PINLIST 630
 #define ID_PINPATH 631
 #define ID_PINADD 632
@@ -56,6 +59,10 @@
 #define ID_PINARGS 637
 #define ID_VISIBLE 650
 #define ID_PINNED 900
+#define ID_MOREPINS 906
+#define ID_MORECOMMANDS 907
+#define ID_CONTEXT_PIN 908
+#define ID_CONTEXT_UNPIN 909
 #define ID_QUICKITEM 700
 #define ID_RECENT 800
 #define ID_TRAYMORE 850
@@ -63,12 +70,12 @@
 #define ID_ROWS_MENU 870
 #define WM_APPBAR (WM_APP + 10)
 #define TASK_LIMIT 64
-#define RECENT_LIMIT 7
+#define RECENT_LIMIT 30
 #define PIN_LIMIT 6
 #define START_OPTION_COUNT 12
 
 typedef struct ShellOptions {
-    int edge, rows, taskWidth;
+    int edge, rows, taskWidth, recentCount;
     BOOL locked, autoHide, topmost, clock, quick, largeIcons, group, hideInactive;
     UINT startItems;
     char startLabel[32];
@@ -88,6 +95,9 @@ typedef struct PinnedProgram { char path[MAX_PATH], arguments[512], label[80]; }
 extern PinnedProgram startPins[PIN_LIMIT];
 extern int startPinCount;
 void StartLoadPins(void);
+int StartFindPin(const char *path, const char *arguments);
+BOOL StartAddPin(const PinnedProgram *pin);
+BOOL StartRemovePin(int index);
 extern ShellState env;
 void *EnvAlloc(SIZE_T size);
 void EnvFree(void *p);
@@ -106,6 +116,8 @@ BOOL StartCreate(void);
 void StartToggle(void);
 void StartHide(void);
 void StartPosition(void);
+void StartMeasure(int pins, int requestedRecent, StartLayout *layout);
+int StartMaximumRecent(int pins);
 BOOL StartTranslate(MSG *message);
 void StartRecord(const char *path, const char *arguments);
 void StartClearRecent(void);
