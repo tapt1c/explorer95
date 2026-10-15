@@ -44,6 +44,18 @@
 #define ID_WIDTH 622
 #define ID_INSTALLSHELL 623
 #define ID_RESTORESHELL 624
+#define ID_STARTLABEL 625
+#define ID_CUSTOMSTART 626
+#define ID_PINLIST 630
+#define ID_PINPATH 631
+#define ID_PINADD 632
+#define ID_PINREMOVE 633
+#define ID_PINUP 634
+#define ID_PINDOWN 635
+#define ID_PINLABEL 636
+#define ID_PINARGS 637
+#define ID_VISIBLE 650
+#define ID_PINNED 900
 #define ID_QUICKITEM 700
 #define ID_RECENT 800
 #define ID_TRAYMORE 850
@@ -52,22 +64,30 @@
 #define WM_APPBAR (WM_APP + 10)
 #define TASK_LIMIT 64
 #define RECENT_LIMIT 7
+#define PIN_LIMIT 6
+#define START_OPTION_COUNT 12
 
 typedef struct ShellOptions {
     int edge, rows, taskWidth;
     BOOL locked, autoHide, topmost, clock, quick, largeIcons, group, hideInactive;
+    UINT startItems;
+    char startLabel[32];
 } ShellOptions;
 
 typedef struct ShellState {
     EnvironmentHost host;
     ShellOptions options;
-    HWND desktop, bar, start, startButton, clock, tray, properties;
+    HWND desktop, bar, start, startButton, clock, tray, properties, startSettings;
     NativeView *desktopView;
     RECT originalArea, anchor;
     BOOL primary, appbar, positioning, hidden, dragging, closing;
     char ini[MAX_PATH], dataDir[MAX_PATH], quickDir[MAX_PATH];
 } ShellState;
 
+typedef struct PinnedProgram { char path[MAX_PATH], arguments[512], label[80]; } PinnedProgram;
+extern PinnedProgram startPins[PIN_LIMIT];
+extern int startPinCount;
+void StartLoadPins(void);
 extern ShellState env;
 void *EnvAlloc(SIZE_T size);
 void EnvFree(void *p);
@@ -90,6 +110,13 @@ BOOL StartTranslate(MSG *message);
 void StartRecord(const char *path, const char *arguments);
 void StartClearRecent(void);
 void StartDestroy(void);
+void StartRefresh(void);
+void StartSettingsOpen(void);
+BOOL StartSettingsTranslate(MSG *message);
+HICON EnvPathIcon(const char *path);
+HICON EnvSystemIcon(int index);
+BOOL EnvDrawBarButton(const DRAWITEMSTRUCT *item);
+int EnvStartButtonWidth(void);
 
 BOOL TrayCreate(void);
 int TrayWidth(void);

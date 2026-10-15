@@ -2,11 +2,13 @@
 #include "shell_internal.h"
 
 ShellState env;
-typedef struct TaskGroup { HWND windows[TASK_LIMIT], button; int count; DWORD process; } TaskGroup;
+typedef struct TaskGroup { HWND windows[TASK_LIMIT], button; int count; DWORD process; BOOL active; } TaskGroup;
 typedef struct QuickItem { char path[MAX_PATH]; HICON icon; HWND button; } QuickItem;
 static TaskGroup tasks[TASK_LIMIT];
 static HWND taskWindows[TASK_LIMIT], savedWindows[TASK_LIMIT], lastActive, bridge, quickTip, desktopButton;
 static QuickItem quick[24];
+static HICON desktopIcon;
+static int quickEnd;
 static int taskCount, windowCount, savedCount, quickCount;
 static BOOL previousGrouping;
 static BOOL quickLarge;
@@ -83,6 +85,9 @@ static void SettingsPath(void)
     env.options.topmost = !!Option("AlwaysOnTop", TRUE); env.options.clock = !!Option("Clock", TRUE);
     env.options.quick = !!Option("QuickLaunch", TRUE); env.options.largeIcons = !!Option("LargeIcons", FALSE);
     env.options.group = !!Option("GroupTasks", FALSE); env.options.hideInactive = !!Option("HideInactive", FALSE);
+    env.options.startItems = GetPrivateProfileIntA("Start", "VisibleItems", (1U << START_OPTION_COUNT) - 1, env.ini);
+    GetPrivateProfileStringA("Start", "ButtonLabel", "Start", env.options.startLabel, sizeof(env.options.startLabel), env.ini);
+    if (!env.options.startLabel[0]) lstrcpyA(env.options.startLabel, "Start");
 }
 
 BOOL EnvironmentLaunch(HWND owner, const char *path, const char *arguments, const char *directory)
@@ -160,7 +165,7 @@ static void UpdateTasks(void)
             if (env.options.group) for (j = 0; j < taskCount; ++j) if (tasks[j].process == process) { group = j; break; }
             if (group == taskCount) {
                 tasks[group].process = process;
-                tasks[group].button = EnvControl(env.bar, "BUTTON", "", BS_PUSHLIKE | BS_CHECKBOX, ID_TASK + taskCount++);
+                tasks[group].button = EnvControl(env.bar, "BUTTON", "", BS_OWNERDRAW, ID_TASK + taskCount++);
             }
             tasks[group].windows[tasks[group].count++] = windows[i];
         }
@@ -172,7 +177,7 @@ static void UpdateTasks(void)
         if (tasks[i].count > 1) wsprintfA(label, "%s (%d)", text, tasks[i].count); else lstrcpyA(label, text);
         SetWindowTextA(tasks[i].button, label);
         for (j = 0; j < tasks[i].count; ++j) if (tasks[i].windows[j] == active) selected = TRUE;
-        SendMessageA(tasks[i].button, BM_SETCHECK, selected ? BST_CHECKED : BST_UNCHECKED, 0);
+        tasks[i].active = selected; InvalidateRect(tasks[i].button, NULL, TRUE);
         if (selected) lastActive = active;
     }
 }
@@ -274,7 +279,7 @@ static void AddQuickFile(const char *source)
 
 void EnvLayoutBar(void)
 {
-    RECT rect; int width, height, iconSize = env.options.largeIcons ? 36 : 24;
+    RECT rect; int width, height, iconSize = env.options.largeIcons ? 36 : 22;
     int i, begin, end, trayWidth, quickVisible, rows, columns, taskWidth, taskHeight;
     BOOL vertical = env.options.edge == ABE_LEFT || env.options.edge == ABE_RIGHT;
     if (!env.bar || !env.tray) return;
@@ -299,7 +304,7 @@ void EnvLayoutBar(void)
         taskHeight = taskCount ? (end - begin) / taskCount : 26; taskHeight = Clamp(taskHeight, 8, 26);
         for (i = 0; i < taskCount; ++i) MoveWindow(tasks[i].button, 3, begin + i * taskHeight, width - 6, taskHeight - 2, TRUE);
     } else {
-        MoveWindow(env.startButton, 3, 3, 64, height - 6, TRUE); begin = 74;
+        MoveWindow(env.startButton, 2, 3, EnvStartButtonWidth(), 22, TRUE); begin = EnvStartButtonWidth() + 10;
         if (trayWidth > width / 2) trayWidth = width / 2;
         end = width - trayWidth - 8;
         ShowWindow(desktopButton, env.options.quick ? SW_SHOW : SW_HIDE);
@@ -309,11 +314,11 @@ void EnvLayoutBar(void)
             ShowWindow(quick[i].button, i < quickVisible ? SW_SHOW : SW_HIDE);
             if (i < quickVisible) MoveWindow(quick[i].button, begin + i * iconSize, (height - iconSize) / 2, iconSize, iconSize, TRUE);
         }
-        begin += quickVisible * iconSize + (env.options.quick ? 7 : 0);
+        begin += quickVisible * iconSize + (env.options.quick ? 7 : 0); quickEnd = begin - 4;
         MoveWindow(env.tray, width - trayWidth - 3, 3, trayWidth, height - 6, TRUE); TrayLayout(trayWidth - 2, height - 8);
         rows = env.options.rows; columns = taskCount ? (taskCount + rows - 1) / rows : 1;
         taskWidth = (end - begin) / columns; taskWidth = Clamp(taskWidth, 4, env.options.taskWidth);
-        taskHeight = (height - 6) / rows;
+        taskHeight = (height - 4) / rows;
         for (i = 0; i < taskCount; ++i)
             MoveWindow(tasks[i].button, begin + (i / rows) * taskWidth, 3 + (i % rows) * taskHeight, taskWidth - 2, taskHeight - 2, TRUE);
     }
@@ -323,7 +328,7 @@ void EnvLayoutBar(void)
 static int Thickness(void)
 {
     if (env.options.edge == ABE_LEFT || env.options.edge == ABE_RIGHT) return 140 + (env.options.rows - 1) * 32;
-    return (env.options.largeIcons ? 40 : 30) * env.options.rows;
+    return (env.options.largeIcons ? 40 : 28) * env.options.rows;
 }
 static void ResizeDesktop(void)
 {
@@ -376,8 +381,9 @@ void EnvApplyOptions(void)
 {
     LONG style = GetWindowLongA(env.bar, GWL_STYLE);
     style &= ~(WS_BORDER | WS_THICKFRAME);
-    style |= env.options.locked ? WS_BORDER : WS_THICKFRAME;
+    /* Draw the classic raised bar ourselves; a thick frame eats client height. */
     SetWindowLongA(env.bar, GWL_STYLE, style);
+    SetWindowTextA(env.startButton, env.options.startLabel); StartRefresh();
     env.hidden = FALSE; RefreshQuick(); EnvPositionBar(); UpdateTasks(); EnvLayoutBar();
 }
 
@@ -444,7 +450,27 @@ void EnvCommand(int id)
     case ID_LOGOFF: case ID_SHUTDOWN:
         if (MessageBoxA(env.bar, id == ID_LOGOFF ? "Save your work. Log off Windows now?" : "Save your work. Shut down Windows now?",
             "Explorer95", MB_YESNO | MB_DEFBUTTON2 | MB_ICONQUESTION) == IDYES)
-            if (!ExitWindowsEx(id == ID_LOGOFF ? EWX_LOGOFF : EWX_SHUTDOWN, 0)) EnvError(env.bar, "Windows could not end the session.", GetLastError());
+            {
+                SetLastError(ERROR_SUCCESS);
+                if (!ExitWindowsEx(id == ID_LOGOFF ? EWX_LOGOFF : EWX_SHUTDOWN, 0)) {
+                    DWORD error = GetLastError();
+                    if (id == ID_LOGOFF && (GetVersion() & 0x80000000UL) && error == ERROR_INVALID_FUNCTION) {
+                        /* Some Win95 configurations reject a direct logoff.
+                         * Delegate to the installed shell's session dialog;
+                         * never substitute reboot, shutdown, or forced logoff. */
+                        typedef void (WINAPI *SessionDialog)(HWND);
+                        SessionDialog dialog = (SessionDialog)(void *)GetProcAddress(GetModuleHandleA("shell32.dll"), MAKEINTRESOURCEA(60));
+                        if (dialog) {
+                            MessageBoxA(env.bar, "Use the Windows dialog to select:\r\n"
+                                "Close all programs and log on as a different user.\r\n\r\n"
+                                "The available choices depend on your installed logon provider.",
+                                "Log Off Windows", MB_OK | MB_ICONINFORMATION);
+                            dialog(env.bar);
+                        } else EnvError(env.bar, "This Windows installation could not log off directly.", error);
+                    } else if (error) EnvError(env.bar, "Windows could not end the session.", error);
+                    /* A cancelled session end may return FALSE without an error. */
+                }
+            }
         break;
     case ID_PROPERTIES: PropertiesOpen(); break;
     case ID_SHOWDESKTOP: EnvShowDesktop(); break;
@@ -506,6 +532,20 @@ static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
 {
     switch (message) {
     case WM_SIZE: EnvLayoutBar(); return 0;
+    case WM_PAINT: {
+        PAINTSTRUCT paint; RECT rect; HDC dc = BeginPaint(window, &paint);
+        GetClientRect(window, &rect); FillRect(dc, &rect, (HBRUSH)(COLOR_BTNFACE + 1));
+        DrawEdge(dc, &rect, EDGE_RAISED, env.options.edge == ABE_BOTTOM ? BF_TOP : env.options.edge == ABE_TOP ? BF_BOTTOM : env.options.edge == ABE_LEFT ? BF_RIGHT : BF_LEFT);
+        if (env.options.quick && (env.options.edge == ABE_BOTTOM || env.options.edge == ABE_TOP)) {
+            RECT separator;
+            SetRect(&separator, EnvStartButtonWidth() + 6, 4, EnvStartButtonWidth() + 8, rect.bottom - 3);
+            DrawEdge(dc, &separator, EDGE_ETCHED, BF_LEFT);
+            SetRect(&separator, quickEnd, 4, quickEnd + 2, rect.bottom - 3);
+            DrawEdge(dc, &separator, EDGE_ETCHED, BF_LEFT);
+        }
+        EndPaint(window, &paint); return 0;
+    }
+    case WM_DRAWITEM: return EnvDrawBarButton((DRAWITEMSTRUCT *)lp);
     case WM_COPYDATA: return TrayCopyData((const COPYDATASTRUCT *)lp);
     case WM_SETTINGCHANGE: case WM_DISPLAYCHANGE:
         if (message == WM_DISPLAYCHANGE && env.primary) SetRect(&env.originalArea, 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
@@ -516,7 +556,10 @@ static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
     case WM_TIMER: {
         SYSTEMTIME now; char text[32];
         UpdateTasks(); TrayPrune(); AutoHideTick();
-        GetLocalTime(&now); wsprintfA(text, "%02u:%02u", now.wHour, now.wMinute); SetWindowTextA(env.clock, text);
+        GetLocalTime(&now);
+        if (!GetTimeFormatA(LOCALE_USER_DEFAULT, TIME_NOSECONDS, &now, NULL, text, sizeof(text)))
+            wsprintfA(text, "%02u:%02u", now.wHour, now.wMinute);
+        SetWindowTextA(env.clock, text);
         if (GetTickCount() - quickChecked > 10000) { RefreshQuick(); quickChecked = GetTickCount(); }
         return 0;
     }
@@ -561,7 +604,7 @@ static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
         RECT *rect = (RECT *)lp;
         BOOL vertical = env.options.edge == ABE_LEFT || env.options.edge == ABE_RIGHT;
         env.options.rows = vertical ? Clamp((rect->right - rect->left - 140 + 16) / 32 + 1, 1, 3) :
-            Clamp((rect->bottom - rect->top + 15) / (env.options.largeIcons ? 40 : 30), 1, 3);
+            Clamp((rect->bottom - rect->top + 15) / (env.options.largeIcons ? 40 : 28), 1, 3);
         return TRUE;
     }
     case WM_EXITSIZEMOVE: EnvSaveOptions(); EnvPositionBar(); return 0;
@@ -586,12 +629,13 @@ HWND EnvironmentCreate(const EnvironmentHost *callbacks)
         !EnvRegister("Explorer95.Taskbar", BarProc, (HBRUSH)(COLOR_BTNFACE + 1)) || !PropertiesRegister()) return NULL;
     env.desktop = CreateWindowExA(WS_EX_TOOLWINDOW, "Explorer95.Desktop", "Explorer95 Desktop", WS_POPUP | WS_CLIPCHILDREN,
         0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN), NULL, NULL, env.host.instance, NULL);
-    env.bar = CreateWindowExA(WS_EX_TOOLWINDOW, "Explorer95.Taskbar", "Explorer95", WS_POPUP | WS_BORDER | WS_CLIPCHILDREN,
+    env.bar = CreateWindowExA(WS_EX_TOOLWINDOW, "Explorer95.Taskbar", "Explorer95", WS_POPUP | WS_CLIPCHILDREN,
         0, 0, 640, 30, NULL, NULL, env.host.instance, NULL);
     if (!env.desktop || !env.bar) return NULL;
-    env.startButton = EnvControl(env.bar, "BUTTON", "Start", BS_PUSHBUTTON, ID_START);
+    env.startButton = EnvControl(env.bar, "BUTTON", "Start", BS_OWNERDRAW, ID_START);
     desktopButton = EnvControl(env.bar, "BUTTON", "", BS_ICON | BS_FLAT, ID_SHOWDESKTOP);
-    SendMessageA(desktopButton, BM_SETIMAGE, IMAGE_ICON, (LPARAM)LoadIconA(NULL, IDI_WINLOGO));
+    desktopIcon = EnvSystemIcon(35);
+    SendMessageA(desktopButton, BM_SETIMAGE, IMAGE_ICON, (LPARAM)desktopIcon);
     quickTip = CreateWindowExA(WS_EX_TOPMOST, TOOLTIPS_CLASSA, NULL, WS_POPUP | TTS_ALWAYSTIP,
         CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, env.bar, NULL, env.host.instance, NULL);
     QuickTip(desktopButton, "Show / Restore Desktop", FALSE);
@@ -622,7 +666,7 @@ BOOL EnvironmentTranslate(MSG *message)
     if ((message->message == WM_LBUTTONDOWN || message->message == WM_RBUTTONDOWN || message->message == WM_MBUTTONDOWN) &&
         IsWindowVisible(env.start) && message->hwnd != env.start && message->hwnd != env.startButton &&
         !IsChild(env.start, message->hwnd)) StartHide();
-    return StartTranslate(message) || PropertiesTranslate(message);
+    return StartTranslate(message) || StartSettingsTranslate(message) || PropertiesTranslate(message);
 }
 void EnvironmentShutdown(void)
 {
@@ -635,10 +679,52 @@ void EnvironmentShutdown(void)
     StartDestroy(); TrayDestroy(); NativeViewDestroy(env.desktopView); env.desktopView = NULL;
     if (env.desktop) DestroyWindow(env.desktop);
     if (env.properties) DestroyWindow(env.properties);
+    if (env.startSettings) DestroyWindow(env.startSettings);
     if (bridge) DestroyWindow(bridge);
     if (env.appbar) {
         ZeroMemory(&data, sizeof(data)); data.cbSize = sizeof(data); data.hWnd = env.bar; SHAppBarMessage(ABM_REMOVE, &data);
     } else if (env.primary) SystemParametersInfoA(SPI_SETWORKAREA, 0, &env.originalArea, SPIF_SENDCHANGE);
     for (i = 0; i < quickCount; ++i) if (quick[i].icon) DestroyIcon(quick[i].icon);
     if (quickTip) DestroyWindow(quickTip);
+    if (desktopIcon) DestroyIcon(desktopIcon);
+}
+
+int EnvStartButtonWidth(void)
+{
+    HDC dc = GetDC(env.bar); SIZE size; HFONT old; LOGFONTA lf; HFONT font;
+    GetObjectA(env.host.font, sizeof(lf), &lf); lf.lfWeight = FW_BOLD; font = CreateFontIndirectA(&lf);
+    old = SelectObject(dc, font ? font : env.host.font);
+    GetTextExtentPoint32A(dc, env.options.startLabel, lstrlenA(env.options.startLabel), &size);
+    SelectObject(dc, old); if (font) DeleteObject(font); ReleaseDC(env.bar, dc);
+    return Clamp(size.cx + 30, 54, 240);
+}
+BOOL EnvDrawBarButton(const DRAWITEMSTRUCT *item)
+{
+    RECT rect = item->rcItem, text = rect; char label[160];
+    BOOL start = item->CtlID == ID_START, down = (item->itemState & ODS_SELECTED) != 0;
+    HICON icon = NULL; HFONT font = NULL, old; LOGFONTA lf;
+    int index = (int)item->CtlID - ID_TASK;
+    if (start) icon = LoadIconA(NULL, IDI_WINLOGO);
+    else if (index >= 0 && index < taskCount) {
+        DWORD_PTR result = 0; HWND target = tasks[index].windows[0];
+        down = down || tasks[index].active;
+        SendMessageTimeoutA(target, WM_GETICON, ICON_SMALL, 0, SMTO_ABORTIFHUNG, 80, &result);
+        icon = (HICON)result;
+        if (!icon) icon = (HICON)GetClassLongPtrA(target, GCLP_HICONSM);
+        if (!icon) icon = (HICON)GetClassLongPtrA(target, GCLP_HICON);
+    } else return FALSE;
+    FillRect(item->hDC, &rect, (HBRUSH)(INT_PTR)((down && !start ? COLOR_3DLIGHT : COLOR_BTNFACE) + 1));
+    DrawEdge(item->hDC, &rect, down ? EDGE_SUNKEN : EDGE_RAISED, BF_RECT);
+    if (!icon) icon = LoadIconA(NULL, IDI_APPLICATION);
+    DrawIconEx(item->hDC, 4 + (down ? 1 : 0), (rect.bottom - 16) / 2 + (down ? 1 : 0), icon, 16, 16, 0, NULL, DI_NORMAL);
+    if (start || down) {
+        GetObjectA(env.host.font, sizeof(lf), &lf); lf.lfWeight = FW_BOLD; font = CreateFontIndirectA(&lf);
+    }
+    old = SelectObject(item->hDC, font ? font : env.host.font);
+    SetBkMode(item->hDC, TRANSPARENT); SetTextColor(item->hDC, GetSysColor(COLOR_BTNTEXT));
+    GetWindowTextA(item->hwndItem, label, sizeof(label));
+    text.left += 23 + (down ? 1 : 0); text.right -= 3;
+    DrawTextA(item->hDC, label, -1, &text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    if (item->itemState & ODS_FOCUS) { InflateRect(&rect, -3, -3); DrawFocusRect(item->hDC, &rect); }
+    SelectObject(item->hDC, old); if (font) DeleteObject(font); return TRUE;
 }

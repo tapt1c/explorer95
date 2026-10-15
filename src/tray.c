@@ -16,7 +16,7 @@ typedef struct TrayIcon {
 } TrayIcon;
 
 static TrayIcon icons[ICON_LIMIT];
-static HWND tooltip, ownIcon, moreButton;
+static HWND tooltip, moreButton;
 
 static void OverflowMenu(void)
 {
@@ -81,23 +81,22 @@ static BOOL Visible(const TrayIcon *icon)
 
 int TrayWidth(void)
 {
-    int i, count = 1;
+    int i, count = 0;
     for (i = 0; i < ICON_LIMIT; ++i) if (Visible(&icons[i])) ++count;
     /* More than eight icons are available through the expand button. */
     if (count > 8) count = 8;
-    return count * 20 + (env.options.clock ? 62 : 0) + 30;
+    return count * 20 + (env.options.clock ? 58 : 0) + (env.options.hideInactive || count > 7 ? 20 : 0) + 10;
 }
 
 void TrayLayout(int width, int height)
 {
     int i, x = 4, y = (height - 20) / 2, shown = 0;
-    int clockWidth = env.options.clock ? 62 : 0;
+    int clockWidth = env.options.clock ? 58 : 0;
     BOOL overflow = FALSE;
-    MoveWindow(ownIcon, x, y, 20, 20, TRUE); x += 20;
     for (i = 0; i < ICON_LIMIT; ++i) {
         BOOL show = Visible(&icons[i]);
         if (shown >= 7) { if (show) overflow = TRUE; show = FALSE; }
-        if (x + 38 + clockWidth + 4 > width) { if (show) overflow = TRUE; show = FALSE; }
+        if (x + 20 + clockWidth + 4 > width) { if (show) overflow = TRUE; show = FALSE; }
         if (icons[i].button) ShowWindow(icons[i].button, show ? SW_SHOW : SW_HIDE);
         if (show) { MoveWindow(icons[i].button, x, y, 20, 20, TRUE); x += 20; ++shown; }
     }
@@ -198,12 +197,9 @@ BOOL TrayCreate(void)
         0, 0, 100, 24, env.bar, NULL, env.host.instance, NULL);
     tooltip = CreateWindowExA(WS_EX_TOPMOST, TOOLTIPS_CLASSA, NULL, WS_POPUP | TTS_ALWAYSTIP,
         CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, env.tray, NULL, env.host.instance, NULL);
-    ownIcon = CreateWindowExA(0, "Explorer95.TrayIcon", "Explorer95 settings", WS_CHILD | WS_VISIBLE,
-        0, 0, 20, 20, env.tray, NULL, env.host.instance, NULL);
     moreButton = EnvControl(env.tray, "BUTTON", ">", 0, ID_TRAYMORE);
     env.clock = EnvControl(env.tray, "STATIC", "", SS_CENTER | SS_CENTERIMAGE | SS_NOTIFY, 1);
-    Tip(ownIcon, "Explorer95 - taskbar and shell settings");
-    return env.tray && tooltip && ownIcon && env.clock;
+    return env.tray && tooltip && env.clock;
 }
 void TrayDestroy(void)
 {

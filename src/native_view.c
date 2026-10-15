@@ -287,7 +287,7 @@ void DesktopBackgroundMenu(NativeView *view, POINT point)
         IContextMenu_QueryInterface(context, &IID_IContextMenu2, (void **)&view->context);
     } else {
         AppendMenuA(menu, MF_STRING, 0x8003, "Refresh");
-        AppendMenuA(menu, MF_STRING, 0x8004, "Display Properties");
+
     }
     AppendMenuA(arrange, MF_STRING | ((view->list && (GetWindowLongA(view->list, GWL_STYLE) & LVS_AUTOARRANGE)) ? MF_CHECKED : 0),
         0x8005, "Auto Arrange");
@@ -304,6 +304,7 @@ void DesktopBackgroundMenu(NativeView *view, POINT point)
     AppendMenuA(extra, MF_STRING, 0x8003, "Refresh Desktop");
     AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
     AppendMenuA(menu, MF_POPUP, (UINT_PTR)extra, "Explorer95");
+    AppendMenuA(menu, MF_STRING, 0x8004, "Desktop Background / Display Properties...");
     SetForegroundWindow(view->parent);
     command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, 0,
                              view->window, NULL);

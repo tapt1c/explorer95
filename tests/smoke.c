@@ -114,6 +114,33 @@ static void ConfigTests(const char *directory)
       GetPrivateProfileSectionA("boot", section, sizeof(section), ini);
       Check(!lstrcmpA(section, "shell=\"C:\\OLD SHELL\\shell.exe\""), "shell restoration preserves enclosing quotes"); }
     DeleteFileA(ini); DeleteFileA(backup); DeleteFileA(recovery);
+    {
+        char source[MAX_PATH], installed[MAX_PATH], selection[32]; HANDLE locked;
+        wsprintfA(source, "%s\\EX950000.EXE", directory);
+        locked = CreateFileA(source, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
+        Check(locked != INVALID_HANDLE_VALUE, "create an installation fixture locked against overwrite");
+        { DWORD written; WriteFile(locked, "test executable", 15, &written, NULL); }
+        CloseHandle(locked);
+        locked = CreateFileA(source, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        Check(locked != INVALID_HANDLE_VALUE, "hold a read-only executable handle as on Windows 95");
+        Check(StageShellExecutable(source, directory, selection) == ERROR_SUCCESS && !lstrcmpA(selection, "EX950001.EXE"),
+            "stage uses a free 8.3 name instead of overwriting a running/locked executable");
+        wsprintfA(installed, "%s\\%s", directory, selection);
+        Check(GetFileAttributesA(installed) != INVALID_FILE_ATTRIBUTES, "staged executable exists");
+        WritePrivateProfileStringA("boot", "shell", "EXPLORER.EXE", ini);
+        Check(ConfigureBootShell(ini, backup, recovery, "EX950000.EXE", FALSE) == ERROR_SUCCESS &&
+            ConfigureBootShell(ini, backup, recovery, selection, FALSE) == ERROR_SUCCESS,
+            "shell update accepts the recorded previous installation without replacing its backup");
+        Check(ConfigureBootShell(ini, backup, recovery, selection, TRUE) == ERROR_SUCCESS,
+            "restore works after a versioned shell update");
+        GetPrivateProfileStringA("boot", "shell", "", text, sizeof(text), ini);
+        Check(!lstrcmpA(text, "EXPLORER.EXE"), "versioned update retains the first original shell");
+        CloseHandle(locked); DeleteFileA(source); DeleteFileA(installed);
+        wsprintfA(source, "%s\\missing.exe", directory);
+        Check(StageShellExecutable(source, directory, selection) == ERROR_FILE_NOT_FOUND,
+            "missing installation source returns a copy error before boot settings change");
+    }
+    DeleteFileA(ini); DeleteFileA(backup); DeleteFileA(recovery);
 }
 
 static void EnvironmentTests(HWND bar, HWND browser, HWND childWindow, HWND menu, const char *settings)
@@ -177,6 +204,40 @@ static void EnvironmentTests(HWND bar, HWND browser, HWND childWindow, HWND menu
     SendMessageA(bar, WM_COMMAND, 600, 0);
     properties = WaitFor("Explorer95.Properties", NULL);
     Check(properties != NULL, "taskbar properties open");
+    SendMessageA(properties, WM_COMMAND, 626, 0);
+    {
+        HWND customize = WaitFor("Explorer95.StartSettings", NULL);
+        Check(customize != NULL, "Start customization opens with a separate pinned-program list");
+        Check(SendDlgItemMessageA(customize, 630, LB_GETCOUNT, 0, 0) == 2, "default Explorer and DOS entries belong to the pinned list");
+        SetWindowTextA(GetDlgItem(customize, 625), "Launch & Go");
+        SendDlgItemMessageA(customize, 654, BM_SETCHECK, BST_UNCHECKED, 0);
+        SendDlgItemMessageA(customize, 653, BM_SETCHECK, BST_UNCHECKED, 0);
+        GetModuleFileNameA(NULL, module, MAX_PATH);
+        SetWindowTextA(GetDlgItem(customize, 631), module);
+        SetWindowTextA(GetDlgItem(customize, 636), "Pinned smoke program");
+        SetWindowTextA(GetDlgItem(customize, 637), "\"--child\"");
+        SendMessageA(customize, WM_COMMAND, 632, 0);
+        Check(SendDlgItemMessageA(customize, 630, LB_GETCOUNT, 0, 0) == 3, "add a program with its own label and arguments");
+        SendMessageA(customize, WM_COMMAND, 634, 0);
+        SendMessageA(customize, WM_COMMAND, IDOK, 0);
+        GetWindowTextA(GetDlgItem(bar, 100), title, sizeof(title));
+        Check(!lstrcmpA(title, "Launch & Go"), "Start button accepts a custom caption including a literal ampersand");
+        Check(GetPrivateProfileIntA("Pinned", "Count", 0, settings) == 3, "pinned list is persisted independently of history");
+        GetWindowTextA(GetDlgItem(menu, 901), title, sizeof(title));
+        Check(!lstrcmpA(title, "Pinned smoke program"), "pinned program order follows Move Up");
+        SendMessageA(GetDlgItem(bar, 100), BM_CLICK, 0, 0);
+        Check(!IsWindowVisible(GetDlgItem(menu, 304)) && !IsWindowVisible(GetDlgItem(menu, 309)) && IsWindowVisible(GetDlgItem(menu, 300)),
+            "unchecked commands disappear while other right-column entries remain visible");
+        SendMessageA(GetDlgItem(bar, 100), BM_CLICK, 0, 0);
+        SendMessageA(properties, WM_COMMAND, 626, 0);
+        customize = WaitFor("Explorer95.StartSettings", NULL);
+        SendDlgItemMessageA(customize, 630, LB_SETCURSEL, 1, 0);
+        SendMessageA(customize, WM_COMMAND, 633, 0);
+        Check(SendDlgItemMessageA(customize, 630, LB_GETCOUNT, 0, 0) == 2, "pinned-program editor removes selected entries");
+        SendMessageA(customize, WM_COMMAND, IDCANCEL, 0);
+        GetWindowTextA(GetDlgItem(menu, 901), title, sizeof(title));
+        Check(!lstrcmpA(title, "Pinned smoke program"), "Cancel discards pending pinned-list changes");
+    }
     SendMessageA(GetDlgItem(properties, 601), BM_SETCHECK, BST_UNCHECKED, 0);
     SendMessageA(GetDlgItem(properties, 620), CB_SETCURSEL, 1, 0);
     SendMessageA(GetDlgItem(properties, 621), CB_SETCURSEL, 1, 0);
@@ -395,6 +456,19 @@ void start(void)
     SendMessageA(menu, WM_COMMAND, 801, 0);
     child = WaitFor("Explorer95.SmokeChild", "Explorer95 smoke child");
     Check(child != NULL && SendMessageA(child, WM_APP + 35, 0, 0), "reloaded recent command preserves fully quoted arguments");
+    PostMessageA(child, WM_CLOSE, 0, 0);
+    started = GetTickCount(); while (IsWindow(child) && GetTickCount() - started < 3000) Sleep(50);
+    GetWindowTextA(GetDlgItem(bar, 100), actual, sizeof(actual));
+    Check(!lstrcmpA(actual, "Launch & Go"), "custom Start caption survives restart");
+    Check(!(GetWindowLongA(GetDlgItem(menu, 304), GWL_STYLE) & WS_VISIBLE), "hidden right-column commands survive restart");
+    SendMessageA(bar, WM_COMMAND, 600, 0);
+    dialog = WaitFor("Explorer95.Properties", NULL);
+    SendMessageA(dialog, WM_COMMAND, 611, 0); SendMessageA(dialog, WM_COMMAND, IDCANCEL, 0);
+    GetWindowTextA(GetDlgItem(menu, 901), actual, sizeof(actual));
+    Check(!lstrcmpA(actual, "Pinned smoke program"), "clearing recent programs preserves the separate pinned list");
+    SendMessageA(menu, WM_COMMAND, 901, 0);
+    child = WaitFor("Explorer95.SmokeChild", "Explorer95 smoke child");
+    Check(child != NULL && SendMessageA(child, WM_APP + 35, 0, 0), "persisted pinned program launches with its quoted arguments");
     PostMessageA(child, WM_CLOSE, 0, 0);
     PostMessageA(bar, WM_CLOSE, 0, 0);
     Check(WaitForSingleObject(process.hProcess, 5000) == WAIT_OBJECT_0, "restarted shell exits cleanly");

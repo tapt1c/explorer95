@@ -16,12 +16,15 @@ void EnvSaveOptions(void)
     SaveNumber("Clock", env.options.clock); SaveNumber("QuickLaunch", env.options.quick);
     SaveNumber("LargeIcons", env.options.largeIcons); SaveNumber("GroupTasks", env.options.group);
     SaveNumber("HideInactive", env.options.hideInactive);
+    { char value[24]; wsprintfA(value, "%u", env.options.startItems);
+      WritePrivateProfileStringA("Start", "VisibleItems", value, env.ini);
+      WritePrivateProfileStringA("Start", "ButtonLabel", env.options.startLabel, env.ini); }
 }
 
 static void ShellSelection(HWND owner, BOOL restore)
 {
     char directory[MAX_PATH], systemIni[MAX_PATH], backup[MAX_PATH], recovery[MAX_PATH];
-    char target[MAX_PATH], source[MAX_PATH], recorded[MAX_PATH];
+    char target[MAX_PATH], source[MAX_PATH], selection[32];
     DWORD version = GetVersion(), error;
     if (!(version & 0x80000000UL) || LOBYTE(LOWORD(version)) != 4 || HIBYTE(LOWORD(version)) != 0) {
         MessageBoxA(owner, "System shell switching is supported only on Windows 95.\r\n"
@@ -30,34 +33,29 @@ static void ShellSelection(HWND owner, BOOL restore)
     }
     GetWindowsDirectoryA(directory, MAX_PATH);
     if (!EnvJoin(systemIni, directory, "SYSTEM.INI") || !EnvJoin(backup, directory, "EX95BAK.INI") ||
-        !EnvJoin(recovery, directory, "EX95REC.INI") || !EnvJoin(target, directory, "EXPLR95.EXE")) return;
+        !EnvJoin(recovery, directory, "EX95REC.INI")) return;
     if (MessageBoxA(owner, restore ?
         "Restore the shell saved before Explorer95 was installed?\r\n\r\n"
         "This changes SYSTEM.INI for the next Windows startup.\r\n"
         "Save your work, then restart Windows when convenient." :
         "Use Explorer95 as the Windows 95 shell at the next startup?\r\n\r\n"
-        "The program will be copied to Windows\\EXPLR95.EXE.\r\n"
+        "The program will be copied to a free Windows\\EX95xxxx.EXE.\r\n"
         "SYSTEM.INI will be backed up as Windows\\EX95BAK.INI.\r\n"
         "To recover from DOS, restore the original shell= line\r\n"
         "in SYSTEM.INI using EX95BAK.INI as a reference.\r\n\r\n"
         "Keep a boot disk available while testing this experimental shell.",
         "Explorer95 Shell", MB_YESNO | MB_DEFBUTTON2 | MB_ICONEXCLAMATION) != IDYES) return;
+    GetPrivateProfileStringA("Recovery", "SelectedShell", "EXPLR95.EXE", selection, sizeof(selection), recovery);
     if (!restore) {
-        GetModuleFileNameA(NULL, source, MAX_PATH);
-        GetPrivateProfileStringA("Recovery", "InstalledPath", "", recorded, MAX_PATH, recovery);
-        if (lstrcmpiA(source, target)) {
-            if (GetFileAttributesA(target) != INVALID_FILE_ATTRIBUTES && lstrcmpiA(recorded, target)) {
-                EnvError(owner, "EXPLR95.EXE already exists and is not our recorded installation.", ERROR_FILE_EXISTS); return;
-            }
-            if (!CopyFileA(source, target, FALSE)) {
-                EnvError(owner, "Cannot copy the shell executable; boot settings are unchanged.", GetLastError()); return;
-            }
-        }
-        if (!WritePrivateProfileStringA("Recovery", "InstalledPath", target, recovery)) {
-            EnvError(owner, "Cannot save installation metadata; boot settings are unchanged.", ERROR_WRITE_FAULT); return;
-        }
+        if (!GetModuleFileNameA(NULL, source, MAX_PATH)) { EnvError(owner, "Cannot locate this executable.", GetLastError()); return; }
+        error = StageShellExecutable(source, directory, selection);
+        if (error) { EnvError(owner, "Cannot stage the shell executable; boot settings are unchanged.", error); return; }
+        EnvJoin(target, directory, selection);
     }
-    error = ConfigureBootShell(systemIni, backup, recovery, "EXPLR95.EXE", restore);
+    error = ConfigureBootShell(systemIni, backup, recovery, selection, restore);
+    /* Keep the staged EXE on failure: an unsuccessful INI rollback must not
+     * leave Windows pointing at a file we have deleted. */
+    if (!error && !restore) WritePrivateProfileStringA("Recovery", "InstalledPath", target, recovery);
     if (error) { EnvError(owner, "Could not change the boot shell. Existing recovery files were preserved.", error); return; }
     MessageBoxA(owner, restore ? "The previous shell was restored for the next Windows startup." :
                 "Explorer95 is selected for the next Windows startup.\r\n"
@@ -110,7 +108,7 @@ static LRESULT CALLBACK PropertiesProc(HWND window, UINT message, WPARAM wp, LPA
         MoveWindow(EnvControl(window, "BUTTON", "Start menu and toolbars", BS_GROUPBOX, 5), 10, 198, 420, 88, TRUE);
         MoveWindow(EnvControl(window, "BUTTON", "Clear recent programs", WS_TABSTOP, ID_CLEARRECENT), 22, 224, 188, 26, TRUE);
         MoveWindow(EnvControl(window, "BUTTON", "Open Quick Launch folder", WS_TABSTOP, ID_QUICKFOLDER), 224, 224, 194, 26, TRUE);
-        MoveWindow(EnvControl(window, "STATIC", "Drop programs or shortcuts onto Quick Launch to add them.", 0, 6), 22, 258, 396, 20, TRUE);
+        MoveWindow(EnvControl(window, "BUTTON", "Customize Start menu / pinned programs...", WS_TABSTOP, ID_CUSTOMSTART), 22, 254, 396, 26, TRUE);
         MoveWindow(EnvControl(window, "BUTTON", "Windows 95 system shell (takes effect after restart)", BS_GROUPBOX, 7), 10, 298, 420, 76, TRUE);
         MoveWindow(EnvControl(window, "BUTTON", "Use Explorer95 as shell...", WS_TABSTOP, ID_INSTALLSHELL), 22, 326, 188, 26, TRUE);
         MoveWindow(EnvControl(window, "BUTTON", "Restore previous shell...", WS_TABSTOP, ID_RESTORESHELL), 224, 326, 194, 26, TRUE);
@@ -140,6 +138,7 @@ static LRESULT CALLBACK PropertiesProc(HWND window, UINT message, WPARAM wp, LPA
         }
         case IDCANCEL: DestroyWindow(window); return 0;
         case ID_CLEARRECENT: StartClearRecent(); return 0;
+        case ID_CUSTOMSTART: StartSettingsOpen(); return 0;
         case ID_QUICKFOLDER: env.host.openFolder(env.quickDir); return 0;
         case ID_INSTALLSHELL: ShellSelection(window, FALSE); return 0;
         case ID_RESTORESHELL: ShellSelection(window, TRUE); return 0;

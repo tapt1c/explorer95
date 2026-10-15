@@ -2,12 +2,12 @@
 #include "shell_internal.h"
 
 typedef struct RecentProgram { char path[MAX_PATH], arguments[512]; } RecentProgram;
-typedef struct ProgramItem { char path[MAX_PATH]; BOOL folder; } ProgramItem;
+typedef struct ProgramItem { char path[MAX_PATH], label[MAX_PATH]; BOOL folder; HICON icon; } ProgramItem;
 static RecentProgram recent[RECENT_LIMIT];
 static ProgramItem programs[256];
 static int programCount;
 static HWND hovered;
-static HICON itemIcons[32];
+static HICON itemIcons[64];
 static char user[128];
 static BOOL popupActive;
 
@@ -52,7 +52,7 @@ static void SaveRecent(void)
     }
     WritePrivateProfileStringA("Recent", "Format", "2", env.ini);
 }
-static HICON PathIcon(const char *path)
+HICON EnvPathIcon(const char *path)
 {
     SHFILEINFOA info;
     ZeroMemory(&info, sizeof(info));
@@ -71,6 +71,16 @@ static HICON SpecialIcon(int csidl)
     }
     return icon;
 }
+HICON EnvSystemIcon(int resource)
+{
+    char directory[MAX_PATH], path[MAX_PATH]; HICON icon = NULL;
+    /* Resource IDs stay stable when new icon groups change enumeration order. */
+    GetSystemDirectoryA(directory, MAX_PATH);
+    if (EnvJoin(path, directory, "shell32.dll")) ExtractIconExA(path, -resource, NULL, &icon, 1);
+    if (!icon) icon = CopyIcon(LoadIconA(NULL, IDI_APPLICATION));
+    return icon;
+}
+
 static void UpdateRecent(void)
 {
     int i; char caption[MAX_PATH];
@@ -81,9 +91,9 @@ static void UpdateRecent(void)
         Caption(recent[i].path, caption, sizeof(caption));
         SetWindowTextA(button, caption);
         ShowWindow(button, recent[i].path[0] ? SW_SHOW : SW_HIDE);
-        if (recent[i].path[0]) itemIcons[16 + i] = PathIcon(recent[i].path);
+        if (recent[i].path[0]) itemIcons[16 + i] = EnvPathIcon(recent[i].path);
     }
-    InvalidateRect(env.start, NULL, TRUE);
+    StartRefresh();
 }
 void StartRecord(const char *path, const char *arguments)
 {
@@ -139,14 +149,14 @@ static HMENU FolderMenu(const char *directory, int depth)
         item = list; list = list->next;
         if (programCount < 250 && EnvJoin(path, directory, item->name)) {
             Caption(item->name, label, sizeof(label));
+            int index = programCount++;
+            ProgramItem *entry = &programs[index];
+            lstrcpyA(entry->path, path); lstrcpyA(entry->label, label);
+            entry->folder = item->folder; entry->icon = EnvPathIcon(path);
             if (item->folder && depth < 5) {
                 HMENU child = FolderMenu(path, depth + 1);
-                AppendMenuA(menu, MF_POPUP, (UINT_PTR)child, label);
-            } else {
-                lstrcpyA(programs[programCount].path, path);
-                programs[programCount].folder = item->folder;
-                AppendMenuA(menu, MF_STRING, 2000 + programCount++, label);
-            }
+                AppendMenuA(menu, MF_OWNERDRAW | MF_POPUP, (UINT_PTR)child, (LPCSTR)entry);
+            } else AppendMenuA(menu, MF_OWNERDRAW, 2000 + index, (LPCSTR)entry);
         }
         EnvFree(item);
     }
@@ -154,7 +164,9 @@ static HMENU FolderMenu(const char *directory, int depth)
         if (GetMenuItemCount(menu)) AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
         lstrcpynA(programs[programCount].path, directory, MAX_PATH);
         programs[programCount].folder = TRUE;
-        AppendMenuA(menu, MF_STRING, 2000 + programCount++, "Open this folder...");
+        lstrcpyA(programs[programCount].label, "Open this folder...");
+        programs[programCount].icon = EnvPathIcon(directory);
+        AppendMenuA(menu, MF_OWNERDRAW, 2000 + programCount, (LPCSTR)&programs[programCount]); ++programCount;
     }
     return menu;
 }
@@ -164,12 +176,18 @@ static void ProgramsPopup(BOOL documents)
     char directory[MAX_PATH], common[MAX_PATH];
     HMENU menu;
     RECT button;
-    int command;
+    int command, i;
     if (!env.host.specialPath(documents ? CSIDL_RECENT : CSIDL_PROGRAMS, directory)) return;
-    programCount = 0; menu = FolderMenu(directory, 0);
+    programCount = 0; ZeroMemory(programs, sizeof(programs)); menu = FolderMenu(directory, 0);
     if (!documents && env.host.specialPath(CSIDL_COMMON_PROGRAMS, common) && lstrcmpiA(directory, common)) {
         AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
-        AppendMenuA(menu, MF_POPUP, (UINT_PTR)FolderMenu(common, 0), "All Users");
+        if (programCount < 250) {
+            ProgramItem *entry = &programs[programCount++]; HMENU child;
+            lstrcpyA(entry->path, common); lstrcpyA(entry->label, "All Users");
+            entry->folder = TRUE; entry->icon = EnvPathIcon(common);
+            child = FolderMenu(common, 0);
+            AppendMenuA(menu, MF_OWNERDRAW | MF_POPUP, (UINT_PTR)child, (LPCSTR)entry);
+        }
     }
     GetWindowRect(GetDlgItem(env.start, documents ? ID_RECENTDOCS : ID_PROGRAMS), &button);
     popupActive = TRUE;
@@ -182,6 +200,7 @@ static void ProgramsPopup(BOOL documents)
         else EnvironmentLaunch(env.bar, item->path, NULL, NULL);
     }
     DestroyMenu(menu);
+    for (i = 0; i < programCount; ++i) if (programs[i].icon) DestroyIcon(programs[i].icon);
 }
 
 void StartHide(void)
@@ -213,7 +232,7 @@ void StartToggle(void)
     else {
         UpdateRecent(); StartPosition();
         ShowWindow(env.start, SW_SHOW); SetForegroundWindow(env.start);
-        SetFocus(GetDlgItem(env.start, ID_EXPLORER));
+        SetFocus(GetDlgItem(env.start, startPinCount ? ID_PINNED : ID_PROGRAMS));
         SendMessageA(env.startButton, BM_SETSTATE, TRUE, 0);
     }
 }
@@ -227,16 +246,64 @@ static void LayoutStart(HWND window)
     const int right[] = {ID_DOCUMENTS, ID_RECENTDOCS, ID_COMPUTER, ID_NETWORK, ID_CONTROL, ID_PRINTERS, ID_HELP, ID_FIND, ID_RUN};
     GetClientRect(window, &rect); half = rect.right / 2;
     row = (rect.bottom - 138) / 9;
-    MoveWindow(GetDlgItem(window, ID_EXPLORER), 5, 48, half - 10, row + 4, TRUE);
-    MoveWindow(GetDlgItem(window, ID_COMMAND), 5, 52 + row, half - 10, row + 4, TRUE);
-    for (i = 0; i < RECENT_LIMIT; ++i)
-        MoveWindow(GetDlgItem(window, ID_RECENT + i), 5, 64 + row * (i + 2), half - 10, row, TRUE);
+    for (i = 0; i < PIN_LIMIT; ++i) {
+        HWND button = GetDlgItem(window, ID_PINNED + i);
+        ShowWindow(button, i < startPinCount ? SW_SHOW : SW_HIDE);
+        if (i < startPinCount) MoveWindow(button, 5, 48 + i * row, half - 10, row, TRUE);
+    }
+    for (i = 0; i < RECENT_LIMIT; ++i) {
+        HWND button = GetDlgItem(window, ID_RECENT + i);
+        BOOL show = recent[i].path[0] && startPinCount + i < 9;
+        ShowWindow(button, show ? SW_SHOW : SW_HIDE);
+        if (show) MoveWindow(button, 5, 56 + row * (startPinCount + i), half - 10, row, TRUE);
+    }
     MoveWindow(GetDlgItem(window, ID_PROGRAMS), 5, rect.bottom - 70, half - 10, 28, TRUE);
-    for (i = 0; i < 9; ++i)
-        MoveWindow(GetDlgItem(window, right[i]), half + 5, 48 + i * row + (i > 3 ? 8 : 0), half - 10, row, TRUE);
+    { int visible = 0;
+      for (i = 0; i < 9; ++i) {
+        BOOL show = (env.options.startItems & (1U << i)) != 0;
+        ShowWindow(GetDlgItem(window, right[i]), show ? SW_SHOW : SW_HIDE);
+        if (show) MoveWindow(GetDlgItem(window, right[i]), half + 5, 48 + visible++ * row, half - 10, row, TRUE);
+      }
+    }
     MoveWindow(GetDlgItem(window, ID_EXIT), 5, rect.bottom - 34, 62, 28, TRUE);
     MoveWindow(GetDlgItem(window, ID_LOGOFF), half - 4, rect.bottom - 34, 82, 28, TRUE);
     MoveWindow(GetDlgItem(window, ID_SHUTDOWN), half + 82, rect.bottom - 34, half - 88, 28, TRUE);
+    ShowWindow(GetDlgItem(window, ID_EXIT), env.options.startItems & (1U << 9) ? SW_SHOW : SW_HIDE);
+    ShowWindow(GetDlgItem(window, ID_LOGOFF), env.options.startItems & (1U << 10) ? SW_SHOW : SW_HIDE);
+    ShowWindow(GetDlgItem(window, ID_SHUTDOWN), env.options.startItems & (1U << 11) ? SW_SHOW : SW_HIDE);
+}
+
+static HICON DosIcon(void)
+{
+    char directory[MAX_PATH], path[MAX_PATH]; HICON icon = NULL;
+    GetSystemDirectoryA(directory, MAX_PATH);
+    if (EnvJoin(path, directory, "pifmgr.dll")) ExtractIconExA(path, 0, NULL, &icon, 1);
+    return icon ? icon : EnvSystemIcon(3);
+}
+void StartRefresh(void)
+{
+    int i; if (!env.start) return;
+    for (i = 0; i < PIN_LIMIT; ++i) {
+        if (itemIcons[32 + i]) DestroyIcon(itemIcons[32 + i]);
+        itemIcons[32 + i] = NULL;
+        SetWindowTextA(GetDlgItem(env.start, ID_PINNED + i), startPins[i].label);
+        if (i < startPinCount) itemIcons[32 + i] = startPins[i].path[0] == '@' ? (!lstrcmpA(startPins[i].path, "@explorer") ? EnvSystemIcon(5) : DosIcon()) : EnvPathIcon(startPins[i].path);
+    }
+    LayoutStart(env.start); InvalidateRect(env.start, NULL, TRUE);
+}
+static BOOL DrawProgramItem(const DRAWITEMSTRUCT *draw)
+{
+    ProgramItem *entry = (ProgramItem *)draw->itemData; RECT text = draw->rcItem;
+    BOOL selected = (draw->itemState & ODS_SELECTED) != 0;
+    if (!entry) return FALSE;
+    FillRect(draw->hDC, &text, (HBRUSH)(INT_PTR)((selected ? COLOR_HIGHLIGHT : COLOR_MENU) + 1));
+    SelectObject(draw->hDC, env.host.font); SetBkMode(draw->hDC, TRANSPARENT);
+    SetTextColor(draw->hDC, GetSysColor(selected ? COLOR_HIGHLIGHTTEXT : COLOR_MENUTEXT));
+    DrawIconEx(draw->hDC, text.left + 4, text.top + (text.bottom - text.top - 16) / 2,
+        entry->icon ? entry->icon : LoadIconA(NULL, IDI_APPLICATION), 16, 16, 0, NULL, DI_NORMAL);
+    text.left += 26; text.right -= 16;
+    DrawTextA(draw->hDC, entry->label, -1, &text, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+    return TRUE;
 }
 
 static LRESULT CALLBACK StartProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
@@ -245,7 +312,7 @@ static LRESULT CALLBACK StartProc(HWND window, UINT message, WPARAM wp, LPARAM l
     case WM_CREATE: {
         int i; DWORD bytes = sizeof(user);
         if (!GetUserNameA(user, &bytes)) lstrcpyA(user, "Explorer95");
-        Item(window, "Windows Explorer", ID_EXPLORER); Item(window, "MS-DOS Prompt", ID_COMMAND);
+        for (i = 0; i < PIN_LIMIT; ++i) Item(window, "", ID_PINNED + i);
         Item(window, "All Programs   >", ID_PROGRAMS);
         Item(window, "My Documents", ID_DOCUMENTS); Item(window, "Recent Documents   >", ID_RECENTDOCS);
         Item(window, "My Computer", ID_COMPUTER); Item(window, "Network Neighborhood", ID_NETWORK);
@@ -253,9 +320,12 @@ static LRESULT CALLBACK StartProc(HWND window, UINT message, WPARAM wp, LPARAM l
         Item(window, "Help", ID_HELP); Item(window, "Find...", ID_FIND); Item(window, "Run...", ID_RUN);
         Item(window, "Exit", ID_EXIT); Item(window, "Log Off...", ID_LOGOFF); Item(window, "Shut Down...", ID_SHUTDOWN);
         for (i = 0; i < RECENT_LIMIT; ++i) Item(window, "", ID_RECENT + i);
-        itemIcons[0] = SpecialIcon(CSIDL_DRIVES); itemIcons[1] = SpecialIcon(CSIDL_PERSONAL);
+        itemIcons[0] = SpecialIcon(CSIDL_DRIVES); itemIcons[1] = EnvSystemIcon(4);
         itemIcons[2] = SpecialIcon(CSIDL_NETWORK); itemIcons[3] = SpecialIcon(CSIDL_CONTROLS);
         itemIcons[4] = SpecialIcon(CSIDL_PRINTERS); itemIcons[5] = SpecialIcon(CSIDL_RECENT);
+        itemIcons[6] = EnvSystemIcon(37); itemIcons[7] = EnvSystemIcon(24);
+        itemIcons[8] = EnvSystemIcon(23); itemIcons[9] = EnvSystemIcon(25);
+        itemIcons[10] = EnvSystemIcon(28); itemIcons[11] = EnvSystemIcon(45);
         SetTimer(window, 1, 80, NULL); return 0;
     }
     case WM_SIZE: LayoutStart(window); return 0;
@@ -272,11 +342,23 @@ static LRESULT CALLBACK StartProc(HWND window, UINT message, WPARAM wp, LPARAM l
         SetRect(&part, 7, rect.bottom - 74, rect.right / 2 - 7, rect.bottom - 72); DrawEdge(dc, &part, EDGE_ETCHED, BF_TOP);
         EndPaint(window, &paint); return 0;
     }
+    case WM_MEASUREITEM: {
+        MEASUREITEMSTRUCT *item = (MEASUREITEMSTRUCT *)lp;
+        if (item->CtlType == ODT_MENU) {
+            ProgramItem *entry = (ProgramItem *)item->itemData; SIZE size; HDC dc = GetDC(window); HFONT old;
+            old = SelectObject(dc, env.host.font);
+            GetTextExtentPoint32A(dc, entry->label, lstrlenA(entry->label), &size);
+            SelectObject(dc, old); ReleaseDC(window, dc);
+            item->itemWidth = size.cx + 44; item->itemHeight = size.cy > 18 ? size.cy + 4 : 22; return TRUE;
+        }
+        break;
+    }
     case WM_DRAWITEM: {
         DRAWITEMSTRUCT *item = (DRAWITEMSTRUCT *)lp;
+        if (item->CtlType == ODT_MENU) return DrawProgramItem(item);
         RECT text = item->rcItem; char label[MAX_PATH]; HICON icon = NULL;
         BOOL selected = (item->itemState & (ODS_SELECTED | ODS_FOCUS)) || item->hwndItem == hovered;
-        BOOL left = item->CtlID == ID_EXPLORER || item->CtlID == ID_COMMAND || item->CtlID == ID_PROGRAMS ||
+        BOOL left = (item->CtlID >= ID_PINNED && item->CtlID < ID_PINNED + PIN_LIMIT) || item->CtlID == ID_PROGRAMS ||
                     (item->CtlID >= ID_RECENT && item->CtlID < ID_RECENT + RECENT_LIMIT);
         FillRect(item->hDC, &text, (HBRUSH)(INT_PTR)((selected ? COLOR_HIGHLIGHT : left ? COLOR_MENU : COLOR_BTNFACE) + 1));
         SetBkMode(item->hDC, TRANSPARENT); SelectObject(item->hDC, env.host.font);
@@ -288,13 +370,21 @@ static LRESULT CALLBACK StartProc(HWND window, UINT message, WPARAM wp, LPARAM l
         case ID_CONTROL: icon = itemIcons[3]; break;
         case ID_PRINTERS: icon = itemIcons[4]; break;
         case ID_RECENTDOCS: icon = itemIcons[5]; break;
-        default: if (item->CtlID >= ID_RECENT && item->CtlID < ID_RECENT + RECENT_LIMIT) icon = itemIcons[16 + item->CtlID - ID_RECENT]; break;
+        case ID_PROGRAMS: icon = itemIcons[6]; break;
+        case ID_HELP: icon = itemIcons[7]; break;
+        case ID_FIND: icon = itemIcons[8]; break;
+        case ID_RUN: icon = itemIcons[9]; break;
+        case ID_EXIT: case ID_SHUTDOWN: icon = itemIcons[10]; break;
+        case ID_LOGOFF: icon = itemIcons[11]; break;
+        default: if (item->CtlID >= ID_PINNED && item->CtlID < ID_PINNED + PIN_LIMIT) icon = itemIcons[32 + item->CtlID - ID_PINNED];
+            if (item->CtlID >= ID_RECENT && item->CtlID < ID_RECENT + RECENT_LIMIT) icon = itemIcons[16 + item->CtlID - ID_RECENT];
+            break;
         }
-        if (!icon && item->CtlID != ID_EXIT) icon = LoadIconA(NULL, IDI_APPLICATION);
-        if (icon) DrawIconEx(item->hDC, text.left + 5, (text.bottom - text.top - 16) / 2, icon, 16, 16, 0, NULL, DI_NORMAL);
+        if (!icon) icon = LoadIconA(NULL, IDI_APPLICATION);
+        if (icon) DrawIconEx(item->hDC, text.left + 5, text.top + (text.bottom - text.top - 16) / 2, icon, 16, 16, 0, NULL, DI_NORMAL);
         text.left += icon ? 28 : 8;
         GetWindowTextA(item->hwndItem, label, sizeof(label));
-        DrawTextA(item->hDC, label, -1, &text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        DrawTextA(item->hDC, label, -1, &text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
         return TRUE;
     }
     case WM_TIMER: {
@@ -316,6 +406,16 @@ static LRESULT CALLBACK StartProc(HWND window, UINT message, WPARAM wp, LPARAM l
         if (id >= ID_RECENT && id < ID_RECENT + RECENT_LIMIT) {
             RecentProgram *copy = EnvAlloc(sizeof(*copy));
             if (copy) { *copy = recent[id - ID_RECENT]; EnvironmentLaunch(env.bar, copy->path, copy->arguments, NULL); EnvFree(copy); }
+        } else if (id >= ID_PINNED && id < ID_PINNED + startPinCount) {
+            PinnedProgram pin = startPins[id - ID_PINNED];
+            if (!lstrcmpA(pin.path, "@explorer")) EnvCommand(ID_EXPLORER);
+            else if (!lstrcmpA(pin.path, "@command")) EnvCommand(ID_COMMAND);
+            else { char directory[MAX_PATH]; int length;
+                lstrcpyA(directory, pin.path); length = lstrlenA(directory);
+                while (length && directory[length - 1] != '\\') --length;
+                directory[length] = 0;
+                EnvironmentLaunch(env.bar, pin.path, pin.arguments, length ? directory : NULL);
+            }
         } else EnvCommand(id);
         return 0;
     }
@@ -329,7 +429,7 @@ BOOL StartCreate(void)
     if (!EnvRegister("Explorer95.Start", StartProc, (HBRUSH)(COLOR_BTNFACE + 1))) return FALSE;
     env.start = CreateWindowExA(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, "Explorer95.Start", "Start", WS_POPUP | WS_DLGFRAME,
         0, 0, 400, 440, env.bar, NULL, env.host.instance, NULL);
-    LoadRecent(); UpdateRecent(); return env.start != NULL;
+    StartLoadPins(); LoadRecent(); UpdateRecent(); return env.start != NULL;
 }
 BOOL StartTranslate(MSG *message)
 {
@@ -341,5 +441,5 @@ void StartDestroy(void)
 {
     int i;
     if (env.start) DestroyWindow(env.start);
-    for (i = 0; i < 32; ++i) if (itemIcons[i]) { DestroyIcon(itemIcons[i]); itemIcons[i] = NULL; }
+    for (i = 0; i < 64; ++i) if (itemIcons[i]) { DestroyIcon(itemIcons[i]); itemIcons[i] = NULL; }
 }
