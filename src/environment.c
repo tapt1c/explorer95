@@ -255,7 +255,13 @@ static void AddQuickFile(const char *source)
         result = CoCreateInstance(&CLSID_ShellLink, NULL, CLSCTX_INPROC_SERVER, &IID_IShellLinkA, (void **)&link);
         if (SUCCEEDED(result)) {
             result = IShellLinkA_SetPath(link, source);
-            if (SUCCEEDED(result) && SUCCEEDED(IShellLinkA_QueryInterface(link, &IID_IPersistFile, (void **)&persist))) {
+            lstrcpynA(stem, source, MAX_PATH); length = lstrlenA(stem);
+            while (length && stem[length - 1] != '\\') --length;
+            if (length > 3) --length;
+            stem[length] = 0;
+            if (SUCCEEDED(result) && length) result = IShellLinkA_SetWorkingDirectory(link, stem);
+            if (SUCCEEDED(result)) result = IShellLinkA_QueryInterface(link, &IID_IPersistFile, (void **)&persist);
+            if (SUCCEEDED(result)) {
                 if (MultiByteToWideChar(CP_ACP, 0, path, -1, wide, MAX_PATH)) result = IPersistFile_Save(persist, wide, TRUE);
                 else result = E_FAIL;
                 IPersistFile_Release(persist);
