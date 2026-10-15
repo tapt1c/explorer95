@@ -1,0 +1,118 @@
+"""Conservative import/header gate; this is NOT a Windows 95 runtime test.
+
+Only imports reviewed for the Windows 95 baseline are allowed. New imports
+need a compatibility review before being added here (especially shell APIs).
+Uses the PE structures directly so no third-party Python package is needed.
+"""
+
+import struct
+import sys
+from pathlib import Path
+
+
+ALLOWED = {
+    "comctl32.dll": {"InitCommonControls"},
+    "gdi32.dll": {"GetStockObject", "SelectObject", "SetBkMode", "SetTextColor"},
+    "kernel32.dll": set("""
+        ExitProcess ExpandEnvironmentStringsA FindClose FindFirstFileA
+        FindNextFileA FormatMessageA GetFileAttributesA GetFullPathNameA
+        GetLastError GetLocalTime GetLogicalDriveStringsA GetModuleHandleA
+        GetProcessHeap GetWindowsDirectoryA HeapAlloc HeapFree SetErrorMode
+        lstrcatA lstrcmpA lstrcmpiA lstrcpyA lstrcpynA lstrlenA
+    """.split()),
+    "ole32.dll": {"OleInitialize", "OleUninitialize"},
+    "shell32.dll": set("""
+        SHGetFileInfoA SHGetMalloc SHGetPathFromIDListA
+        SHGetSpecialFolderLocation ShellExecuteA
+    """.split()),
+    "user32.dll": set("""
+        AppendMenuA CreateMenu CreatePopupMenu CreateWindowExA DefWindowProcA
+        DestroyMenu DestroyWindow DispatchMessageA DrawEdge DrawFocusRect DrawTextA
+        BeginPaint EndPaint EnumWindows FillRect FindWindowA
+        GetCapture GetClassNameA GetClientRect GetCursorPos GetDlgItem
+        GetDlgItemTextA GetForegroundWindow GetKeyState GetMessageA GetParent
+        GetSysColor GetWindow GetWindowLongA GetWindowRect GetWindowTextA InflateRect InvalidateRect
+        IsDialogMessageA IsIconic IsWindow IsWindowVisible KillTimer
+        LoadCursorA LoadIconA MessageBoxA MoveWindow PostMessageA PostQuitMessage
+        RegisterClassA RegisterWindowMessageA SendDlgItemMessageA SendMessageA
+        SetFocus SetForegroundWindow SetMenu SetRect SetTimer SetWindowLongA SetWindowPos
+        SetWindowTextA ShowWindow SystemParametersInfoA TrackPopupMenu
+        TranslateMessage UpdateWindow WindowFromPoint wsprintfA
+    """.split()),
+}
+
+
+def check(path):
+    data = Path(path).read_bytes()
+
+    def unpack(fmt, offset):
+        return struct.unpack_from("<" + fmt, data, offset)
+
+    def require(condition, message):
+        if not condition:
+            raise ValueError(message)
+
+    require(data[:2] == b"MZ", "missing DOS signature")
+    pe, = unpack("I", 0x3C)
+    require(data[pe:pe + 4] == b"PE\0\0", "missing PE signature")
+    machine, section_count = unpack("HH", pe + 4)
+    require(machine == 0x14C, "target must be 32-bit x86")
+    optional_size, characteristics = unpack("HH", pe + 20)
+    require(characteristics & 2 and not characteristics & 0x2000, "target must be an executable")
+    optional = pe + 24
+    require(unpack("H", optional)[0] == 0x10B, "target must be PE32")
+    os_version = unpack("HH", optional + 40)
+    subsystem_version = unpack("HH", optional + 48)
+    require(os_version <= (4, 0), f"OS version too new: {os_version}")
+    require(subsystem_version <= (4, 0), f"subsystem version too new: {subsystem_version}")
+    subsystem, dll_flags = unpack("HH", optional + 68)
+    require(subsystem == 2, "target must use the Windows GUI subsystem")
+    require(not dll_flags & (0x40 | 0x100 | 0x4000), "unexpected modern loader flags")
+    sections = []
+    for i in range(section_count):
+        base = optional + optional_size + 40 * i
+        virtual_size, rva, raw_size, raw_offset = unpack("IIII", base + 8)
+        sections.append((rva, max(virtual_size, raw_size), raw_offset))
+
+    def offset(rva):
+        for start, size, raw in sections:
+            if start <= rva < start + size:
+                return raw + rva - start
+        raise ValueError(f"RVA outside sections: {rva:#x}")
+
+    def string(rva):
+        start = offset(rva)
+        return data[start:data.index(b"\0", start)].decode("ascii")
+
+    imports_rva, imports_size = unpack("II", optional + 104)
+    require(imports_rva and imports_size, "empty import directory")
+    require(unpack("II", optional + 96 + 9 * 8) == (0, 0), "unexpected TLS directory")
+    descriptor = offset(imports_rva)
+    libraries, functions = 0, 0
+    while True:
+        original, stamp, forward, name_rva, first = unpack("IIIII", descriptor)
+        if not any((original, stamp, forward, name_rva, first)):
+            break
+        name = string(name_rva).lower()
+        require(name in ALLOWED, f"unsupported DLL: {name}")
+        libraries += 1
+        thunk = offset(original or first)
+        while True:
+            symbol, = unpack("I", thunk)
+            if not symbol:
+                break
+            require(not symbol & 0x80000000, "ordinal imports need explicit compatibility review")
+            function = string(symbol + 2)
+            require(function in ALLOWED[name], f"unreviewed import: {name}!{function}")
+            functions += 1
+            thunk += 4
+        descriptor += 20
+    require(libraries and functions, "no imports were checked")
+    print(f"PASS: x86 PE32, GUI/OS 4.0, {functions} reviewed imports in {libraries} system DLLs; no CRT")
+
+
+if __name__ == "__main__":
+    try:
+        check(sys.argv[1])
+    except (IndexError, ValueError, struct.error) as error:
+        sys.exit(f"FAIL: {error}")
