@@ -8,6 +8,7 @@
 #include <stddef.h>
 #include "../src/environment.h"
 #include "../src/start_layout.h"
+#include "../src/paint.h"
 
 static PROCESS_INFORMATION process;
 static HWND child;
@@ -74,26 +75,56 @@ static LRESULT CALLBACK ChildProc(HWND window, UINT message, WPARAM wParam, LPAR
     return DefWindowProcA(window, message, wParam, lParam);
 }
 
+static void PaintTests(void)
+{
+    HDC screen = GetDC(NULL), source = CreateCompatibleDC(screen);
+    HBITMAP logo = (HBITMAP)LoadImageA(GetModuleHandleA(NULL), MAKEINTRESOURCEA(143), IMAGE_BITMAP, 0, 0, 0);
+    HGDIOBJ old = SelectObject(source, logo);
+    PaintBuffer buffer = {0}; RECT rect = {0,0,24,24}; int mode, x, y;
+    COLORREF background = RGB(41,93,157), key = RGB(192,192,192);
+    HBRUSH brush = CreateSolidBrush(background); HDC dc = PaintBufferBegin(&buffer, screen, &rect);
+    for (mode = 0; mode < 2; ++mode) {
+        int transparent = 0, opaque = 0;
+        BOOL okay = logo != NULL && dc != screen;
+        FillRect(dc, &rect, brush);
+        /* GDI permits a bitmap in only one DC at a time. */
+        SelectObject(source, old);
+        okay &= PaintColorKey(dc, 3, 4, logo, key, mode);
+        SelectObject(source, logo);
+        for (y = 0; y < 16; ++y) for (x = 0; x < 16; ++x) {
+            COLORREF pixel = GetPixel(source, x, y);
+            if (pixel == key) ++transparent; else ++opaque;
+            { COLORREF actual = GetPixel(dc, x + 3, y + 4), expected = pixel == key ? background : pixel;
+              if (actual != expected && okay) { char note[128]; wsprintfA(note, "pixel mode%d at%d,%d actual%08lx expected%08lx source%08lx\r\n", mode,x,y,actual,expected,pixel); Log(note); }
+              okay &= actual == expected; }
+        }
+        Check(okay && transparent == 100 && opaque == 156,
+            mode ? "TransparentBlt preserves the supplied flag and keys gray onto a colored background" :
+                   "Win95 GDI fallback preserves every opaque pixel and all 100 transparent pixels");
+    }
+    PaintShutdown(); PaintBufferFree(&buffer); DeleteObject(brush);
+    SelectObject(source, old); DeleteObject(logo); DeleteDC(source); ReleaseDC(NULL, screen);
+}
 static void LayoutTests(void)
 {
     const int sizes[][2] = {{320,240}, {640,480}, {800,600}, {1024,768}, {1280,720}, {1920,1080}};
     const int fonts[] = {14, 24, 70};
-    int size, font, edge, pins, requested; char description[128];
+    int size, font, edge, pins, requested, large; char description[128];
     for (size = 0; size < 6; ++size) for (font = 0; font < 3; ++font) {
         BOOL okay = TRUE;
-        for (edge = 0; edge < 4; ++edge) for (pins = 0; pins <= 6; pins += 2) for (requested = 0; requested <= 30; requested += 5) {
+        for (edge = 0; edge < 4; ++edge) for (pins = 0; pins <= 6; pins += 2) for (requested = 0; requested <= 30; requested += 5) for (large = 0; large < 2; ++large) {
             RECT bounds = {0, 0, sizes[size][0], sizes[size][1]}; StartLayout layout;
             if (edge == 0) bounds.left += 100;
             if (edge == 1) bounds.top += 28;
             if (edge == 2) bounds.right -= 100;
             if (edge == 3) bounds.bottom -= 28;
             CalculateStartLayout(&bounds, edge == 2 ? bounds.right - 400 : bounds.left,
-                edge == 3 ? bounds.bottom : bounds.top, 3, 3, fonts[font], pins, requested, 9, &layout);
+                edge == 3 ? bounds.bottom : bounds.top, 3, 3, fonts[font], pins, requested, 9, large, &layout);
             okay &= layout.window.left >= bounds.left && layout.window.top >= bounds.top &&
                 layout.window.right <= bounds.right && layout.window.bottom <= bounds.bottom &&
                 layout.recentRows <= requested && layout.recentRows >= 0 && layout.pinRows <= pins &&
                 layout.programsY >= layout.recentTop + layout.recentRows * layout.rowHeight &&
-                layout.footerY + 38 <= layout.window.bottom - layout.window.top - 6;
+                layout.rowHeight >= (large ? 40 : 28) && layout.footerY + layout.footerHeight <= layout.window.bottom - layout.window.top - 6;
         }
         wsprintfA(description, "Start fits %dx%d with font height %d, all edges, pin counts and recent limits", sizes[size][0], sizes[size][1], fonts[font]);
         Check(okay, description);
@@ -127,6 +158,12 @@ static void NativeFolderTests(HWND menu)
         Check(samples >= 8, "native icons paint on initial opening without selection or mouse input");
         RedrawWindow(frame, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_NOCHILDREN);
         Check(PaintedSamples(list) >= 8, "repainting only the parent preserves the already painted native icons");
+        { RECT rect; HWND cover;
+          GetWindowRect(list, &rect);
+          cover = CreateWindowExA(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, "STATIC", "", WS_POPUP | WS_VISIBLE,
+              rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top, NULL, NULL, GetModuleHandleA(NULL), NULL);
+          Sleep(150); DestroyWindow(cover); Sleep(200);
+          Check(cover != NULL && PaintedSamples(list) >= 8, "native icons recover after an overlapping window is removed"); }
         MoveWindow(frame, 30, 30, 420, 300, TRUE); Sleep(150);
         Check(PaintedSamples(list) >= 8, "native icons remain painted after resizing");
         SendMessageA(frame, WM_CLOSE, 0, 0);
@@ -361,7 +398,15 @@ static void EnvironmentTests(HWND bar, HWND browser, HWND childWindow, HWND menu
         SetDlgItemInt(customize, 627, 99, FALSE); PostMessageA(customize, WM_COMMAND, IDOK, 0);
         { HWND error = WaitFor("#32770", "Start Menu");
           Check(error != NULL, "recent count beyond the screen limit is rejected"); SendMessageA(error, WM_COMMAND, IDOK, 0); }
+        SendDlgItemMessageA(customize, 639, BM_SETCHECK, BST_CHECKED, 0);
+        SendMessageA(customize, WM_COMMAND, 639, 0);
         SetDlgItemInt(customize, 627, 2, FALSE); SendMessageA(customize, WM_COMMAND, IDOK, 0);
+        Check(GetPrivateProfileIntA("Start", "LargeIcons", -1, settings) == 1, "large Start icons are persisted separately from Quick Launch");
+        SendMessageA(GetDlgItem(bar, 100), BM_CLICK, 0, 0);
+        { RECT row; GetWindowRect(GetDlgItem(menu, 900), &row);
+          Check(row.bottom - row.top >= 40, "large Start icons have rows tall enough for native 32px images"); }
+        SendMessageA(GetDlgItem(bar, 100), BM_CLICK, 0, 0);
+        CheckStartFits(bar, menu);
         Check(GetPrivateProfileIntA("Start", "RecentCount", -1, settings) == 2, "custom recent count is persisted");
     }
     SendMessageA(GetDlgItem(properties, 601), BM_SETCHECK, BST_UNCHECKED, 0);
@@ -474,7 +519,7 @@ void start(void)
     wsprintfA(settingsDir, "%s profile", fixture);
     Check(CreateDirectoryA(settingsDir, NULL), "create isolated settings directory");
     wsprintfA(settings, "%s\\settings.ini", settingsDir);
-    LayoutTests();
+    PaintTests(); LayoutTests();
     ConfigTests(settingsDir);
     wsprintfA(command, "\"%s\" --settings=\"%s\"", executable, settings);
     ZeroMemory(&startup, sizeof(startup)); startup.cb = sizeof(startup);
@@ -577,6 +622,11 @@ void start(void)
     bar = WaitFor("Explorer95.Taskbar", NULL);
     Check(bar != NULL, "shell restarts successfully");
     Check(GetPrivateProfileIntA("Start", "RecentCount", -1, settings) == 2, "recent count survives restart");
+    SendMessageA(bar, WM_COMMAND, 600, 0);
+    { HWND properties = WaitFor("Explorer95.Properties", NULL), customize;
+      SendMessageA(properties, WM_COMMAND, 626, 0); customize = WaitFor("Explorer95.StartSettings", NULL);
+      Check(SendDlgItemMessageA(customize, 639, BM_GETCHECK, 0, 0) == BST_CHECKED, "large icon setting is restored after restart");
+      SendMessageA(customize, WM_COMMAND, IDCANCEL, 0); SendMessageA(properties, WM_COMMAND, IDCANCEL, 0); }
     {
         RECT bounds;
         GetWindowRect(bar, &bounds);

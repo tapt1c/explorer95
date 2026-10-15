@@ -15,13 +15,13 @@ ALLOWED = {
     "comctl32.dll": {"InitCommonControls"},
     "comdlg32.dll": {"GetOpenFileNameA"},
     "gdi32.dll": {"GetStockObject", "SelectObject", "SetBkMode", "SetTextColor", "BitBlt",
-                  "CreateFontIndirectA", "GetTextExtentPoint32A", "GetTextMetricsA", "CreateCompatibleDC", "DeleteDC", "DeleteObject", "GetObjectA"},
+                  "CreateCompatibleBitmap", "CreateBitmap", "SetBkColor", "SetWindowOrgEx", "CreateFontIndirectA", "GetTextExtentPoint32A", "GetTextMetricsA", "CreateCompatibleDC", "DeleteDC", "DeleteObject", "GetObjectA"},
     "kernel32.dll": set("""
         CloseHandle CopyFileA CreateDirectoryA CreateFileA ExitProcess ExpandEnvironmentStringsA FindClose FindFirstFileA
         FindNextFileA FormatMessageA GetFileAttributesA GetFullPathNameA
         DeleteFileA GetSystemDirectoryA SetLastError GetTimeFormatA GetLastError GetLocalTime GetLogicalDriveStringsA GetModuleHandleA
         GetProcessHeap GetWindowsDirectoryA HeapAlloc HeapFree SetErrorMode
-        GetProcAddress GetCommandLineA GetEnvironmentVariableA GetModuleFileNameA GetPrivateProfileIntA
+        LoadLibraryA FreeLibrary GetProcAddress GetCommandLineA GetEnvironmentVariableA GetModuleFileNameA GetPrivateProfileIntA
         GetPrivateProfileStringA GetPrivateProfileSectionA GetTickCount GetVersion MultiByteToWideChar WritePrivateProfileStringA
         lstrcatA lstrcmpA lstrcmpiA lstrcpyA lstrcpynA lstrlenA
     """.split()),

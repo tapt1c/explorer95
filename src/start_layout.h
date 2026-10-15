@@ -6,11 +6,12 @@
  * Bounds already exclude taskbars; no Shell32 or live display needed to test. */
 typedef struct StartLayout {
     RECT window;
+    int programsHeight, footerHeight;
     int rowHeight, pinRows, recentRows, rightRows;
     int bodyTop, separatorY, recentTop, programsY, footerY;
     BOOL morePins, moreRight;
 } StartLayout;
 void CalculateStartLayout(const RECT *bounds, int anchorX, int anchorY,
     int frameX, int frameY, int fontHeight, int pins, int requestedRecent,
-    int rightItems, StartLayout *out);
+    int rightItems, BOOL largeIcons, StartLayout *out);
 #endif

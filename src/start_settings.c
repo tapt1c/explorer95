@@ -78,7 +78,7 @@ BOOL StartRemovePin(int index)
 }
 static void RecentLimitHint(HWND window)
 {
-    int maximum = StartMaximumRecent(draftCount); char text[96]; BOOL valid;
+    int maximum = StartMaximumRecentFor(draftCount, SendDlgItemMessageA(window, ID_STARTLARGE, BM_GETCHECK, 0, 0) == BST_CHECKED); char text[96]; BOOL valid;
     UINT count = GetDlgItemInt(window, ID_RECENTCOUNT, &valid, FALSE);
     wsprintfA(text, "Fits on this screen: 0 - %d", maximum);
     SetDlgItemTextA(window, ID_RECENTLIMIT, text);
@@ -113,6 +113,9 @@ static LRESULT CALLBACK CustomizeProc(HWND window, UINT message, WPARAM wp, LPAR
         MoveWindow(EnvControl(window, "STATIC", "Start button text:", 0, 1), 12, 12, 112, 22, TRUE);
         control = EnvControl(window, "EDIT", env.options.startLabel, WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL, ID_STARTLABEL);
         MoveWindow(control, 132, 10, 240, 23, TRUE); SendMessageA(control, EM_LIMITTEXT, 31, 0);
+        control = EnvControl(window, "BUTTON", "Large icons", WS_TABSTOP | BS_AUTOCHECKBOX, ID_STARTLARGE);
+        MoveWindow(control, 382, 10, 108, 23, TRUE);
+        SendMessageA(control, BM_SETCHECK, env.options.largeStartIcons ? BST_CHECKED : BST_UNCHECKED, 0);
         MoveWindow(EnvControl(window, "STATIC", "Recent programs:", 0, 7), 12, 42, 112, 20, TRUE);
         control = EnvControl(window, "EDIT", "", WS_BORDER | WS_TABSTOP | ES_NUMBER, ID_RECENTCOUNT);
         MoveWindow(control, 132, 38, 50, 23, TRUE); SendMessageA(control, EM_LIMITTEXT, 2, 0);
@@ -147,6 +150,7 @@ static LRESULT CALLBACK CustomizeProc(HWND window, UINT message, WPARAM wp, LPAR
     }
     case WM_COMMAND: {
         int id = LOWORD(wp), selected = (int)SendDlgItemMessageA(window, ID_PINLIST, LB_GETCURSEL, 0, 0), i;
+        if (id == ID_STARTLARGE) { RecentLimitHint(window); return 0; }
         if (id == IDCANCEL) { DestroyWindow(window); return 0; }
         if (id == 638) { Browse(window); return 0; }
         if (id == ID_PINADD) {
@@ -171,7 +175,7 @@ static LRESULT CALLBACK CustomizeProc(HWND window, UINT message, WPARAM wp, LPAR
         }
         if (id == IDOK) {
             char label[32]; UINT mask = 0, recentCount; BOOL valid;
-            int maximum = StartMaximumRecent(draftCount);
+            int maximum = StartMaximumRecentFor(draftCount, SendDlgItemMessageA(window, ID_STARTLARGE, BM_GETCHECK, 0, 0) == BST_CHECKED);
             if (draftVersion != pinsVersion) {
                 MessageBoxA(window, "Pinned programs changed from the Start menu.\r\nClose and reopen these settings before saving.", "Start Menu", MB_OK | MB_ICONINFORMATION); return 0;
             }
@@ -185,6 +189,7 @@ static LRESULT CALLBACK CustomizeProc(HWND window, UINT message, WPARAM wp, LPAR
             if (!SavePins(draft, draftCount)) { EnvError(window, "Cannot save pinned programs.", ERROR_WRITE_FAULT); return 0; }
             for (i = 0; i < START_OPTION_COUNT; ++i)
                 if (SendDlgItemMessageA(window, ID_VISIBLE + i, BM_GETCHECK, 0, 0) == BST_CHECKED) mask |= 1U << i;
+            env.options.largeStartIcons = SendDlgItemMessageA(window, ID_STARTLARGE, BM_GETCHECK, 0, 0) == BST_CHECKED;
             env.options.recentCount = recentCount; env.options.startItems = mask; lstrcpyA(env.options.startLabel, label);
             startPinCount = draftCount; CopyMemory(startPins, draft, sizeof(startPins)); ++pinsVersion;
             EnvSaveOptions(); EnvApplyOptions(); DestroyWindow(window); return 0;
@@ -200,7 +205,7 @@ void StartSettingsOpen(void)
 {
     if (!env.startSettings) {
         /* Registration may already exist after closing and reopening. */
-        EnvRegister("Explorer95.StartSettings", CustomizeProc, (HBRUSH)(COLOR_BTNFACE + 1));
+        EnvRegister("Explorer95.StartSettings", CustomizeProc, (HBRUSH)(COLOR_BTNFACE + 1), 0);
         env.startSettings = CreateWindowExA(WS_EX_DLGMODALFRAME, "Explorer95.StartSettings", "Customize Start Menu",
             WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, (GetSystemMetrics(SM_CXSCREEN) - 510) / 2, 0, 510, 462, env.bar, NULL, env.host.instance, NULL);
     }

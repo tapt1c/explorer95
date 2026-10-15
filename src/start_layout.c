@@ -4,11 +4,12 @@ static int Minimum(int a, int b) { return a < b ? a : b; }
 static int Maximum(int a, int b) { return a > b ? a : b; }
 void CalculateStartLayout(const RECT *bounds, int anchorX, int anchorY,
     int frameX, int frameY, int fontHeight, int pins, int requestedRecent,
-    int rightItems, StartLayout *out)
+    int rightItems, BOOL largeIcons, StartLayout *out)
 {
     int width = bounds->right - bounds->left, height = bounds->bottom - bounds->top;
-    int row = Maximum(28, fontHeight + 10), budget, gap, left, right, clientHeight;
-    int header = 44, programs = 32, footer = 38;
+    int row = Maximum(largeIcons ? 40 : 28, fontHeight + 10), budget, gap, left, right, clientHeight;
+    int header = 44, programs = largeIcons ? 44 : 32, footer = largeIcons ? 50 : 38;
+    out->programsHeight = programs; out->footerHeight = footer;
     if (width < 1) width = 1;
     if (height < 1) height = 1;
     if (pins < 0) pins = 0;
@@ -30,7 +31,7 @@ void CalculateStartLayout(const RECT *bounds, int anchorX, int anchorY,
     out->recentTop = header + out->pinRows * row + gap;
     out->programsY = clientHeight - footer - programs;
     out->footerY = clientHeight - footer;
-    out->window.right = Minimum(width, 400);
+    out->window.right = Minimum(width, largeIcons ? 480 : 400);
     out->window.bottom = Minimum(height, clientHeight + 2 * frameY);
     (void)frameX; /* Width includes the native dialog frame. */
     out->window.left = Maximum(bounds->left, Minimum(anchorX, bounds->right - out->window.right));

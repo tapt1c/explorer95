@@ -2,7 +2,7 @@
 #include "shell_internal.h"
 
 ShellState env;
-typedef struct TaskGroup { HWND windows[TASK_LIMIT], button; int count; DWORD process; BOOL active; } TaskGroup;
+typedef struct TaskGroup { HWND windows[TASK_LIMIT], button; int count; DWORD process; BOOL active; HICON icon; } TaskGroup;
 typedef struct QuickItem { char path[MAX_PATH]; HICON icon; HWND button; } QuickItem;
 static TaskGroup tasks[TASK_LIMIT];
 static HWND taskWindows[TASK_LIMIT], savedWindows[TASK_LIMIT], lastActive, bridge, quickTip, desktopButton;
@@ -38,10 +38,10 @@ void EnvError(HWND owner, const char *message, DWORD error)
         wsprintfA(detail, "Error %lu", error);
     wsprintfA(text, "%s\r\n\r\n%s", message, detail); MessageBoxA(owner, text, "Explorer95", MB_OK | MB_ICONEXCLAMATION);
 }
-BOOL EnvRegister(const char *name, WNDPROC proc, HBRUSH brush)
+BOOL EnvRegister(const char *name, WNDPROC proc, HBRUSH brush, UINT style)
 {
     WNDCLASSA cls; ZeroMemory(&cls, sizeof(cls));
-    cls.style = CS_DBLCLKS; cls.hInstance = env.host.instance; cls.lpfnWndProc = proc;
+    cls.style = CS_DBLCLKS | style; cls.hInstance = env.host.instance; cls.lpfnWndProc = proc;
     cls.hCursor = LoadCursorA(NULL, IDC_ARROW); cls.hbrBackground = brush; cls.lpszClassName = name;
     return RegisterClassA(&cls) != 0;
 }
@@ -85,6 +85,7 @@ static void SettingsPath(void)
     env.options.topmost = !!Option("AlwaysOnTop", TRUE); env.options.clock = !!Option("Clock", TRUE);
     env.options.quick = !!Option("QuickLaunch", TRUE); env.options.largeIcons = !!Option("LargeIcons", FALSE);
     env.options.group = !!Option("GroupTasks", FALSE); env.options.hideInactive = !!Option("HideInactive", FALSE);
+    env.options.largeStartIcons = !!GetPrivateProfileIntA("Start", "LargeIcons", FALSE, env.ini);
     env.options.recentCount = Clamp((int)GetPrivateProfileIntA("Start", "RecentCount", 7, env.ini), 0, RECENT_LIMIT);
     env.options.startItems = GetPrivateProfileIntA("Start", "VisibleItems", (1U << START_OPTION_COUNT) - 1, env.ini);
     GetPrivateProfileStringA("Start", "ButtonLabel", "Start", env.options.startLabel, sizeof(env.options.startLabel), env.ini);
@@ -143,6 +144,15 @@ static void TaskAction(int index)
     } else if (task->windows[0] == lastActive && !IsIconic(task->windows[0])) ShowWindowAsync(task->windows[0], SW_MINIMIZE);
     else Activate(task->windows[0]);
 }
+static HICON WindowIcon(HWND target)
+{
+    DWORD_PTR result = 0; HICON icon;
+    SendMessageTimeoutA(target, WM_GETICON, ICON_SMALL, 0, SMTO_ABORTIFHUNG, 80, &result);
+    icon = (HICON)result;
+    if (!icon) icon = (HICON)GetClassLongPtrA(target, GCLP_HICONSM);
+    if (!icon) icon = (HICON)GetClassLongPtrA(target, GCLP_HICON);
+    return icon;
+}
 static void UpdateTasks(void)
 {
     HWND windows[TASK_LIMIT], active = GetForegroundWindow();
@@ -173,12 +183,16 @@ static void UpdateTasks(void)
         EnvLayoutBar();
     }
     for (i = 0; i < taskCount; ++i) {
-        BOOL selected = FALSE;
+        BOOL selected = FALSE; HICON icon = WindowIcon(tasks[i].windows[0]);
+        if (icon != tasks[i].icon) { tasks[i].icon = icon; InvalidateRect(tasks[i].button, NULL, FALSE); }
         GetWindowTextA(tasks[i].windows[0], text, sizeof(text));
         if (tasks[i].count > 1) wsprintfA(label, "%s (%d)", text, tasks[i].count); else lstrcpyA(label, text);
-        SetWindowTextA(tasks[i].button, label);
+        { char previous[160]; GetWindowTextA(tasks[i].button, previous, sizeof(previous));
+          if (lstrcmpA(previous, label)) SetWindowTextA(tasks[i].button, label); }
         for (j = 0; j < tasks[i].count; ++j) if (tasks[i].windows[j] == active) selected = TRUE;
-        tasks[i].active = selected; InvalidateRect(tasks[i].button, NULL, TRUE);
+        if (tasks[i].active != selected) {
+            tasks[i].active = selected; InvalidateRect(tasks[i].button, NULL, FALSE);
+        }
         if (selected) lastActive = active;
     }
 }
@@ -529,13 +543,17 @@ static void AutoHideTick(void)
     }
 }
 
+static PaintBuffer barBuffer, barButtonBuffer;
+
 static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
 {
     switch (message) {
     case WM_SIZE: EnvLayoutBar(); return 0;
+    case WM_ERASEBKGND: return TRUE;
     case WM_PAINT: {
-        PAINTSTRUCT paint; RECT rect; HDC dc = BeginPaint(window, &paint);
-        GetClientRect(window, &rect); FillRect(dc, &rect, (HBRUSH)(COLOR_BTNFACE + 1));
+        PAINTSTRUCT paint; RECT rect; HDC target = BeginPaint(window, &paint), dc;
+        GetClientRect(window, &rect); dc = PaintBufferBegin(&barBuffer, target, &rect);
+        FillRect(dc, &rect, (HBRUSH)(COLOR_BTNFACE + 1));
         DrawEdge(dc, &rect, EDGE_RAISED, env.options.edge == ABE_BOTTOM ? BF_TOP : env.options.edge == ABE_TOP ? BF_BOTTOM : env.options.edge == ABE_LEFT ? BF_RIGHT : BF_LEFT);
         if (env.options.quick && (env.options.edge == ABE_BOTTOM || env.options.edge == ABE_TOP)) {
             RECT separator;
@@ -544,9 +562,13 @@ static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
             SetRect(&separator, quickEnd, 4, quickEnd + 2, rect.bottom - 3);
             DrawEdge(dc, &separator, EDGE_ETCHED, BF_LEFT);
         }
-        EndPaint(window, &paint); return 0;
+        PaintBufferEnd(&barBuffer, target, &rect); EndPaint(window, &paint); return 0;
     }
-    case WM_DRAWITEM: return EnvDrawBarButton((DRAWITEMSTRUCT *)lp);
+    case WM_DRAWITEM: {
+        DRAWITEMSTRUCT item = *(DRAWITEMSTRUCT *)lp; HDC target = item.hDC; BOOL result;
+        item.hDC = PaintBufferBegin(&barButtonBuffer, target, &item.rcItem);
+        result = EnvDrawBarButton(&item); PaintBufferEnd(&barButtonBuffer, target, &item.rcItem); return result;
+    }
     case WM_COPYDATA: return TrayCopyData((const COPYDATASTRUCT *)lp);
     case WM_SETTINGCHANGE: case WM_DISPLAYCHANGE:
         StartRefresh();
@@ -561,7 +583,8 @@ static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
         GetLocalTime(&now);
         if (!GetTimeFormatA(LOCALE_USER_DEFAULT, TIME_NOSECONDS, &now, NULL, text, sizeof(text)))
             wsprintfA(text, "%02u:%02u", now.wHour, now.wMinute);
-        SetWindowTextA(env.clock, text);
+        { char previous[32]; GetWindowTextA(env.clock, previous, sizeof(previous));
+          if (lstrcmpA(previous, text)) SetWindowTextA(env.clock, text); }
         if (GetTickCount() - quickChecked > 10000) { RefreshQuick(); quickChecked = GetTickCount(); }
         return 0;
     }
@@ -616,7 +639,7 @@ static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
         DragFinish(drop); RefreshQuick(); return 0;
     }
     case WM_DESTROY:
-        EnvironmentShutdown(); PostQuitMessage(0); return 0;
+        EnvironmentShutdown(); PaintBufferFree(&barBuffer); PaintBufferFree(&barButtonBuffer); PaintShutdown(); PostQuitMessage(0); return 0;
     }
     return DefWindowProcA(window, message, wp, lp);
 }
@@ -627,8 +650,8 @@ HWND EnvironmentCreate(const EnvironmentHost *callbacks)
     env.host = *callbacks; SettingsPath(); NativeViewSetHost(callbacks);
     SystemParametersInfoA(SPI_GETWORKAREA, 0, &env.originalArea, 0);
     env.primary = FindWindowA("Shell_TrayWnd", NULL) == NULL;
-    if (!EnvRegister("Explorer95.Desktop", DesktopProc, (HBRUSH)(COLOR_BACKGROUND + 1)) ||
-        !EnvRegister("Explorer95.Taskbar", BarProc, (HBRUSH)(COLOR_BTNFACE + 1)) || !PropertiesRegister()) return NULL;
+    if (!EnvRegister("Explorer95.Desktop", DesktopProc, (HBRUSH)(COLOR_BACKGROUND + 1), 0) ||
+        !EnvRegister("Explorer95.Taskbar", BarProc, (HBRUSH)(COLOR_BTNFACE + 1), 0) || !PropertiesRegister()) return NULL;
     env.desktop = CreateWindowExA(WS_EX_TOOLWINDOW, "Explorer95.Desktop", "Explorer95 Desktop", WS_POPUP | WS_CLIPCHILDREN,
         0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN), NULL, NULL, env.host.instance, NULL);
     env.bar = CreateWindowExA(WS_EX_TOOLWINDOW, "Explorer95.Taskbar", "Explorer95", WS_POPUP | WS_CLIPCHILDREN,
@@ -648,7 +671,7 @@ HWND EnvironmentCreate(const EnvironmentHost *callbacks)
             "Explorer95", MB_OK | MB_ICONERROR); EnvironmentShutdown(); return NULL;
     }
     if (env.primary) {
-        if (EnvRegister("Shell_TrayWnd", BridgeProc, NULL))
+        if (EnvRegister("Shell_TrayWnd", BridgeProc, NULL, 0))
             bridge = CreateWindowExA(WS_EX_TOOLWINDOW, "Shell_TrayWnd", "Explorer95 Tray", WS_POPUP,
                 0, 0, 640, 30, NULL, NULL, env.host.instance, NULL);
     } else {
@@ -720,14 +743,9 @@ static BOOL DrawStartButton(const DRAWITEMSTRUCT *item)
     BOOL down = (item->itemState & ODS_SELECTED) != 0 || IsWindowVisible(env.start);
     int offset = down ? 1 : 0;
     HFONT font = CreateStartFont(), old;
-    /* Select the real small icon resource instead of shrinking the 32px logo.
-     * LR_SHARED keeps the system-owned icon alive without per-paint copies. */
-    HICON icon = (HICON)LoadImageA(NULL, IDI_WINLOGO, IMAGE_ICON, 16, 16, LR_SHARED);
-    if (!icon) icon = LoadIconA(NULL, IDI_WINLOGO);
     FillRect(item->hDC, &frame, (HBRUSH)(COLOR_BTNFACE + 1));
     DrawFrameControl(item->hDC, &frame, DFC_BUTTON, DFCS_BUTTONPUSH | (down ? DFCS_PUSHED : 0));
-    DrawIconEx(item->hDC, frame.left + 3 + offset, frame.top + (frame.bottom - frame.top - 16) / 2 + offset,
-        icon, 16, 16, 0, NULL, DI_NORMAL);
+    PaintStartLogo(item->hDC, frame.left + 3 + offset, frame.top + (frame.bottom - frame.top - 16) / 2 + offset);
     old = SelectObject(item->hDC, font ? font : env.host.font);
     SetBkMode(item->hDC, TRANSPARENT); SetTextColor(item->hDC, GetSysColor(COLOR_BTNTEXT));
     GetWindowTextA(item->hwndItem, label, sizeof(label));
@@ -745,12 +763,8 @@ BOOL EnvDrawBarButton(const DRAWITEMSTRUCT *item)
     int index = (int)item->CtlID - ID_TASK;
     if (item->CtlID == ID_START) return DrawStartButton(item);
     if (index >= 0 && index < taskCount) {
-        DWORD_PTR result = 0; HWND target = tasks[index].windows[0];
         down = down || tasks[index].active;
-        SendMessageTimeoutA(target, WM_GETICON, ICON_SMALL, 0, SMTO_ABORTIFHUNG, 80, &result);
-        icon = (HICON)result;
-        if (!icon) icon = (HICON)GetClassLongPtrA(target, GCLP_HICONSM);
-        if (!icon) icon = (HICON)GetClassLongPtrA(target, GCLP_HICON);
+        icon = tasks[index].icon;
     } else return FALSE;
     FillRect(item->hDC, &rect, (HBRUSH)(INT_PTR)((down ? COLOR_3DLIGHT : COLOR_BTNFACE) + 1));
     DrawEdge(item->hDC, &rect, down ? EDGE_SUNKEN : EDGE_RAISED, BF_RECT);

@@ -440,7 +440,7 @@ static LRESULT CALLBACK BrowserProc(HWND window, UINT message, WPARAM wParam, LP
 
 static HWND OpenBrowser(const char *path)
 {
-    HWND window = CreateWindowExA(0, FILE_CLASS, APP, WS_OVERLAPPEDWINDOW,
+    HWND window = CreateWindowExA(0, FILE_CLASS, APP, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
                                   CW_USEDEFAULT, CW_USEDEFAULT, 760, 500,
                                   NULL, NULL, instance, NULL);
     if (window) {

@@ -191,8 +191,8 @@ static LRESULT CALLBACK TrayProc(HWND window, UINT message, WPARAM wp, LPARAM lp
 
 BOOL TrayCreate(void)
 {
-    if (!EnvRegister("Explorer95.TrayIcon", IconProc, (HBRUSH)(COLOR_BTNFACE + 1)) ||
-        !EnvRegister("TrayNotifyWnd", TrayProc, (HBRUSH)(COLOR_BTNFACE + 1))) return FALSE;
+    if (!EnvRegister("Explorer95.TrayIcon", IconProc, (HBRUSH)(COLOR_BTNFACE + 1), 0) ||
+        !EnvRegister("TrayNotifyWnd", TrayProc, (HBRUSH)(COLOR_BTNFACE + 1), 0)) return FALSE;
     env.tray = CreateWindowExA(WS_EX_STATICEDGE, "TrayNotifyWnd", "Notification area", WS_CHILD | WS_VISIBLE,
         0, 0, 100, 24, env.bar, NULL, env.host.instance, NULL);
     tooltip = CreateWindowExA(WS_EX_TOPMOST, TOOLTIPS_CLASSA, NULL, WS_POPUP | TTS_ALWAYSTIP,

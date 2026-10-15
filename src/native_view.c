@@ -7,6 +7,7 @@
 #include <shellapi.h>
 #include <shlobj.h>
 #include "native_view.h"
+#include "paint.h"
 
 struct NativeView {
     IShellBrowser browser;
@@ -19,7 +20,8 @@ struct NativeView {
     LPITEMIDLIST absolute;
     BOOL desktop;
     HBITMAP wallpaper;
-    BOOL tiled;
+    BOOL tiled, backgroundDirty;
+    PaintBuffer background;
 };
 
 static EnvironmentHost host;
@@ -151,7 +153,7 @@ static void ReadWallpaper(NativeView *view)
     char path[MAX_PATH], tile[8];
     DWORD bytes = sizeof(path), type;
     if (view->wallpaper) DeleteObject(view->wallpaper);
-    view->wallpaper = NULL; view->tiled = FALSE;
+    view->wallpaper = NULL; view->tiled = FALSE; view->backgroundDirty = TRUE;
     if (RegOpenKeyExA(HKEY_CURRENT_USER, "Control Panel\\Desktop", 0, KEY_READ, &key) != ERROR_SUCCESS) return;
     path[0] = 0; tile[0] = 0;
     if (RegQueryValueExA(key, "Wallpaper", NULL, &type, (BYTE *)path, &bytes) == ERROR_SUCCESS && type == REG_SZ) {
@@ -164,7 +166,7 @@ static void ReadWallpaper(NativeView *view)
     RegCloseKey(key);
 }
 
-static void PaintBackground(NativeView *view, HDC dc, HWND window)
+static void PaintBackgroundDirect(NativeView *view, HDC dc, HWND window)
 {
     RECT rect;
     GetClientRect(window, &rect);
@@ -185,6 +187,20 @@ static void PaintBackground(NativeView *view, HDC dc, HWND window)
         }
         SelectObject(memory, old); DeleteDC(memory);
     }
+}
+
+/* Retain the wallpaper while other windows cover the desktop. Rebuild only
+ * after a settings/size change, then restore exposed pixels in one GDI copy. */
+static void PaintBackground(NativeView *view, HDC target, HWND window)
+{
+    RECT rect; HDC dc; BOOL resize;
+    GetClientRect(window, &rect);
+    resize = view->background.width != rect.right || view->background.height != rect.bottom;
+    dc = PaintBufferBegin(&view->background, target, &rect);
+    if (dc == target || resize || view->backgroundDirty) {
+        PaintBackgroundDirect(view, dc, window); view->backgroundDirty = FALSE;
+    }
+    PaintBufferEnd(&view->background, target, &rect);
 }
 
 /* Route filesystem default actions through us so desktop launches also enter
@@ -387,6 +403,7 @@ void NativeViewDestroy(NativeView *view)
     }
     if (view->folder) IShellFolder_Release(view->folder);
     if (view->wallpaper) DeleteObject(view->wallpaper);
+    PaintBufferFree(&view->background);
     Release(&view->browser);
 }
 

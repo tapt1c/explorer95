@@ -8,6 +8,7 @@
 #include "environment.h"
 #include "native_view.h"
 #include "start_layout.h"
+#include "paint.h"
 
 #define ID_START 100
 #define ID_TASK 200
@@ -57,6 +58,7 @@
 #define ID_PINDOWN 635
 #define ID_PINLABEL 636
 #define ID_PINARGS 637
+#define ID_STARTLARGE 639
 #define ID_VISIBLE 650
 #define ID_PINNED 900
 #define ID_MOREPINS 906
@@ -76,7 +78,7 @@
 
 typedef struct ShellOptions {
     int edge, rows, taskWidth, recentCount;
-    BOOL locked, autoHide, topmost, clock, quick, largeIcons, group, hideInactive;
+    BOOL locked, autoHide, topmost, clock, quick, largeIcons, largeStartIcons, group, hideInactive;
     UINT startItems;
     char startLabel[32];
 } ShellOptions;
@@ -110,7 +112,7 @@ void EnvPositionBar(void);
 void EnvLayoutBar(void);
 void EnvShowDesktop(void);
 void EnvCommand(int id);
-BOOL EnvRegister(const char *name, WNDPROC proc, HBRUSH brush);
+BOOL EnvRegister(const char *name, WNDPROC proc, HBRUSH brush, UINT style);
 
 BOOL StartCreate(void);
 void StartToggle(void);
@@ -118,6 +120,7 @@ void StartHide(void);
 void StartPosition(void);
 void StartMeasure(int pins, int requestedRecent, StartLayout *layout);
 int StartMaximumRecent(int pins);
+int StartMaximumRecentFor(int pins, BOOL largeIcons);
 BOOL StartTranslate(MSG *message);
 void StartRecord(const char *path, const char *arguments);
 void StartClearRecent(void);
