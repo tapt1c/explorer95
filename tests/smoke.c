@@ -483,10 +483,13 @@ static void NativeFolderTests(HWND menu)
         do { Sleep(50); samples = PaintedSamples(list); }
         while ((SendMessageA(list, LVM_GETITEMCOUNT, 0, 0) == 0 || samples < 8) && GetTickCount() - started < 10000);
         Check(samples >= 8, "native icons paint on initial opening without selection or mouse input");
-        { HDC dc = GetDC(list); RECT patch = {4,4,10,10}, client; HBRUSH marker = CreateSolidBrush(RGB(251,3,239)); COLORREF pixel;
-          FillRect(dc, &patch, marker); GetPixel(dc, 5, 5); ReleaseDC(list, dc); GetClientRect(frame, &client);
+        { HDC dc = GetDC(list); RECT patch, client; HBRUSH marker = CreateSolidBrush(RGB(251,3,239)); COLORREF pixel;
+          /* In Details mode the top of a list belongs to its header child.
+           * Sample the list body, independent of the saved view preference. */
+          GetClientRect(list, &client); SetRect(&patch, 4, client.bottom - 12, 10, client.bottom - 6);
+          FillRect(dc, &patch, marker); GetPixel(dc, 5, patch.top + 1); ReleaseDC(list, dc); GetClientRect(frame, &client);
           SendMessageA(frame, WM_SIZE, SIZE_RESTORED, MAKELPARAM(client.right, client.bottom)); Sleep(80);
-          dc = GetDC(list); pixel = GetPixel(dc, 5, 5); ReleaseDC(list, dc); DeleteObject(marker);
+          dc = GetDC(list); pixel = GetPixel(dc, 5, patch.top + 1); ReleaseDC(list, dc); DeleteObject(marker);
           Check(pixel == RGB(251,3,239), "unchanged folder layout preserves native view pixels instead of erasing all icons");
           RedrawWindow(list, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW); }
 
