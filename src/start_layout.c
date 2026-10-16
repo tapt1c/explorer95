@@ -2,14 +2,14 @@
 
 static int Minimum(int a, int b) { return a < b ? a : b; }
 static int Maximum(int a, int b) { return a > b ? a : b; }
-int StartMenuWidth(BOOL largeIcons) { return largeIcons ? 440 : 400; }
+int StartMenuWidth(BOOL largeIcons) { return largeIcons ? 410 : 370; }
 void CalculateStartLayout(const RECT *bounds, int anchorX, int anchorY,
     int frameX, int frameY, int fontHeight, int pins, int requestedRecent,
     int rightItems, BOOL largeIcons, StartLayout *out)
 {
     int width = bounds->right - bounds->left, height = bounds->bottom - bounds->top;
     int row = Maximum(largeIcons ? 40 : 28, fontHeight + 10), budget, gap, left, right, clientHeight;
-    int header = 44, programs = largeIcons ? 44 : 32, footer = largeIcons ? 50 : 38;
+    int header = 44, programs = largeIcons ? 44 : 32, footer = 38;
     out->programsHeight = programs; out->footerHeight = footer;
     if (width < 1) width = 1;
     if (height < 1) height = 1;

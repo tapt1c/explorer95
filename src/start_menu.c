@@ -333,15 +333,11 @@ static void LayoutStart(HWND window)
     }
     ShowWindow(GetDlgItem(window, ID_MORECOMMANDS), geometry.moreRight && geometry.rightRows ? SW_SHOW : SW_HIDE);
     MoveWindow(GetDlgItem(window, ID_MORECOMMANDS), half + 5, geometry.bodyTop + visible * row, half - 10, row, TRUE);
-    if (env.options.largeStartIcons) {
+    {
         int third = (rect.right - 10) / 3, height = geometry.footerHeight - 10;
         MoveWindow(GetDlgItem(window, ID_EXIT), 5, geometry.footerY + 4, third, height, TRUE);
         MoveWindow(GetDlgItem(window, ID_LOGOFF), 5 + third, geometry.footerY + 4, third, height, TRUE);
         MoveWindow(GetDlgItem(window, ID_SHUTDOWN), 5 + 2 * third, geometry.footerY + 4, third, height, TRUE);
-    } else {
-        MoveWindow(GetDlgItem(window, ID_EXIT), 5, geometry.footerY + 4, 62, 28, TRUE);
-        MoveWindow(GetDlgItem(window, ID_LOGOFF), half - 4, geometry.footerY + 4, 82, 28, TRUE);
-        MoveWindow(GetDlgItem(window, ID_SHUTDOWN), half + 82, geometry.footerY + 4, half - 88, 28, TRUE);
     }
     ShowWindow(GetDlgItem(window, ID_EXIT), env.options.startItems & (1U << 9) ? SW_SHOW : SW_HIDE);
     ShowWindow(GetDlgItem(window, ID_LOGOFF), env.options.startItems & (1U << 10) ? SW_SHOW : SW_HIDE);
@@ -477,7 +473,7 @@ static void LoadItemIcons(void)
     itemIcons[4] = SpecialIcon(CSIDL_PRINTERS, env.options.largeStartIcons); itemIcons[5] = SpecialIcon(CSIDL_RECENT, env.options.largeStartIcons);
     itemIcons[6] = MenuSystemIcon(37); itemIcons[7] = MenuSystemIcon(24);
     itemIcons[8] = MenuSystemIcon(23); itemIcons[9] = MenuSystemIcon(25);
-    itemIcons[10] = MenuSystemIcon(28); itemIcons[11] = MenuSystemIcon(45);
+    itemIcons[10] = SystemIcon(28, FALSE); itemIcons[11] = SystemIcon(45, FALSE);
 }
 
 static LRESULT CALLBACK StartProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
@@ -537,7 +533,8 @@ static LRESULT CALLBACK StartProc(HWND window, UINT message, WPARAM wp, LPARAM l
     case WM_DRAWITEM: {
         DRAWITEMSTRUCT *item = (DRAWITEMSTRUCT *)lp;
         if (item->CtlType == ODT_MENU) return DrawProgramItem(item);
-        DRAWITEMSTRUCT buffered = *item; HDC target = item->hDC; int iconSize = IconSize();
+        DRAWITEMSTRUCT buffered = *item; HDC target = item->hDC;
+        int iconSize = (item->CtlID == ID_EXIT || item->CtlID == ID_LOGOFF || item->CtlID == ID_SHUTDOWN) ? 16 : IconSize();
         RECT text = item->rcItem; char label[MAX_PATH]; HICON icon = NULL;
         buffered.hDC = PaintBufferBegin(&itemBuffer, target, &item->rcItem); item = &buffered;
         BOOL selected = (item->itemState & (ODS_SELECTED | ODS_FOCUS)) || item->hwndItem == hovered;
