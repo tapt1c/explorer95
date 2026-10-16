@@ -14,6 +14,7 @@ typedef struct TrayIcon {
     HICON image;
     DWORD changed;
     int policy;
+    BOOL eligible;
     char tip[64];
 } TrayIcon;
 
@@ -147,16 +148,17 @@ void TrayLayout(int width, int height)
 {
     int i, x = 4, y = (height - 20) / 2, shown = 0;
     int clockWidth = env.options.clock ? 58 : 0;
-    BOOL overflow = HasHidden();
+    BOOL changed = FALSE, overflow = HasHidden();
     for (i = 0; i < ICON_LIMIT; ++i) {
         BOOL show = Visible(&icons[i]);
+        icons[i].eligible = show;
         if (shown >= 7 || x + 20 + clockWidth + (overflow ? 20 : 0) + 4 > width) { if (show) overflow = TRUE; show = FALSE; }
-        if (icons[i].button) ShowWindow(icons[i].button, show ? SW_SHOWNA : SW_HIDE);
-        if (show) { MoveWindow(icons[i].button, x, y, 20, 20, TRUE); x += 20; ++shown; }
+        if (icons[i].button) changed |= EnvShowControl(icons[i].button, show);
+        if (show) { changed |= EnvMoveControl(icons[i].button, x, y, 20, 20); x += 20; ++shown; }
     }
-    ShowWindow(moreButton, overflow ? SW_SHOWNA : SW_HIDE); SetWindowTextA(moreButton, ">"); MoveWindow(moreButton, x, y, 18, 20, TRUE);
-    ShowWindow(env.clock, env.options.clock ? SW_SHOWNA : SW_HIDE); MoveWindow(env.clock, width - clockWidth - 2, y, clockWidth, 20, TRUE);
-    InvalidateRect(env.tray, NULL, TRUE);
+    changed |= EnvShowControl(moreButton, overflow); changed |= EnvMoveControl(moreButton, x, y, 18, 20);
+    changed |= EnvShowControl(env.clock, env.options.clock); changed |= EnvMoveControl(env.clock, width - clockWidth - 2, y, clockWidth, 20);
+    if (changed) InvalidateRect(env.tray, NULL, TRUE);
 }
 
 static void DeleteIcon(TrayIcon *icon)
@@ -226,7 +228,8 @@ void TrayPrune(void)
     for (i = 0; i < ICON_LIMIT; ++i) if (icons[i].owner && !IsWindow(icons[i].owner)) {
         DeleteIcon(&icons[i]); changed = TRUE;
     }
-    if (changed || env.options.hideInactive) EnvLayoutBar();
+    for (i = 0; i < ICON_LIMIT; ++i) if (icons[i].owner && icons[i].eligible != Visible(&icons[i])) changed = TRUE;
+    if (changed) EnvLayoutBar();
 }
 
 static LRESULT CALLBACK TrayProc(HWND window, UINT message, WPARAM wp, LPARAM lp)

@@ -40,6 +40,25 @@ void PaintBufferEnd(PaintBuffer *buffer, HDC target, const RECT *rect)
     if (buffer->dc) BitBlt(target, rect->left, rect->top, rect->right - rect->left,
         rect->bottom - rect->top, buffer->dc, rect->left, rect->top, SRCCOPY);
 }
+/* Dialogs cannot use WS_CLIPCHILDREN: Win95 tabs/groupboxes have transparent
+ * interiors. Clip only opaque controls while erasing, preserving their pixels
+ * when the dialog is exposed or dragged; keep the transparent interiors filled. */
+void PaintDialogBackground(HWND window, HDC dc)
+{
+    HWND child; RECT rect; int saved = SaveDC(dc);
+    if (saved) for (child = GetWindow(window, GW_CHILD); child; child = GetWindow(child, GW_HWNDNEXT)) {
+        char kind[32]; POINT origin;
+        if (!(GetWindowLongA(child, GWL_STYLE) & WS_VISIBLE)) continue;
+        GetClassNameA(child, kind, sizeof(kind));
+        if (!lstrcmpiA(kind, "SysTabControl32") ||
+            (!lstrcmpiA(kind, "BUTTON") && (GetWindowLongA(child, GWL_STYLE) & BS_TYPEMASK) == BS_GROUPBOX) ||
+            (GetWindowLongA(child, GWL_EXSTYLE) & WS_EX_TRANSPARENT)) continue;
+        GetWindowRect(child, &rect); origin.x = rect.left; origin.y = rect.top; ScreenToClient(window, &origin);
+        ExcludeClipRect(dc, origin.x, origin.y, origin.x + rect.right - rect.left, origin.y + rect.bottom - rect.top);
+    }
+    GetClientRect(window, &rect); FillRect(dc, &rect, (HBRUSH)(COLOR_BTNFACE + 1));
+    if (saved) RestoreDC(dc, saved);
+}
 static void FindExtension(void)
 {
     char path[MAX_PATH]; UINT length;

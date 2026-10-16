@@ -114,6 +114,8 @@ void EnvApplyOptions(void);
 void EnvPositionBar(void);
 int EnvBarThickness(const ShellOptions *options);
 void EnvLayoutBar(void);
+BOOL EnvMoveControl(HWND window, int x, int y, int width, int height);
+BOOL EnvShowControl(HWND window, BOOL visible);
 void EnvShowDesktop(void);
 void EnvCommand(int id);
 BOOL EnvRegister(const char *name, WNDPROC proc, HBRUSH brush, UINT style);

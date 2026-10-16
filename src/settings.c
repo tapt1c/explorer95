@@ -90,12 +90,15 @@ void SettingsPreviewChanged(HWND window)
 }
 static void ShowPage(HWND window)
 {
-    int i;
+    int i; BOOL visible = IsWindowVisible(window);
+    if (visible) SendMessageA(window, WM_SETREDRAW, FALSE, 0);
     for (i = 0; i < controlCount; ++i) {
         BOOL show = controls[i].page == page && (controls[i].subpage < 0 || controls[i].subpage == subpage);
-        ShowWindow(controls[i].window, show ? SW_SHOWNA : SW_HIDE);
+        if (!!(GetWindowLongA(controls[i].window, GWL_STYLE) & WS_VISIBLE) != show)
+            ShowWindow(controls[i].window, show ? SW_SHOWNA : SW_HIDE);
     }
     if (page == SETTINGS_START) StartSettingsScreenChanged(window);
+    if (visible) SendMessageA(window, WM_SETREDRAW, TRUE, 0);
     /* Win95 tab/group controls leave their interior transparent. Erase the
      * dialog first, including the previous page, then redraw its children. */
     RedrawWindow(window, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
@@ -243,6 +246,7 @@ static BOOL Apply(HWND window)
 static LRESULT CALLBACK PropertiesProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
 {
     switch (message) {
+    case WM_ERASEBKGND: PaintDialogBackground(window, (HDC)wp); return TRUE;
     case WM_CREATE: {
         static const char *tabs[] = {"Taskbar", "Start Menu", "Desktop", "Notifications", "System Shell"};
         static const char *edges[] = {"Left", "Top", "Right", "Bottom"};

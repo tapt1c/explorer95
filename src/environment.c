@@ -31,6 +31,22 @@ HWND EnvControl(HWND parent, const char *kind, const char *text, DWORD style, in
         parent, (HMENU)(INT_PTR)id, env.host.instance, NULL);
     SendMessageA(child, WM_SETFONT, (WPARAM)env.host.font, TRUE); return child;
 }
+/* MoveWindow(TRUE) repaints synchronously even for identical rectangles on
+ * old USER implementations. Avoid touching controls whose layout is unchanged. */
+BOOL EnvMoveControl(HWND window, int x, int y, int width, int height)
+{
+    RECT old; POINT origin;
+    if (!window) return FALSE;
+    GetWindowRect(window, &old); origin.x = old.left; origin.y = old.top;
+    ScreenToClient(GetParent(window), &origin);
+    if (origin.x == x && origin.y == y && old.right - old.left == width && old.bottom - old.top == height) return FALSE;
+    return MoveWindow(window, x, y, width, height, TRUE);
+}
+BOOL EnvShowControl(HWND window, BOOL visible)
+{
+    if (!window || !!(GetWindowLongA(window, GWL_STYLE) & WS_VISIBLE) == !!visible) return FALSE;
+    ShowWindow(window, visible ? SW_SHOWNA : SW_HIDE); return TRUE;
+}
 void EnvError(HWND owner, const char *message, DWORD error)
 {
     char detail[384], text[896];
@@ -329,48 +345,49 @@ void EnvLayoutBar(void)
 {
     RECT rect; int width, height, iconSize = env.options.largeIcons ? 36 : 22;
     int i, begin, end, trayWidth, quickVisible, rows, columns, taskWidth, taskHeight;
+    BOOL changed = FALSE;
     BOOL vertical = env.options.edge == ABE_LEFT || env.options.edge == ABE_RIGHT;
     if (!env.bar || !env.tray) return;
     GetClientRect(env.bar, &rect); width = rect.right; height = rect.bottom;
     if (width < 10 || height < 10) return;
     trayWidth = TrayWidth();
     if (vertical) {
-        MoveWindow(env.startButton, 3, 3, width - 6, 26, TRUE);
+        changed |= EnvMoveControl(env.startButton, 3, 3, width - 6, 26);
         begin = 34; quickVisible = env.options.quick ? quickCount : 0;
-        ShowWindow(desktopButton, env.options.quick ? SW_SHOW : SW_HIDE);
+        changed |= EnvShowControl(desktopButton, env.options.quick);
         if (env.options.quick) {
-            MoveWindow(desktopButton, 4, begin, iconSize, iconSize, TRUE);
+            changed |= EnvMoveControl(desktopButton, 4, begin, iconSize, iconSize);
             columns = (width - 8) / iconSize; if (columns < 1) columns = 1;
             for (i = 0; i < quickCount; ++i) {
-                ShowWindow(quick[i].button, SW_SHOW);
-                MoveWindow(quick[i].button, 4 + ((i + 1) % columns) * iconSize, begin + ((i + 1) / columns) * iconSize, iconSize, iconSize, TRUE);
+                changed |= EnvShowControl(quick[i].button, TRUE);
+                changed |= EnvMoveControl(quick[i].button, 4 + ((i + 1) % columns) * iconSize, begin + ((i + 1) / columns) * iconSize, iconSize, iconSize);
             }
             begin += ((quickVisible + 1 + columns - 1) / columns) * iconSize + 5;
-        } else for (i = 0; i < quickCount; ++i) ShowWindow(quick[i].button, SW_HIDE);
-        MoveWindow(env.tray, 2, height - 30, width - 4, 28, TRUE); TrayLayout(width - 6, 26);
+        } else for (i = 0; i < quickCount; ++i) changed |= EnvShowControl(quick[i].button, FALSE);
+        changed |= EnvMoveControl(env.tray, 2, height - 30, width - 4, 28); TrayLayout(width - 6, 26);
         end = height - 36;
         taskHeight = taskCount ? (end - begin) / taskCount : 26; taskHeight = Clamp(taskHeight, 8, 26);
-        for (i = 0; i < taskCount; ++i) MoveWindow(tasks[i].button, 3, begin + i * taskHeight, width - 6, taskHeight - 2, TRUE);
+        for (i = 0; i < taskCount; ++i) changed |= EnvMoveControl(tasks[i].button, 3, begin + i * taskHeight, width - 6, taskHeight - 2);
     } else {
-        MoveWindow(env.startButton, 2, 3, EnvStartButtonWidth(), 22, TRUE); begin = EnvStartButtonWidth() + 10;
+        changed |= EnvMoveControl(env.startButton, 2, 3, EnvStartButtonWidth(), 22); begin = EnvStartButtonWidth() + 10;
         if (trayWidth > width / 2) trayWidth = width / 2;
         end = width - trayWidth - 8;
-        ShowWindow(desktopButton, env.options.quick ? SW_SHOW : SW_HIDE);
-        if (env.options.quick) { MoveWindow(desktopButton, begin, (height - iconSize) / 2, iconSize, iconSize, TRUE); begin += iconSize + 3; }
+        changed |= EnvShowControl(desktopButton, env.options.quick);
+        if (env.options.quick) { changed |= EnvMoveControl(desktopButton, begin, (height - iconSize) / 2, iconSize, iconSize); begin += iconSize + 3; }
         quickVisible = env.options.quick ? Clamp((end - begin - 90) / iconSize, 0, quickCount) : 0;
         for (i = 0; i < quickCount; ++i) {
-            ShowWindow(quick[i].button, i < quickVisible ? SW_SHOW : SW_HIDE);
-            if (i < quickVisible) MoveWindow(quick[i].button, begin + i * iconSize, (height - iconSize) / 2, iconSize, iconSize, TRUE);
+            changed |= EnvShowControl(quick[i].button, i < quickVisible);
+            if (i < quickVisible) changed |= EnvMoveControl(quick[i].button, begin + i * iconSize, (height - iconSize) / 2, iconSize, iconSize);
         }
         begin += quickVisible * iconSize + (env.options.quick ? 7 : 0); quickEnd = begin - 4;
-        MoveWindow(env.tray, width - trayWidth - 3, 3, trayWidth, height - 6, TRUE); TrayLayout(trayWidth - 2, height - 8);
+        changed |= EnvMoveControl(env.tray, width - trayWidth - 3, 3, trayWidth, height - 6); TrayLayout(trayWidth - 2, height - 8);
         rows = env.options.rows; columns = taskCount ? (taskCount + rows - 1) / rows : 1;
         taskWidth = (end - begin) / columns; taskWidth = Clamp(taskWidth, 4, env.options.taskWidth);
         taskHeight = (height - 4) / rows;
         for (i = 0; i < taskCount; ++i)
-            MoveWindow(tasks[i].button, begin + (i / rows) * taskWidth, 3 + (i % rows) * taskHeight, taskWidth - 2, taskHeight - 2, TRUE);
+            changed |= EnvMoveControl(tasks[i].button, begin + (i / rows) * taskWidth, 3 + (i % rows) * taskHeight, taskWidth - 2, taskHeight - 2);
     }
-    InvalidateRect(env.bar, NULL, TRUE);
+    if (changed) InvalidateRect(env.bar, NULL, FALSE);
 }
 
 int EnvBarThickness(const ShellOptions *options)
@@ -387,7 +404,7 @@ static void ResizeDesktop(void)
 }
 void EnvPositionBar(void)
 {
-    APPBARDATA data; RECT rect, work; int full = EnvBarThickness(&env.options), reserve = env.options.autoHide ? 2 : full;
+    APPBARDATA data; RECT rect, work, current; int full = EnvBarThickness(&env.options), reserve = env.options.autoHide ? 2 : full;
     BOOL vertical = env.options.edge == ABE_LEFT || env.options.edge == ABE_RIGHT;
     if (!env.bar || env.positioning || env.closing) return;
     env.positioning = TRUE;
@@ -401,7 +418,8 @@ void EnvPositionBar(void)
     case ABE_TOP: data.rc.bottom = data.rc.top + reserve; break;
     default: data.rc.top = data.rc.bottom - reserve; break;
     }
-    if (env.appbar) SHAppBarMessage(ABM_SETPOS, &data);
+    if (env.appbar && (env.anchor.left != data.rc.left || env.anchor.top != data.rc.top ||
+        env.anchor.right != data.rc.right || env.anchor.bottom != data.rc.bottom)) SHAppBarMessage(ABM_SETPOS, &data);
     if (env.primary) {
         work = env.originalArea;
         switch (env.options.edge) {
@@ -410,7 +428,11 @@ void EnvPositionBar(void)
         case ABE_TOP: work.top += reserve; break;
         default: work.bottom -= reserve; break;
         }
-        SystemParametersInfoA(SPI_SETWORKAREA, 0, &work, SPIF_SENDCHANGE);
+        /* Unchanged work-area broadcasts make Win95 Shell32 rebuild even
+         * unrelated open folders. Applying desktop/Start options is not a resize. */
+        if (!SystemParametersInfoA(SPI_GETWORKAREA, 0, &current, 0) ||
+            current.left != work.left || current.top != work.top || current.right != work.right || current.bottom != work.bottom)
+            SystemParametersInfoA(SPI_SETWORKAREA, 0, &work, SPIF_SENDCHANGE);
     }
     env.anchor = data.rc; rect = data.rc;
     full = env.hidden && env.options.autoHide ? 2 : full;
@@ -420,7 +442,7 @@ void EnvPositionBar(void)
         if (env.options.edge == ABE_TOP) rect.bottom = rect.top + full; else rect.top = rect.bottom - full;
     }
     SetWindowPos(env.bar, env.options.topmost ? HWND_TOPMOST : HWND_NOTOPMOST,
-        rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top, SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top, SWP_NOACTIVATE);
     if (bridge) SetWindowPos(bridge, NULL, rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top, SWP_NOACTIVATE | SWP_NOZORDER);
     ResizeDesktop(); if (IsWindowVisible(env.start)) StartPosition();
     env.positioning = FALSE;
@@ -446,7 +468,13 @@ void EnvironmentArrangeDesktop(BOOL automatic)
 { env.options.autoArrange = automatic; NativeViewArrange(env.desktopView, automatic); EnvSaveOptions(); }
 BOOL EnvironmentDesktopIconsVisible(void) { return env.options.desktopIcons; }
 void EnvironmentToggleDesktopIcons(void)
-{ env.options.desktopIcons = !env.options.desktopIcons; EnvSaveOptions(); EnvApplyOptions(); }
+{
+    env.options.desktopIcons = !env.options.desktopIcons; EnvSaveOptions();
+    /* This context-menu command only changes the desktop, not the taskbar,
+     * Start icons, appbar registration or any other open Shell32 view. */
+    EnvShowControl(NativeViewWindow(env.desktopView), env.options.desktopIcons);
+    InvalidateRect(env.desktop, NULL, FALSE);
+}
 
 static void BarMenu(HWND source)
 {
@@ -568,7 +596,12 @@ static LRESULT CALLBACK DesktopProc(HWND window, UINT message, WPARAM wp, LPARAM
     }
     if (message == WM_COMMAND) { EnvCommand(LOWORD(wp)); return 0; }
     if (message == WM_SETTINGCHANGE || message == WM_SYSCOLORCHANGE) {
-        NativeViewRefresh(env.desktopView); InvalidateRect(window, NULL, TRUE); return 0;
+        if (message == WM_SETTINGCHANGE && wp == SPI_SETWORKAREA) ResizeDesktop();
+        else {
+            NativeViewDesktopSettingsChanged(env.desktopView);
+            InvalidateRect(window, NULL, FALSE);
+        }
+        return 0;
     }
     if (message == WM_ACTIVATE && LOWORD(wp) != WA_INACTIVE) {
         SetWindowPos(window, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE); return 0;
@@ -625,7 +658,7 @@ static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
     }
     case WM_COPYDATA: return TrayCopyData((const COPYDATASTRUCT *)lp);
     case WM_SETTINGCHANGE: case WM_DISPLAYCHANGE:
-        StartRefresh();
+        if (message == WM_DISPLAYCHANGE || wp != SPI_SETWORKAREA) StartRefresh();
         if (message == WM_DISPLAYCHANGE && env.primary) SetRect(&env.originalArea, 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
         EnvPositionBar(); return 0;
     case WM_APPBAR:

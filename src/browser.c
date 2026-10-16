@@ -596,6 +596,7 @@ static LRESULT CALLBACK OptionsProc(HWND window, UINT message, WPARAM wp, LPARAM
 {
     Browser *browser = (Browser *)GetWindowLongPtrA(window, GWLP_USERDATA);
     switch (message) {
+    case WM_ERASEBKGND: PaintDialogBackground(window, (HDC)wp); return TRUE;
     case WM_CREATE: {
         int i; HWND control; browser = (Browser *)((CREATESTRUCTA *)lp)->lpCreateParams; SetWindowLongPtrA(window, GWLP_USERDATA, (LONG_PTR)browser);
         MoveWindow(BrowserControl(window, "BUTTON", "Appearance", BS_GROUPBOX | WS_CLIPSIBLINGS, 7000), 10, 8, 490, 194, TRUE);

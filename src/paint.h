@@ -14,5 +14,6 @@ void PaintBufferEnd(PaintBuffer *buffer, HDC target, const RECT *rect);
 void PaintBufferFree(PaintBuffer *buffer);
 BOOL PaintColorKey(HDC target, int x, int y, HBITMAP bitmap, COLORREF key, BOOL allowExtension);
 void PaintStartLogo(HDC target, int x, int y);
+void PaintDialogBackground(HWND window, HDC dc);
 void PaintShutdown(void);
 #endif

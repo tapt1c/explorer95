@@ -150,6 +150,23 @@ static void PaintTests(void)
             mode ? "TransparentBlt preserves the supplied flag and keys gray onto a colored background" :
                    "Win95 GDI fallback preserves every opaque pixel and all 100 transparent pixels");
     }
+    {
+        HWND dialog = CreateWindowA("STATIC", "", WS_POPUP, 10, 10, 220, 140, NULL, NULL, GetModuleHandleA(NULL), NULL);
+        RECT area = {0,0,220,140}; HDC memory; HWND button;
+        CreateWindowA("BUTTON", "Group", WS_CHILD | WS_VISIBLE | BS_GROUPBOX, 10, 10, 200, 110, dialog, NULL, GetModuleHandleA(NULL), NULL);
+        button = CreateWindowA("BUTTON", "Keep pixels", WS_CHILD | WS_VISIBLE, 20, 30, 80, 24, dialog, NULL, GetModuleHandleA(NULL), NULL);
+        CreateWindowA("STATIC", "", WS_CHILD | WS_VISIBLE | SS_OWNERDRAW, 120, 30, 60, 40, dialog, NULL, GetModuleHandleA(NULL), NULL);
+        CreateWindowA("BUTTON", "Hidden", WS_CHILD, 20, 80, 80, 20, dialog, NULL, GetModuleHandleA(NULL), NULL);
+        memory = PaintBufferBegin(&buffer, screen, &area); FillRect(memory, &area, brush);
+        PaintDialogBackground(dialog, memory);
+        Check(dialog && button && GetPixel(memory, 30, 40) == background && GetPixel(memory, 140, 45) == background,
+              "dialog erasing preserves pixels beneath opaque buttons and owner-drawn previews");
+        Check(GetPixel(memory, 15, 85) == GetSysColor(COLOR_BTNFACE) && GetPixel(memory, 30, 90) == GetSysColor(COLOR_BTNFACE),
+              "transparent group interiors and hidden controls receive a fresh dialog background");
+        FillRect(memory, &area, GetStockObject(BLACK_BRUSH));
+        Check(GetPixel(memory, 30, 40) == RGB(0,0,0), "dialog background painting restores the caller's clipping region");
+        DestroyWindow(dialog);
+    }
     PaintShutdown(); PaintBufferFree(&buffer); DeleteObject(brush);
     SelectObject(source, old); DeleteObject(logo); DeleteDC(source); ReleaseDC(NULL, screen);
 }
@@ -466,6 +483,13 @@ static void NativeFolderTests(HWND menu)
         do { Sleep(50); samples = PaintedSamples(list); }
         while ((SendMessageA(list, LVM_GETITEMCOUNT, 0, 0) == 0 || samples < 8) && GetTickCount() - started < 10000);
         Check(samples >= 8, "native icons paint on initial opening without selection or mouse input");
+        { HDC dc = GetDC(list); RECT patch = {4,4,10,10}, client; HBRUSH marker = CreateSolidBrush(RGB(251,3,239)); COLORREF pixel;
+          FillRect(dc, &patch, marker); GetPixel(dc, 5, 5); ReleaseDC(list, dc); GetClientRect(frame, &client);
+          SendMessageA(frame, WM_SIZE, SIZE_RESTORED, MAKELPARAM(client.right, client.bottom)); Sleep(80);
+          dc = GetDC(list); pixel = GetPixel(dc, 5, 5); ReleaseDC(list, dc); DeleteObject(marker);
+          Check(pixel == RGB(251,3,239), "unchanged folder layout preserves native view pixels instead of erasing all icons");
+          RedrawWindow(list, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW); }
+
         RedrawWindow(frame, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_NOCHILDREN);
         Check(PaintedSamples(list) >= 8, "repainting only the parent preserves the already painted native icons");
         { RECT rect; HWND cover;
@@ -622,6 +646,38 @@ static void PumpFor(DWORD duration)
         Sleep(10);
     } while (GetTickCount() - started < duration);
 }
+static int workAreaNotices;
+static LRESULT CALLBACK RepaintObserver(HWND window, UINT message, WPARAM wp, LPARAM lp)
+{
+    if (message == WM_SETTINGCHANGE && wp == SPI_SETWORKAREA) ++workAreaNotices;
+    return DefWindowProcA(window, message, wp, lp);
+}
+static void RepaintTests(HWND bar)
+{
+    WNDCLASSA cls; HWND observer, properties, start = GetDlgItem(bar, 100); RECT before, after, patch = {4,4,10,10};
+    HDC dc; HBRUSH marker = CreateSolidBrush(RGB(251,3,239)); BOOL icons, inactive; COLORREF actual;
+    ZeroMemory(&cls, sizeof(cls)); cls.lpfnWndProc = RepaintObserver; cls.hInstance = GetModuleHandleA(NULL); cls.lpszClassName = "Explorer95.RepaintObserver";
+    RegisterClassA(&cls); observer = CreateWindowA(cls.lpszClassName, "", WS_POPUP, 0,0,1,1,NULL,NULL,cls.hInstance,NULL);
+    properties = OpenSettings(bar); SettingsPage(properties, 2, -1);
+    icons = SendDlgItemMessageA(properties, 1010, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    SystemParametersInfoA(SPI_GETWORKAREA, 0, &before, 0); workAreaNotices = 0;
+    SendDlgItemMessageA(properties, 1010, BM_SETCHECK, !icons, 0); SendMessageA(properties, WM_COMMAND, 0x3021, 0); PumpFor(100);
+    SystemParametersInfoA(SPI_GETWORKAREA, 0, &after, 0);
+    Check(observer && !workAreaNotices && EqualRect(&before, &after),
+          "toggling desktop icons preserves work area without broadcasting a redundant shell refresh");
+    SendDlgItemMessageA(properties, 1010, BM_SETCHECK, icons, 0); SendMessageA(properties, WM_COMMAND, 0x3021, 0);
+    SettingsPage(properties, 3, -1); inactive = SendDlgItemMessageA(properties, 608, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    SendDlgItemMessageA(properties, 608, BM_SETCHECK, BST_CHECKED, 0); SendMessageA(properties, WM_COMMAND, 0x3021, 0);
+    SendMessageA(properties, WM_COMMAND, IDCANCEL, 0); PumpFor(150);
+    dc = GetDC(start); FillRect(dc, &patch, marker); GetPixel(dc, 5, 5); ReleaseDC(start, dc);
+    SendMessageA(bar, WM_TIMER, 1, 0); PumpFor(650);
+    dc = GetDC(start); actual = GetPixel(dc, 5, 5); ReleaseDC(start, dc);
+    Check(actual == RGB(251,3,239), "idle tray timers leave an unchanged Start button unpainted even with inactive icons hidden");
+    RedrawWindow(start, NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW);
+    properties = OpenSettings(bar); SettingsPage(properties, 3, -1);
+    SendDlgItemMessageA(properties, 608, BM_SETCHECK, inactive, 0); SendMessageA(properties, WM_COMMAND, IDOK, 0);
+    DeleteObject(marker); DestroyWindow(observer); UnregisterClassA(cls.lpszClassName, cls.hInstance);
+}
 static void ShutdownStyleTests(HWND bar, const char *settings)
 {
     HWND properties = OpenSettings(bar), dialog; RECT rect, client, button; HDC dc; int style, id;
@@ -726,6 +782,16 @@ static void SettingsPaintingTests(HWND window, HWND bar)
     preview = GetDlgItem(window, 1018); GetClientRect(preview, &rect);
     Check(PreviewStartMatches(preview, GetDlgItem(bar, 100), 4, (rect.bottom - barHeight) / 2 + 3),
         "Taskbar preview Start matches every pixel of the real Start button at native size");
+    PumpFor(100);
+    { HDC dc = GetDC(preview), parent; RECT patch = {4,4,10,10}; HBRUSH marker = CreateSolidBrush(RGB(251,3,239)); COLORREF pixel;
+      FillRect(dc, &patch, marker); GetPixel(dc, 5, 5); ReleaseDC(preview, dc);
+      /* Exercise erasing alone: a later complete preview repaint is valid,
+       * but the parent must never replace its pixels with an empty face. */
+      parent = GetDC(window); SendMessageA(window, WM_ERASEBKGND, (WPARAM)parent, 0); ReleaseDC(window, parent);
+      dc = GetDC(preview); pixel = GetPixel(dc, 5, 5); ReleaseDC(preview, dc); DeleteObject(marker);
+      Check(pixel == RGB(251,3,239), "settings parent erasing keeps the finished preview visible without a blank intermediate frame");
+      RedrawWindow(preview, NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW); }
+
     for (i = 1; i < 5; ++i) SettingsPage(window, i, 0);
     for (i = 0; i < 3; ++i) SettingsPage(window, 1, i);
     SettingsPage(window, 2, -1);
@@ -1198,6 +1264,7 @@ void start(void)
     SendMessageA(task, BM_CLICK, 0, 0);
     started = GetTickCount(); while (IsIconic(child) && GetTickCount() - started < 3000) Sleep(50);
     Check(!IsIconic(child), "task button restores minimized window");
+    RepaintTests(bar);
     ShutdownStyleTests(bar, settings);
     ShutdownTests(bar, menu);
     EnvironmentTests(bar, browser, child, menu, settings);

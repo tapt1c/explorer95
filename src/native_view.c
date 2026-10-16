@@ -22,7 +22,7 @@ struct NativeView {
     BOOL desktop;
     BOOL (*navigate)(HWND, LPCITEMIDLIST);
     HBITMAP wallpaper;
-    BOOL tiled, backgroundDirty;
+    BOOL tiled, backgroundDirty, sized;
     PaintBuffer background;
 };
 
@@ -429,10 +429,24 @@ void NativeViewDestroy(NativeView *view)
 
 void NativeViewResize(NativeView *view, const RECT *rect)
 {
+    RECT previous; POINT origin;
     if (!view) return;
+    GetWindowRect(view->window, &previous); origin.x = previous.left; origin.y = previous.top;
+    ScreenToClient(view->parent, &origin);
+    if (view->sized && origin.x == rect->left && origin.y == rect->top && previous.right - previous.left == rect->right - rect->left &&
+        previous.bottom - previous.top == rect->bottom - rect->top) return;
+    view->sized = TRUE;
     MoveWindow(view->window, rect->left, rect->top, rect->right - rect->left, rect->bottom - rect->top, TRUE);
     /* A parent erase must not leave the Win95 view waiting for selection to
      * invalidate its icons. Paint the whole view hierarchy after sizing. */
+    RedrawWindow(view->window, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+}
+void NativeViewDesktopSettingsChanged(NativeView *view)
+{
+    if (!view || !view->desktop) return;
+    /* Wallpaper/color changes need fresh pixels, not a Shell32 re-enumeration. */
+    ReadWallpaper(view);
+    if (view->list) ListView_SetTextColor(view->list, GetSysColor(COLOR_WINDOW));
     RedrawWindow(view->window, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
 }
 void NativeViewRefresh(NativeView *view)
