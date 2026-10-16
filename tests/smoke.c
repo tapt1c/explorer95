@@ -88,6 +88,8 @@ static void Check(BOOL okay, const char *description)
     }
 }
 
+#include "desktop_icons_cases.h"
+
 static HWND WaitFor(const char *kind, const char *title)
 {
     DWORD started = GetTickCount();
@@ -1004,6 +1006,21 @@ static HWND StartSettingsTests(HWND bar, HWND menu, const char *settings)
     Check(visible && !IsWindowVisible(desktopView) && GetPrivateProfileIntA("Desktop", "ShowIcons", -1, settings) == 0, "desktop icon visibility applies and persists without closing the shell view");
     SendDlgItemMessageA(properties, 1010, BM_SETCHECK, BST_CHECKED, 0); SendMessageA(properties, WM_COMMAND, 0x3021, 0);
     Check(IsWindowVisible(desktopView), "desktop icons can be restored from the same window");
+    SetDlgItemInt(properties,1032,96,FALSE); SetDlgItemInt(properties,1033,112,FALSE);
+    SendDlgItemMessageA(properties,1030,BM_SETCHECK,BST_CHECKED,0); SendDlgItemMessageA(properties,1031,BM_SETCHECK,BST_CHECKED,0);
+    SendMessageA(properties,WM_COMMAND,0x3021,0);
+    Check(GetPrivateProfileIntA("Desktop","GridWidth",0,settings)==96 && GetPrivateProfileIntA("Desktop","GridHeight",0,settings)==112 &&
+          GetPrivateProfileIntA("Desktop","LockIcons",0,settings)==1 && GetPrivateProfileIntA("Desktop","SnapToGrid",0,settings)==1,
+          "Desktop Apply persists custom grid, snapping and icon-position locking");
+    SendMessageA(desktop,WM_COMMAND,0x8044,0); /* Icon Layout / Horizontal / 128 */
+    Check(GetPrivateProfileIntA("Desktop","GridWidth",0,settings)==128 && GetDlgItemInt(properties,1032,NULL,FALSE)==128,
+          "desktop context commands synchronize an already-open settings window");
+    SendMessageA(desktop,WM_COMMAND,0x8011,0); SendMessageA(desktop,WM_COMMAND,0x8010,0);
+    Check(SendDlgItemMessageA(properties,1030,BM_GETCHECK,0,0)==BST_UNCHECKED && SendDlgItemMessageA(properties,1031,BM_GETCHECK,0,0)==BST_UNCHECKED,
+          "context menu toggles update the same lock and snapping settings");
+    SetDlgItemInt(properties,1032,199,FALSE); SendMessageA(properties,WM_COMMAND,IDCANCEL,0); properties = OpenSettings(bar);
+    Check(GetDlgItemInt(properties,1032,NULL,FALSE)==128 && GetPrivateProfileIntA("Desktop","GridWidth",0,settings)==128,
+          "Cancel discards unapplied desktop grid edits while preserving context-menu changes");
     StartBehaviorTests(properties, bar, menu, settings);
     SetDlgItemTextA(properties, 625, "Must not save"); Check(SetFileAttributesA(settings, FILE_ATTRIBUTE_READONLY), "make isolated settings read-only");
     PostMessageA(properties, WM_COMMAND, 0x3021, 0);
@@ -1228,7 +1245,7 @@ void start(void)
     Check(CreateDirectoryA(settingsDir, NULL), "create isolated settings directory");
     wsprintfA(settings, "%s\\settings.ini", settingsDir);
     if (group != GROUP_BROWSER) { LayoutTests(); HistoryTests(settingsDir, module, settings); }
-    if (group == GROUP_FULL || group == GROUP_CORE) { PaintTests(); ConfigTests(settingsDir); }
+    if (group == GROUP_FULL || group == GROUP_CORE) { PaintTests(); ConfigTests(settingsDir); DesktopIconTests(settingsDir); }
     if (group == GROUP_CORE) goto cleanup;
     wsprintfA(command, "\"%s\" --settings=\"%s\"", executable, settings);
     ZeroMemory(&startup, sizeof(startup)); startup.cb = sizeof(startup);
@@ -1406,6 +1423,7 @@ shutdown:
         Check(DeleteFileA(path), "diagnostic trace fixture removed after the file handle closes");
     }
 cleanup:
+    wsprintfA(path, "%s.DIP", settings); DeleteFileA(path);
     DeleteFileA(settings);
     wsprintfA(path, "%s\\history-document.txt", settingsDir); DeleteFileA(path);
     wsprintfA(path, "%s\\document.lnk", settingsDir); DeleteFileA(path);

@@ -64,6 +64,8 @@ static BOOL WriteOptions(const char *ini, const ShellOptions *o)
     SAVE("Start", "AllowDrop", allowDrop); SAVE("Start", "HighlightNew", highlightNew);
     SAVE("Desktop", "ShowIcons", desktopIcons); SAVE("Desktop", "AutoArrange", autoArrange);
     SAVE("Desktop", "ClassicShutdown", classicShutdown);
+    SAVE("Desktop", "LockIcons", lockDesktopIcons); SAVE("Desktop", "SnapToGrid", snapDesktopIcons);
+    SAVE("Desktop", "GridWidth", desktopGridX); SAVE("Desktop", "GridHeight", desktopGridY);
 #undef SAVE
     okay &= WritePrivateProfileStringA("Start", "ButtonLabel", o->startLabel, ini);
     return okay;
@@ -111,6 +113,17 @@ static void Checkbox(HWND w, int p, const char *text, int id, BOOL checked, int 
     SendMessageA(box, BM_SETCHECK, checked ? BST_CHECKED : BST_UNCHECKED, 0);
 }
 static BOOL Checked(HWND w, int id) { return SendDlgItemMessageA(w, id, BM_GETCHECK, 0, 0) == BST_CHECKED; }
+void PropertiesDesktopLayoutChanged(void)
+{
+    BOOL wasLoading = loading;
+    if (!env.properties) return;
+    loading = TRUE;
+    SendDlgItemMessageA(env.properties,ID_AUTOARRANGE,BM_SETCHECK,env.options.autoArrange ? BST_CHECKED : BST_UNCHECKED,0);
+    SendDlgItemMessageA(env.properties,ID_LOCKICONS,BM_SETCHECK,env.options.lockDesktopIcons ? BST_CHECKED : BST_UNCHECKED,0);
+    SendDlgItemMessageA(env.properties,ID_SNAPICONS,BM_SETCHECK,env.options.snapDesktopIcons ? BST_CHECKED : BST_UNCHECKED,0);
+    SetDlgItemInt(env.properties,ID_GRIDX,env.options.desktopGridX,FALSE); SetDlgItemInt(env.properties,ID_GRIDY,env.options.desktopGridY,FALSE);
+    loading = wasLoading;
+}
 int SettingsRecentMaximum(HWND window, int pins, BOOL large)
 {
     ShellOptions options = env.options;
@@ -238,6 +251,11 @@ static BOOL Apply(HWND window)
     options.clock = Checked(window, ID_CLOCK); options.quick = Checked(window, ID_QUICK); options.largeIcons = Checked(window, ID_LARGE);
     options.group = Checked(window, ID_GROUP); options.hideInactive = Checked(window, ID_INACTIVE);
     options.desktopIcons = Checked(window, ID_DESKTOPICONS); options.autoArrange = Checked(window, ID_AUTOARRANGE);
+    options.lockDesktopIcons = Checked(window, ID_LOCKICONS); options.snapDesktopIcons = Checked(window, ID_SNAPICONS);
+    options.desktopGridX = GetDlgItemInt(window, ID_GRIDX, &valid, FALSE);
+    if (!valid || options.desktopGridX < 64 || options.desktopGridX > 200) { MessageBoxA(window, "Horizontal grid spacing must be 64 to 200 pixels.", "Explorer95 Settings", MB_OK | MB_ICONEXCLAMATION); return FALSE; }
+    options.desktopGridY = GetDlgItemInt(window, ID_GRIDY, &valid, FALSE);
+    if (!valid || options.desktopGridY < 64 || options.desktopGridY > 200) { MessageBoxA(window, "Vertical grid spacing must be 64 to 200 pixels.", "Explorer95 Settings", MB_OK | MB_ICONEXCLAMATION); return FALSE; }
     options.classicShutdown = SendDlgItemMessageA(window, ID_SHUTDOWNSTYLE, CB_GETCURSEL, 0, 0) == 1;
     if (!StartSettingsValidate(window, &options) || !CommitFile(window, &options)) return FALSE;
     env.options = options; loading = TRUE; StartSettingsCommit(window); TraySettingsCommit(); EnvApplyOptions(); loading = FALSE;
@@ -275,16 +293,25 @@ static LRESULT CALLBACK PropertiesProc(HWND window, UINT message, WPARAM wp, LPA
         Control(window, SETTINGS_TASKBAR, "EDIT", "", WS_BORDER | WS_TABSTOP | ES_NUMBER, ID_WIDTH, 144, 312, 64, 23); SetDlgItemInt(window, ID_WIDTH, env.options.taskWidth, FALSE);
         Control(window, SETTINGS_TASKBAR, "STATIC", "80 - 300 pixels", 0, 0, 222, 316, 260, 20);
         StartSettingsBegin(); StartSettingsCreate(window);
-        Control(window, SETTINGS_DESKTOP, "STATIC", "", SS_OWNERDRAW, ID_PREVIEW_DESKTOP, 30, 52, 454, 124);
-        Checkbox(window, SETTINGS_DESKTOP, "Show desktop icons", ID_DESKTOPICONS, env.options.desktopIcons, 30, 194, 450);
-        Checkbox(window, SETTINGS_DESKTOP, "Auto-arrange desktop icons", ID_AUTOARRANGE, env.options.autoArrange, 30, 226, 450);
-        Control(window, SETTINGS_DESKTOP, "STATIC", "Shutdown dialog style:", 0, 0, 30, 256, 170, 20);
-        control = Control(window, SETTINGS_DESKTOP, "COMBOBOX", "", WS_TABSTOP | CBS_DROPDOWNLIST, ID_SHUTDOWNSTYLE, 206, 252, 278, 100);
+        Control(window, SETTINGS_DESKTOP, "STATIC", "", SS_OWNERDRAW, ID_PREVIEW_DESKTOP, 30, 52, 454, 88);
+        Checkbox(window, SETTINGS_DESKTOP, "Show desktop icons", ID_DESKTOPICONS, env.options.desktopIcons, 30, 150, 220);
+        Checkbox(window, SETTINGS_DESKTOP, "Auto-arrange icons", ID_AUTOARRANGE, env.options.autoArrange, 260, 150, 224);
+        Checkbox(window, SETTINGS_DESKTOP, "Lock icon positions", ID_LOCKICONS, env.options.lockDesktopIcons, 30, 178, 220);
+        Checkbox(window, SETTINGS_DESKTOP, "Snap to grid", ID_SNAPICONS, env.options.snapDesktopIcons, 260, 178, 224);
+        Control(window, SETTINGS_DESKTOP, "STATIC", "Horizontal grid:", 0, 0, 30, 212, 114, 20);
+        Control(window, SETTINGS_DESKTOP, "EDIT", "", WS_BORDER | WS_TABSTOP | ES_NUMBER, ID_GRIDX, 150, 208, 62, 23);
+        SetDlgItemInt(window, ID_GRIDX, env.options.desktopGridX, FALSE);
+        Control(window, SETTINGS_DESKTOP, "STATIC", "Vertical grid:", 0, 0, 260, 212, 114, 20);
+        Control(window, SETTINGS_DESKTOP, "EDIT", "", WS_BORDER | WS_TABSTOP | ES_NUMBER, ID_GRIDY, 400, 208, 62, 23);
+        SetDlgItemInt(window, ID_GRIDY, env.options.desktopGridY, FALSE);
+        Control(window, SETTINGS_DESKTOP, "STATIC", "64-200 px. Auto Arrange uses Windows icon spacing.", 0, 0, 30, 240, 454, 20);
+        Control(window, SETTINGS_DESKTOP, "STATIC", "Shutdown dialog style:", 0, 0, 30, 268, 170, 20);
+        control = Control(window, SETTINGS_DESKTOP, "COMBOBOX", "", WS_TABSTOP | CBS_DROPDOWNLIST, ID_SHUTDOWNSTYLE, 206, 264, 278, 100);
         SendMessageA(control, CB_ADDSTRING, 0, (LPARAM)"Windows XP"); SendMessageA(control, CB_ADDSTRING, 0, (LPARAM)"Windows 95");
         SendMessageA(control, CB_SETCURSEL, env.options.classicShutdown ? 1 : 0, 0);
-        Control(window, SETTINGS_DESKTOP, "BUTTON", "Line up icons now", WS_TABSTOP, ID_LINEUP, 30, 284, 212, 26);
-        Control(window, SETTINGS_DESKTOP, "BUTTON", "Background / display settings...", WS_TABSTOP, ID_BACKGROUND, 252, 284, 232, 26);
-        Control(window, SETTINGS_DESKTOP, "STATIC", "Wallpaper, colors and screen saver use Windows display properties.", 0, 0, 30, 316, 454, 24);
+        Control(window, SETTINGS_DESKTOP, "BUTTON", "Line up icons now", WS_TABSTOP, ID_LINEUP, 30, 298, 212, 26);
+        Control(window, SETTINGS_DESKTOP, "BUTTON", "Background / display settings...", WS_TABSTOP, ID_BACKGROUND, 252, 298, 232, 26);
+        Control(window, SETTINGS_DESKTOP, "STATIC", "Wallpaper, colors and screen saver use Windows display properties.", 0, 0, 30, 326, 454, 16);
         TraySettingsBegin(); TraySettingsCreate(window);
         Control(window, SETTINGS_SHELL, "BUTTON", "Windows 95 startup shell", BS_GROUPBOX, 0, 24, 54, 472, 194);
         Control(window, SETTINGS_SHELL, "STATIC", "Select which shell starts with Windows.\r\nYour current session stays open; the change takes effect after restart.", 0, 0, 38, 82, 442, 48);
@@ -321,7 +348,7 @@ static LRESULT CALLBACK PropertiesProc(HWND window, UINT message, WPARAM wp, LPA
         if (LOWORD(wp) == ID_CUSTOMTRAY) { PropertiesSelectPage(SETTINGS_TRAY); return 0; }
         if (LOWORD(wp) == ID_QUICKFOLDER) { env.host.openFolder(env.quickDir); return 0; }
         if (LOWORD(wp) == ID_BACKGROUND) { EnvironmentLaunch(window, "control.exe", "desk.cpl", NULL); return 0; }
-        if (LOWORD(wp) == ID_LINEUP) { HWND list = NativeViewList(env.desktopView); if (list) ListView_Arrange(list, LVA_SNAPTOGRID); return 0; }
+        if (LOWORD(wp) == ID_LINEUP) { NativeViewLineUp(env.desktopView); return 0; }
         if (LOWORD(wp) == ID_INSTALLSHELL || LOWORD(wp) == ID_RESTORESHELL) { ShellSelection(window, LOWORD(wp) == ID_RESTORESHELL); return 0; }
         if (LOWORD(wp) == ID_EDGE || LOWORD(wp) == ID_ROWS || LOWORD(wp) == ID_LARGE) StartSettingsScreenChanged(window);
         if (StartSettingsCommand(window, wp) || TraySettingsCommand(window, wp)) return 0;

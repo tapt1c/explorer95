@@ -111,6 +111,10 @@ static void SettingsPath(void)
     env.options.startMenus = GetPrivateProfileIntA("Start", "FolderMenus", 2, env.ini);
     env.options.desktopIcons = !!GetPrivateProfileIntA("Desktop", "ShowIcons", TRUE, env.ini);
     env.options.autoArrange = !!GetPrivateProfileIntA("Desktop", "AutoArrange", FALSE, env.ini);
+    env.options.lockDesktopIcons = !!GetPrivateProfileIntA("Desktop", "LockIcons", FALSE, env.ini);
+    env.options.snapDesktopIcons = !!GetPrivateProfileIntA("Desktop", "SnapToGrid", FALSE, env.ini);
+    env.options.desktopGridX = Clamp(GetPrivateProfileIntA("Desktop", "GridWidth", 80, env.ini), 64, 200);
+    env.options.desktopGridY = Clamp(GetPrivateProfileIntA("Desktop", "GridHeight", 80, env.ini), 64, 200);
     env.options.classicShutdown = !!GetPrivateProfileIntA("Desktop", "ClassicShutdown", FALSE, env.ini);
     env.options.traySeconds = Clamp(Option("InactiveSeconds", 60), 5, 3600);
     env.options.largeStartIcons = !!GetPrivateProfileIntA("Start", "LargeIcons", FALSE, env.ini);
@@ -459,17 +463,54 @@ void EnvApplyOptions(void)
     SetWindowTextA(env.startButton, env.options.startLabel); StartRefresh();
     env.hidden = FALSE; RefreshQuick(); EnvPositionBar(); UpdateTasks(); EnvLayoutBar();
     if (env.desktopView) {
-        HWND view = NativeViewWindow(env.desktopView), list = NativeViewList(env.desktopView);
+        HWND view = NativeViewWindow(env.desktopView);
         ShowWindow(view, env.options.desktopIcons ? SW_SHOWNA : SW_HIDE);
-        if (list && !!(GetWindowLongA(list, GWL_STYLE) & LVS_AUTOARRANGE) != env.options.autoArrange)
-            NativeViewArrange(env.desktopView, env.options.autoArrange);
+        NativeViewConfigureDesktop(env.desktopView, env.ini, env.options.autoArrange, env.options.lockDesktopIcons,
+            env.options.snapDesktopIcons, env.options.desktopGridX, env.options.desktopGridY);
         InvalidateRect(env.desktop, NULL, FALSE);
     }
 }
 
 void EnvironmentArrangeDesktop(BOOL automatic)
-{ env.options.autoArrange = automatic; NativeViewArrange(env.desktopView, automatic); EnvSaveOptions(); }
+{
+    env.options.autoArrange = automatic;
+    NativeViewConfigureDesktop(env.desktopView, env.ini, automatic, env.options.lockDesktopIcons,
+        env.options.snapDesktopIcons, env.options.desktopGridX, env.options.desktopGridY); EnvSaveOptions();
+    PropertiesDesktopLayoutChanged();
+}
+static const int gridSizes[] = {64, 80, 96, 112, 128, 160, 200};
+HMENU EnvironmentDesktopLayoutMenu(void)
+{
+    HMENU menu = CreatePopupMenu(), horizontal = CreatePopupMenu(), vertical = CreatePopupMenu(); int i;
+    AppendMenuA(menu, MF_STRING | (env.options.autoArrange ? MF_CHECKED : 0), 0x8005, "Auto Arrange");
+    AppendMenuA(menu, MF_STRING | (env.options.snapDesktopIcons ? MF_CHECKED : 0), 0x8010, "Snap to Grid");
+    AppendMenuA(menu, MF_STRING | (env.options.lockDesktopIcons ? MF_CHECKED : 0), 0x8011, "Lock Icon Positions");
+    AppendMenuA(menu, MF_STRING | (env.options.lockDesktopIcons ? MF_GRAYED : 0), 0x8006, "Line up Icons Now");
+    for (i = 0; i < 7; ++i) {
+        char label[32]; wsprintfA(label, "%d pixels", gridSizes[i]);
+        AppendMenuA(horizontal, MF_STRING | (env.options.desktopGridX == gridSizes[i] ? MF_CHECKED : 0), 0x8040 + i, label);
+        AppendMenuA(vertical, MF_STRING | (env.options.desktopGridY == gridSizes[i] ? MF_CHECKED : 0), 0x8050 + i, label);
+    }
+    AppendMenuA(menu, MF_POPUP, (UINT_PTR)horizontal, "Horizontal Grid Spacing");
+    AppendMenuA(menu, MF_POPUP, (UINT_PTR)vertical, "Vertical Grid Spacing");
+    AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuA(menu, MF_STRING, 0x8012, "Desktop Settings...");
+    return menu;
+}
+BOOL EnvironmentDesktopLayoutCommand(UINT command)
+{
+    if (command == 0x8012) { PropertiesSelectPage(2); return TRUE; }
+    if (command == 0x8006) { NativeViewLineUp(env.desktopView); return TRUE; }
+    if (command == 0x8005) env.options.autoArrange = !env.options.autoArrange;
+    else if (command == 0x8010) env.options.snapDesktopIcons = !env.options.snapDesktopIcons;
+    else if (command == 0x8011) env.options.lockDesktopIcons = !env.options.lockDesktopIcons;
+    else if (command >= 0x8040 && command < 0x8047) env.options.desktopGridX = gridSizes[command - 0x8040];
+    else if (command >= 0x8050 && command < 0x8057) env.options.desktopGridY = gridSizes[command - 0x8050];
+    else return FALSE;
+    EnvironmentArrangeDesktop(env.options.autoArrange); return TRUE;
+}
 BOOL EnvironmentDesktopIconsVisible(void) { return env.options.desktopIcons; }
+BOOL EnvironmentDesktopAutoArrange(void) { return env.options.autoArrange; }
 void EnvironmentShowDesktopMenu(POINT point)
 { if (env.desktopView && !env.closing) DesktopBackgroundMenu(env.desktopView, point, env.bar); }
 void EnvironmentToggleDesktopIcons(void)
@@ -607,7 +648,7 @@ static LRESULT CALLBACK DesktopProc(HWND window, UINT message, WPARAM wp, LPARAM
     if (message == WM_CONTEXTMENU && env.desktopView) {
         POINT point; GetCursorPos(&point); EnvironmentShowDesktopMenu(point); return 0;
     }
-    if (message == WM_COMMAND) { EnvCommand(LOWORD(wp)); return 0; }
+    if (message == WM_COMMAND) { if (!EnvironmentDesktopLayoutCommand(LOWORD(wp))) EnvCommand(LOWORD(wp)); return 0; }
     if (message == WM_SYSCOLORCHANGE) {
         if (!changingDesktopColors) {
             BOOL changed;
@@ -782,10 +823,6 @@ HWND EnvironmentCreate(const EnvironmentHost *callbacks)
     if (!env.desktopView) {
         MessageBoxA(env.bar, "The installed Shell32 could not create its desktop view.\r\nExplorer95 will exit without changing the shell.",
             "Explorer95", MB_OK | MB_ICONERROR); EnvironmentShutdown(); return NULL;
-    }
-    {
-        char configured[8]; GetPrivateProfileStringA("Desktop", "AutoArrange", "", configured, sizeof(configured), env.ini);
-        if (!configured[0]) { HWND list = NativeViewList(env.desktopView); env.options.autoArrange = list && (GetWindowLongA(list, GWL_STYLE) & LVS_AUTOARRANGE); }
     }
     if (env.primary) {
         if (EnvRegister("Shell_TrayWnd", BridgeProc, NULL, 0))

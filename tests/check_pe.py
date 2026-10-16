@@ -26,7 +26,7 @@ ALLOWED = {
     "kernel32.dll": set("""
         CreateToolhelp32Snapshot Process32First Process32Next GetSystemTimeAsFileTime GetTempFileNameA MoveFileA
         CompareFileTime FileTimeToLocalFileTime FileTimeToSystemTime GetDateFormatA
-        WriteFile GlobalAlloc GlobalFree GlobalLock GlobalSize GlobalUnlock
+        GetFileSize ReadFile WriteFile GlobalAlloc GlobalFree GlobalLock GlobalSize GlobalUnlock
         CloseHandle CopyFileA CreateDirectoryA CreateFileA ExitProcess ExpandEnvironmentStringsA FindClose FindFirstFileA
         FindNextFileA FindFirstChangeNotificationA FindNextChangeNotification FindCloseChangeNotification WaitForSingleObject FormatMessageA GetFileAttributesA GetFullPathNameA
         DeleteFileA GetSystemDirectoryA SetLastError GetTimeFormatA GetLastError GetLocalTime GetLogicalDriveStringsA GetModuleHandleA
@@ -48,7 +48,7 @@ ALLOWED = {
         CallWindowProcA CopyIcon DestroyIcon DrawIconEx ExitWindowsEx FindWindowExA
         DestroyMenu DestroyWindow DispatchMessageA DrawEdge DrawFrameControl DrawFocusRect DrawTextA
         BeginPaint EndPaint EnumWindows EnumChildWindows FillRect FindWindowA
-        GetDC ReleaseDC GetClassLongA GetCapture GetClassNameA GetClientRect GetCursorPos GetDlgItem
+        UnionRect GetDC ReleaseDC GetClassLongA GetCapture GetClassNameA GetClientRect GetCursorPos GetDlgItem
         GetDlgItemTextA GetFocus GetForegroundWindow GetKeyState GetMessageA GetParent
         GetDlgCtrlID GetDlgItemInt GetMenuItemCount GetMenuStringA GetPropA GetSystemMenu InsertMenuA
         GetSystemMetrics GetWindowThreadProcessId IsChild LoadImageA PtInRect

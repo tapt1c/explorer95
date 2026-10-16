@@ -81,6 +81,8 @@ typedef struct ShellOptions {
     int edge, rows, taskWidth, recentCount;
     BOOL locked, autoHide, topmost, clock, quick, largeIcons, largeStartIcons, group, hideInactive;
     BOOL classicStart, hoverMenus, allowDrop, highlightNew, desktopIcons, autoArrange, classicShutdown;
+    BOOL lockDesktopIcons, snapDesktopIcons;
+    int desktopGridX, desktopGridY;
     UINT startMenus, traySeconds;
     UINT startItems;
     char startLabel[32];
@@ -152,6 +154,7 @@ LRESULT TrayCopyData(const COPYDATASTRUCT *copy);
 void TrayDestroy(void);
 void PropertiesOpen(void);
 void PropertiesSelectPage(int page);
+void PropertiesDesktopLayoutChanged(void);
 BOOL PropertiesTranslate(MSG *message);
 void ShutdownShow(void);
 void ShutdownClose(void);

@@ -10,6 +10,7 @@
 #include "paint.h"
 #include "render_trace.h"
 #include "browser.h"
+#include "desktop_icons.h"
 
 struct NativeView {
     IShellBrowser browser;
@@ -25,6 +26,7 @@ struct NativeView {
     HBITMAP wallpaper;
     BOOL tiled, backgroundDirty, sized;
     PaintBuffer background;
+    DesktopIcons *icons;
 };
 
 static EnvironmentHost host;
@@ -256,7 +258,13 @@ static LRESULT CALLBACK Subclass(HWND window, UINT message, WPARAM wp, LPARAM lp
     original = window == view->list ? view->oldList : view->oldView;
     RenderTraceEvent(view->desktop ? (window == view->list ? "desktop-list" : "desktop-view") : "folder-view", window, message, wp, lp);
     if (NativeViewMenuMessage(view, message, wp, lp)) return 0;
+    if (view->desktop && window == view->window && message == WM_NOTIFY &&
+        DesktopIconsBeginDrag(view->icons, (const NMLISTVIEW *)lp)) return 0;
     if (view->desktop && window == view->list) {
+        if (DesktopIconsMessage(view->icons, message, wp, lp)) return 0;
+        if (message == LVM_INSERTITEMA || message == LVM_INSERTITEMW || message == LVM_DELETEITEM ||
+            message == LVM_DELETEALLITEMS || message == LVM_SETITEMTEXTA || message == LVM_SETITEMTEXTW || message == WM_SIZE)
+            DesktopIconsChanged(view->icons);
         if (message == WM_ERASEBKGND) { PaintBackground(view, (HDC)wp, window); return TRUE; }
         if (message == WM_CONTEXTMENU) {
             POINT point;
@@ -273,7 +281,13 @@ static LRESULT CALLBACK Subclass(HWND window, UINT message, WPARAM wp, LPARAM lp
     }
     if (view->navigate && (message == WM_LBUTTONUP || message == WM_KEYUP || message == WM_NOTIFY))
         PostMessageA(view->parent, WM_APP + 32, 0, 0);
-    return CallWindowProcA(original, window, message, wp, lp);
+    {
+        BOOL shellDrag = view->desktop && window == view->window && message == WM_NOTIFY &&
+            (((NMHDR *)lp)->code == LVN_BEGINDRAG || ((NMHDR *)lp)->code == LVN_BEGINRDRAG);
+        LRESULT result = CallWindowProcA(original, window, message, wp, lp);
+        if (shellDrag) DesktopIconsAfterShellAction(view->icons);
+        return result;
+    }
 }
 
 static void NewDesktopItem(NativeView *view, BOOL folder)
@@ -316,7 +330,7 @@ void DesktopBackgroundMenu(NativeView *view, POINT point, HWND owner)
 {
     IContextMenu *context = NULL;
     HMENU menu = CreatePopupMenu(), extra = CreatePopupMenu();
-    HMENU arrange = CreatePopupMenu();
+    HMENU arrange = EnvironmentDesktopLayoutMenu();
     int command;
     if (view && SUCCEEDED(IShellView_GetItemObject(view->view, SVGIO_BACKGROUND, &IID_IContextMenu, (void **)&context))) {
         IContextMenu_QueryContextMenu(context, menu, 0, 1, 0x6fff, CMF_NORMAL);
@@ -325,11 +339,8 @@ void DesktopBackgroundMenu(NativeView *view, POINT point, HWND owner)
         AppendMenuA(menu, MF_STRING, 0x8003, "Refresh");
 
     }
-    AppendMenuA(arrange, MF_STRING | ((view->list && (GetWindowLongA(view->list, GWL_STYLE) & LVS_AUTOARRANGE)) ? MF_CHECKED : 0),
-        0x8005, "Auto Arrange");
-    AppendMenuA(arrange, MF_STRING, 0x8006, "Line up Icons");
     AppendMenuA(menu, MF_STRING | (EnvironmentDesktopIconsVisible() ? MF_CHECKED : 0), 0x8009, "Show Desktop Icons");
-    InsertMenuA(menu, 0, MF_BYPOSITION | MF_POPUP, (UINT_PTR)arrange, "Arrange Icons");
+    InsertMenuA(menu, 0, MF_BYPOSITION | MF_POPUP, (UINT_PTR)arrange, "Icon Layout");
     if (!HasNewMenu(menu)) {
         HMENU create = CreatePopupMenu();
         AppendMenuA(create, MF_STRING, 0x8007, "Folder");
@@ -355,14 +366,16 @@ void DesktopBackgroundMenu(NativeView *view, POINT point, HWND owner)
         invoke.cbSize = sizeof(invoke); invoke.hwnd = owner;
         invoke.lpVerb = MAKEINTRESOURCEA(command - 1); invoke.nShow = SW_SHOWNORMAL;
         IContextMenu_InvokeCommand(context, &invoke);
+        if (view->list && !!(GetWindowLongA(view->list,GWL_STYLE) & LVS_AUTOARRANGE) != EnvironmentDesktopAutoArrange())
+            EnvironmentArrangeDesktop(!!(GetWindowLongA(view->list,GWL_STYLE) & LVS_AUTOARRANGE));
+        DesktopIconsAfterShellAction(view->icons);
     }
     if (command == 0x8001) EnvironmentShowProperties();
     if (command == 0x8002) { char path[MAX_PATH]; if (host.specialPath(CSIDL_DESKTOPDIRECTORY, path)) host.openFolder(path); }
     if (command == 0x8003) NativeViewRefresh(view);
     if (command == 0x8004) EnvironmentLaunch(view->parent, "control.exe", "desk.cpl", NULL);
-    if (command == 0x8005 && view->list) EnvironmentArrangeDesktop(!(GetWindowLongA(view->list, GWL_STYLE) & LVS_AUTOARRANGE));
+    EnvironmentDesktopLayoutCommand(command);
     if (command == 0x8009) EnvironmentToggleDesktopIcons();
-    if (command == 0x8006 && view->list) ListView_Arrange(view->list, LVA_SNAPTOGRID);
     if (command == 0x8007 || command == 0x8008) NewDesktopItem(view, command == 0x8007);
     if (view->context) { IContextMenu2_Release(view->context); view->context = NULL; }
     if (context) IContextMenu_Release(context);
@@ -417,6 +430,7 @@ NativeView *NativeViewCreate(HWND parent, LPCITEMIDLIST absolute, BOOL desktop)
 void NativeViewDestroy(NativeView *view)
 {
     if (!view) return;
+    if (view->icons) { DesktopIcons *icons = view->icons; view->icons = NULL; DesktopIconsDestroy(icons); }
     if (IsWindow(view->list) && view->oldList) {
         SetWindowLongPtrA(view->list, GWLP_WNDPROC, (LONG_PTR)view->oldList);
         RemovePropA(view->list, property);
@@ -465,8 +479,10 @@ void NativeViewDesktopSettingsChanged(NativeView *view)
 void NativeViewRefresh(NativeView *view)
 {
     if (!view) return;
+    if (view->icons) DesktopIconsSave(view->icons);
     if (view->desktop) ReadWallpaper(view);
     IShellView_Refresh(view->view);
+    DesktopIconsChanged(view->icons);
     InvalidateRect(view->list, NULL, TRUE);
 }
 void NativeViewArrange(NativeView *view, BOOL autoArrange)
@@ -476,8 +492,15 @@ void NativeViewArrange(NativeView *view, BOOL autoArrange)
     style = GetWindowLongPtrA(view->list, GWL_STYLE);
     style = autoArrange ? style | LVS_AUTOARRANGE : style & ~LVS_AUTOARRANGE;
     SetWindowLongPtrA(view->list, GWL_STYLE, style);
-    ListView_Arrange(view->list, LVA_DEFAULT);
+    if (autoArrange) ListView_Arrange(view->list, LVA_DEFAULT);
 }
+void NativeViewConfigureDesktop(NativeView *view, const char *profile, BOOL automatic, BOOL locked, BOOL snap, int width, int height)
+{
+    if (!view || !view->desktop || !view->list) return;
+    if (!view->icons) view->icons = DesktopIconsCreate(view->list, profile);
+    DesktopIconsConfigure(view->icons, automatic, locked, snap, width, height);
+}
+void NativeViewLineUp(NativeView *view) { if (view) DesktopIconsLineUp(view->icons); }
 HWND NativeViewWindow(NativeView *view) { return view ? view->window : NULL; }
 
 HWND NativeViewList(NativeView *view) { return view ? view->list : NULL; }

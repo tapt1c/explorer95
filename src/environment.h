@@ -22,6 +22,9 @@ void EnvironmentArrangeDesktop(BOOL automatic);
 void EnvironmentToggleDesktopIcons(void);
 BOOL EnvironmentDesktopIconsVisible(void);
 void EnvironmentShowDesktopMenu(POINT point);
+HMENU EnvironmentDesktopLayoutMenu(void);
+BOOL EnvironmentDesktopLayoutCommand(UINT command);
+BOOL EnvironmentDesktopAutoArrange(void);
 void EnvironmentFind(HWND owner, const char *directory);
 void EnvironmentShutdown(void);
 
