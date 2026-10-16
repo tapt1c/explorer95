@@ -8,6 +8,7 @@
 #include <shlobj.h>
 #include "native_view.h"
 #include "paint.h"
+#include "browser.h"
 
 struct NativeView {
     IShellBrowser browser;
@@ -19,6 +20,7 @@ struct NativeView {
     IContextMenu2 *context;
     LPITEMIDLIST absolute;
     BOOL desktop;
+    BOOL (*navigate)(HWND, LPCITEMIDLIST);
     HBITMAP wallpaper;
     BOOL tiled, backgroundDirty;
     PaintBuffer background;
@@ -26,7 +28,6 @@ struct NativeView {
 
 static EnvironmentHost host;
 static const char property[] = "Explorer95.NativeView";
-static const char frameClass[] = "Explorer95.Namespace";
 
 static BOOL SameGuid(REFIID a, REFIID b)
 {
@@ -117,7 +118,8 @@ static HRESULT STDMETHODCALLTYPE Browse(IShellBrowser *self, LPCITEMIDLIST pidl,
         if (absolute) ((LPITEMIDLIST)((BYTE *)absolute + previous))->mkid.cb = 0;
     } else absolute = Combine(flags & SBSP_RELATIVE ? view->absolute : NULL, pidl);
     if (!absolute) return E_OUTOFMEMORY;
-    if (SHGetPathFromIDListA(absolute, path)) host.openFolder(path);
+    if (view->navigate) view->navigate(view->parent, absolute);
+    else if (SHGetPathFromIDListA(absolute, path)) host.openFolder(path);
     else OpenNativeFolder(absolute);
     HeapFree(GetProcessHeap(), 0, absolute);
     return S_OK;
@@ -253,6 +255,8 @@ static LRESULT CALLBACK Subclass(HWND window, UINT message, WPARAM wp, LPARAM lp
             return 0;
         if (message == WM_KEYDOWN && wp == VK_F5) { NativeViewRefresh(view); return 0; }
     }
+    if (view->navigate && (message == WM_LBUTTONUP || message == WM_KEYUP || message == WM_NOTIFY))
+        PostMessageA(view->parent, WM_APP + 32, 0, 0);
     return CallWindowProcA(original, window, message, wp, lp);
 }
 
@@ -343,7 +347,7 @@ void DesktopBackgroundMenu(NativeView *view, POINT point)
     DestroyMenu(menu);
 }
 
-NativeView *NativeViewCreate(HWND parent, LPCITEMIDLIST absolute, BOOL desktop)
+NativeView *NativeViewCreateEx(HWND parent, LPCITEMIDLIST absolute, BOOL desktop, int mode, const RECT *initial)
 {
     IShellFolder *root = NULL;
     NativeView *view = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*view));
@@ -358,9 +362,9 @@ NativeView *NativeViewCreate(HWND parent, LPCITEMIDLIST absolute, BOOL desktop)
         if (FAILED(IShellFolder_BindToObject(root, absolute, NULL, &IID_IShellFolder, (void **)&view->folder))) goto fail;
     } else { view->folder = root; IShellFolder_AddRef(root); }
     if (FAILED(IShellFolder_CreateViewObject(view->folder, parent, &IID_IShellView, (void **)&view->view))) goto fail;
-    settings.ViewMode = FVM_ICON;
+    settings.ViewMode = mode == 1 ? FVM_SMALLICON : mode == 2 ? FVM_LIST : mode == 3 ? FVM_DETAILS : FVM_ICON;
     settings.fFlags = FWF_NOCLIENTEDGE | (desktop ? FWF_DESKTOP : 0);
-    GetClientRect(parent, &rect);
+    if (initial) rect = *initial; else GetClientRect(parent, &rect);
     if (FAILED(IShellView_CreateViewWindow(view->view, NULL, &settings, &view->browser, &rect, &view->window))) goto fail;
     SetPropA(view->window, property, view);
     view->oldView = (WNDPROC)SetWindowLongPtrA(view->window, GWLP_WNDPROC, (LONG_PTR)Subclass);
@@ -384,6 +388,9 @@ fail:
     NativeViewDestroy(view);
     return NULL;
 }
+
+NativeView *NativeViewCreate(HWND parent, LPCITEMIDLIST absolute, BOOL desktop)
+{ return NativeViewCreateEx(parent, absolute, desktop, 0, NULL); }
 
 void NativeViewDestroy(NativeView *view)
 {
@@ -433,48 +440,18 @@ void NativeViewArrange(NativeView *view, BOOL autoArrange)
 }
 HWND NativeViewWindow(NativeView *view) { return view ? view->window : NULL; }
 
-static LRESULT CALLBACK FrameProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
+HWND NativeViewList(NativeView *view) { return view ? view->list : NULL; }
+void NativeViewSetNavigator(NativeView *view, BOOL (*navigate)(HWND, LPCITEMIDLIST)) { if (view) view->navigate = navigate; }
+BOOL NativeViewInvoke(NativeView *view, const char *verb, BOOL background)
 {
-    NativeView *view = (NativeView *)GetWindowLongPtrA(window, GWLP_USERDATA);
-    if (message == WM_SIZE && view) {
-        RECT rect; GetClientRect(window, &rect); NativeViewResize(view, &rect); return 0;
-    }
-    if (message == WM_SETFOCUS && view) { SetFocus(view->list ? view->list : view->window); return 0; }
-    if (message == WM_DESTROY && view) {
-        SetWindowLongPtrA(window, GWLP_USERDATA, 0); NativeViewDestroy(view); return 0;
-    }
-    return DefWindowProcA(window, message, wp, lp);
+    IContextMenu *context; CMINVOKECOMMANDINFO action; HRESULT result; HMENU menu;
+    if (!view) return FALSE;
+    result = IShellView_GetItemObject(view->view, background ? SVGIO_BACKGROUND : SVGIO_SELECTION, &IID_IContextMenu, (void **)&context);
+    if (FAILED(result)) return FALSE;
+    menu = CreatePopupMenu(); IContextMenu_QueryContextMenu(context, menu, 0, 1, 0x6fff, CMF_NORMAL);
+    ZeroMemory(&action, sizeof(action)); action.cbSize = sizeof(action); action.hwnd = view->parent;
+    action.lpVerb = verb; action.nShow = SW_SHOWNORMAL; result = IContextMenu_InvokeCommand(context, &action);
+    DestroyMenu(menu); IContextMenu_Release(context); return SUCCEEDED(result);
 }
-
-HWND OpenNativeFolder(LPCITEMIDLIST absolute)
-{
-    HWND window;
-    NativeView *view;
-    SHFILEINFOA info;
-    ZeroMemory(&info, sizeof(info));
-    SHGetFileInfoA((LPCSTR)absolute, 0, &info, sizeof(info), SHGFI_PIDL | SHGFI_DISPLAYNAME);
-    window = CreateWindowExA(0, frameClass, info.szDisplayName[0] ? info.szDisplayName : "Explorer95",
-                             WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT, 700, 470, NULL, NULL, host.instance, NULL);
-    if (!window) return NULL;
-    view = NativeViewCreate(window, absolute, FALSE);
-    if (!view) { DestroyWindow(window); return NULL; }
-    SetWindowLongPtrA(window, GWLP_USERDATA, (LONG_PTR)view);
-    ShowWindow(window, SW_SHOWNORMAL);
-    {
-        RECT rect; GetClientRect(window, &rect); NativeViewResize(view, &rect);
-        IShellView_UIActivate(view->view, SVUIA_ACTIVATE_NOFOCUS);
-        RedrawWindow(window, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
-    }
-    return window;
-}
-
-void NativeViewSetHost(const EnvironmentHost *callbacks)
-{
-    WNDCLASSA cls;
-    host = *callbacks;
-    ZeroMemory(&cls, sizeof(cls));
-    cls.hInstance = host.instance; cls.lpfnWndProc = FrameProc;
-    cls.lpszClassName = frameClass; cls.hCursor = LoadCursorA(NULL, IDC_ARROW);
-    cls.hIcon = LoadIconA(NULL, IDI_APPLICATION); cls.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
-    RegisterClassA(&cls);
-}
+HWND OpenNativeFolder(LPCITEMIDLIST absolute) { return BrowserOpenNamespace(absolute); }
+void NativeViewSetHost(const EnvironmentHost *callbacks) { host = *callbacks; }

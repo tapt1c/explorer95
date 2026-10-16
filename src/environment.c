@@ -102,6 +102,30 @@ BOOL EnvironmentLaunch(HWND owner, const char *path, const char *arguments, cons
     EnvironmentRecordLaunch(path, arguments); return TRUE;
 }
 void EnvironmentRecordLaunch(const char *path, const char *arguments) { StartRecord(path, arguments); }
+void EnvironmentFind(HWND owner, const char *directory)
+{
+    typedef BOOL (WINAPI *FindFiles)(LPCITEMIDLIST, LPCITEMIDLIST);
+    DWORD version = GetVersion(); char fallback[MAX_PATH];
+    /* Win95 Shell32 ordinal 90 opens its native Find Files dialog directly.
+     * Using Directory\shell\find first can start the original Explorer to
+     * service its DDE verb while Explorer95 is the primary shell. */
+    if ((version & 0x80000000UL) && LOBYTE(LOWORD(version)) == 4 && HIBYTE(LOWORD(version)) == 0) {
+        FindFiles find = (FindFiles)(void *)GetProcAddress(GetModuleHandleA("shell32.dll"), MAKEINTRESOURCEA(90));
+        IShellFolder *desktop = NULL; LPITEMIDLIST pidl = NULL; WCHAR wide[MAX_PATH]; BOOL opened = FALSE;
+        if (find) {
+            if (directory && *directory && MultiByteToWideChar(CP_ACP, 0, directory, -1, wide, MAX_PATH) && SUCCEEDED(SHGetDesktopFolder(&desktop)))
+                IShellFolder_ParseDisplayName(desktop, owner, NULL, wide, NULL, &pidl, NULL);
+            opened = find(pidl, NULL); if (pidl) CoTaskMemFree(pidl); if (desktop) IShellFolder_Release(desktop);
+            if (opened) return;
+        }
+    }
+    if (!directory || !*directory) {
+        if (!env.host.specialPath(CSIDL_PERSONAL, fallback)) GetWindowsDirectoryA(fallback, MAX_PATH);
+        directory = fallback;
+    }
+    if ((INT_PTR)ShellExecuteA(owner, "find", directory, NULL, NULL, SW_SHOWNORMAL) <= 32)
+        MessageBoxA(owner, "The installed Windows shell does not provide a Find command.", "Find Files", MB_OK | MB_ICONINFORMATION);
+}
 void EnvironmentOpenNamespace(int csidl)
 {
     LPITEMIDLIST pidl;
@@ -454,10 +478,7 @@ void EnvCommand(int id)
         if (!GetEnvironmentVariableA("COMSPEC", path, MAX_PATH)) lstrcpyA(path, "command.com");
         EnvironmentLaunch(env.bar, path, NULL, NULL); break;
     case ID_RUN: env.host.showRun(); break;
-    case ID_FIND:
-        if (env.host.specialPath(CSIDL_PERSONAL, path) && (INT_PTR)ShellExecuteA(env.bar, "find", path, NULL, NULL, SW_SHOWNORMAL) <= 32)
-            MessageBoxA(env.bar, "The installed shell does not provide a Find command.", "Explorer95", MB_OK | MB_ICONINFORMATION);
-        break;
+    case ID_FIND: EnvironmentFind(env.bar, NULL); break;
     case ID_HELP:
         GetWindowsDirectoryA(path, MAX_PATH);
         { char help[MAX_PATH]; if (EnvJoin(help, path, "HELP\\WINDOWS.HLP")) WinHelpA(env.bar, help, HELP_FINDER, 0); }

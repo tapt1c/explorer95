@@ -7,8 +7,8 @@ LDFLAGS = -nostdlib -mwindows -Wl,--entry,_start -Wl,--subsystem,windows:4.0 -Wl
 LDLIBS = -luuid -lcomctl32 -lcomdlg32 -lshell32 -lole32 -ladvapi32 -lgdi32 -luser32 -lkernel32
 WINDRES = i686-w64-mingw32-windres
 WINDRES64 = x86_64-w64-mingw32-windres
-SOURCES = src/program_history.c src/paint.c src/explorer95.c src/environment.c src/native_view.c src/start_menu.c src/start_layout.c src/start_settings.c src/tray.c src/settings.c src/shell_config.c
-HEADERS = src/program_history.h src/paint.h src/environment.h src/native_view.h src/shell_internal.h src/start_layout.h
+SOURCES = src/browser.c src/browser_files.c src/browser_tree.c src/program_history.c src/paint.c src/explorer95.c src/environment.c src/native_view.c src/start_menu.c src/start_layout.c src/start_settings.c src/tray.c src/settings.c src/shell_config.c
+HEADERS = src/browser.h src/browser_internal.h src/program_history.h src/paint.h src/environment.h src/native_view.h src/shell_internal.h src/start_layout.h
 
 .PHONY: all clean check smoke ui64-smoke
 all: build/explorer95.exe
