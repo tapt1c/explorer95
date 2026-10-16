@@ -531,6 +531,7 @@ void EnvCommand(int id)
 
 static LRESULT CALLBACK DesktopProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
 {
+    if (env.closing) return DefWindowProcA(window, message, wp, lp);
     if (message == WM_CONTEXTMENU && env.desktopView) {
         POINT point; GetCursorPos(&point); DesktopBackgroundMenu(env.desktopView, point); return 0;
     }
@@ -725,7 +726,13 @@ void EnvironmentShutdown(void)
     /* Browser windows own shell objects too: release them while the desktop
      * and its shell services are still alive. */
     if (env.host.closeFolders) env.host.closeFolders();
-    StartDestroy(); TrayDestroy(); NativeViewDestroy(env.desktopView); env.desktopView = NULL;
+    SetPropA(env.bar, "Explorer95.ShutdownStage", (HANDLE)1);
+    StartDestroy();
+    SetPropA(env.bar, "Explorer95.ShutdownStage", (HANDLE)2);
+    TrayDestroy();
+    SetPropA(env.bar, "Explorer95.ShutdownStage", (HANDLE)3);
+    { NativeView *desktop = env.desktopView; env.desktopView = NULL; NativeViewDestroy(desktop); }
+    SetPropA(env.bar, "Explorer95.ShutdownStage", (HANDLE)4);
     if (env.desktop) DestroyWindow(env.desktop);
     if (env.properties) DestroyWindow(env.properties);
     if (env.startSettings) DestroyWindow(env.startSettings);

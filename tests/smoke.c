@@ -41,11 +41,12 @@ static BOOL CALLBACK ShutdownDialogText(HWND window, LPARAM unused)
 
 static BOOL CALLBACK ShutdownWindowInfo(HWND window, LPARAM unused)
 {
-    DWORD owner; char kind[80], title[160], message[320]; (void)unused;
+    DWORD owner; char kind[80], title[160], message[400]; (void)unused;
     GetWindowThreadProcessId(window, &owner);
     if (owner == process.dwProcessId) {
         GetClassNameA(window, kind, sizeof(kind)); GetWindowTextA(window, title, sizeof(title));
-        wsprintfA(message, "Shutdown: remaining window class=%s title=%s\r\n", kind, title); Log(message);
+        wsprintfA(message, "Shutdown: remaining window class=%s title=%s shell-stage=%lu view-stage=%lu\r\n", kind, title,
+            (DWORD)(UINT_PTR)GetPropA(window, "Explorer95.ShutdownStage"), (DWORD)(UINT_PTR)GetPropA(window, "Explorer95.ViewDestroyStage")); Log(message);
         if (!lstrcmpA(kind, "#32770")) EnumChildWindows(window, ShutdownDialogText, 0);
     }
     return TRUE;

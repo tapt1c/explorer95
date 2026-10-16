@@ -365,6 +365,10 @@ explorer95.exe --settings="C:\EX95TEST\Explorer95.ini"
 - Закрывайте окна браузера через `EnvironmentHost.closeFolders` / BrowserShutdown
   до освобождения рабочего стола и его Shell32-объектов, затем выполняйте OleUninitialize. При
   закрытии освобождайте view, pending/history PIDL, watch, tree и GDI-буферы.
+  Перед уничтожением desktop view обнуляйте env.desktopView и подавляйте его
+  callbacks во время env.closing: нельзя повторно фокусировать или обновлять
+  освобождаемое представление. ShutdownStage/ViewDestroyStage на HWND помогают
+  smoke-тесту показать фазу, если закрытие зависло в старой реализации Shell32.
 
 Для правок Проводника проверяйте историю и ветку Forward, независимость окон,
 нулевые чтения дерева до раскрытия, реальные Copy/Cut/Paste и отмену коллизии,

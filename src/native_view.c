@@ -404,10 +404,14 @@ void NativeViewDestroy(NativeView *view)
         RemovePropA(view->window, property);
     }
     if (view->view) {
+        if (view->desktop) SetPropA(view->parent, "Explorer95.ViewDestroyStage", (HANDLE)1);
         IShellView_UIActivate(view->view, SVUIA_DEACTIVATE);
+        if (view->desktop) SetPropA(view->parent, "Explorer95.ViewDestroyStage", (HANDLE)2);
         IShellView_DestroyViewWindow(view->view);
+        if (view->desktop) SetPropA(view->parent, "Explorer95.ViewDestroyStage", (HANDLE)3);
         IShellView_Release(view->view); view->view = NULL;
     }
+    if (view->desktop) SetPropA(view->parent, "Explorer95.ViewDestroyStage", (HANDLE)4);
     if (view->folder) IShellFolder_Release(view->folder);
     if (view->wallpaper) DeleteObject(view->wallpaper);
     PaintBufferFree(&view->background);
