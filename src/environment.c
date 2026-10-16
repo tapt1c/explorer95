@@ -516,7 +516,7 @@ void EnvCommand(int id)
     case ID_QUICK: env.options.quick = !env.options.quick; EnvSaveOptions(); EnvApplyOptions(); break;
     case ID_EXIT:
         if (!env.primary || MessageBoxA(env.bar, "Exit the active shell?\r\nTo return to the previous desktop, select Restore previous shell\r\nin Taskbar Properties and restart Windows instead.",
-            "Explorer95", MB_YESNO | MB_DEFBUTTON2 | MB_ICONQUESTION) == IDYES) DestroyWindow(env.bar);
+            "Explorer95", MB_YESNO | MB_DEFBUTTON2 | MB_ICONQUESTION) == IDYES) PostMessageA(env.bar, WM_CLOSE, 0, 0);
         break;
     default:
         if (id >= ID_EDGE_MENU && id < ID_EDGE_MENU + 4 && !env.options.locked) {
@@ -660,8 +660,15 @@ static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
         for (i = 0; i < count; ++i) if (DragQueryFileA(drop, i, path, MAX_PATH)) AddQuickFile(path);
         DragFinish(drop); RefreshQuick(); return 0;
     }
+    case WM_CLOSE:
+        /* Keep the appbar HWND valid until registrations and the other shell
+         * windows have been cleaned up outside this procedure. */
+        PostQuitMessage(0); return 0;
     case WM_DESTROY:
-        EnvironmentShutdown(); PaintBufferFree(&barBuffer); PaintBufferFree(&barButtonBuffer); PaintShutdown(); PostQuitMessage(0); return 0;
+        /* Global shell teardown runs after this window procedure unwinds.
+         * Destroying another top-level desktop inside WM_DESTROY can reenter
+         * activation/IME handling while the taskbar is half destroyed. */
+        KillTimer(window, 1); PostQuitMessage(0); return 0;
     }
     return DefWindowProcA(window, message, wp, lp);
 }
@@ -734,15 +741,21 @@ void EnvironmentShutdown(void)
     { NativeView *desktop = env.desktopView; env.desktopView = NULL; NativeViewDestroy(desktop); }
     SetPropA(env.bar, "Explorer95.ShutdownStage", (HANDLE)4);
     if (env.desktop) DestroyWindow(env.desktop);
+    SetPropA(env.bar, "Explorer95.ShutdownStage", (HANDLE)5);
     if (env.properties) DestroyWindow(env.properties);
     if (env.startSettings) DestroyWindow(env.startSettings);
     if (bridge) DestroyWindow(bridge);
+    SetPropA(env.bar, "Explorer95.ShutdownStage", (HANDLE)6);
     if (env.appbar) {
         ZeroMemory(&data, sizeof(data)); data.cbSize = sizeof(data); data.hWnd = env.bar; SHAppBarMessage(ABM_REMOVE, &data);
     } else if (env.primary) SystemParametersInfoA(SPI_SETWORKAREA, 0, &env.originalArea, SPIF_SENDCHANGE);
     for (i = 0; i < quickCount; ++i) if (quick[i].icon) DestroyIcon(quick[i].icon);
     if (quickTip) DestroyWindow(quickTip);
     if (desktopIcon) DestroyIcon(desktopIcon);
+    SetPropA(env.bar, "Explorer95.ShutdownStage", (HANDLE)7);
+    if (IsWindow(env.bar)) DestroyWindow(env.bar);
+    env.bar = NULL;
+    PaintBufferFree(&barBuffer); PaintBufferFree(&barButtonBuffer); PaintShutdown();
 }
 
 /* The classic shell uses the system caption font in bold for Start. The

@@ -208,7 +208,7 @@ void start(void)
         TranslateMessage(&message);
         DispatchMessageA(&message);
     }
-    BrowserShutdown(); EnvironmentShutdown();
+    EnvironmentShutdown(); BrowserShutdown();
     if (SUCCEEDED(ole)) OleUninitialize();
     ExitProcess(0);
 }
