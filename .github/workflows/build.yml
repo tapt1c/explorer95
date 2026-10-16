@@ -1,50 +1,97 @@
 name: Win32 build
-on: [push, pull_request]
+on:
+  # Feature branches are checked through their PR; tags use release.yml.
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      group:
+        description: Smoke group (full for a complete regression run)
+        type: choice
+        default: full
+        options: [full, core, menu, browser]
+
+permissions:
+  contents: read
+concurrency:
+  group: checks-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build:
+  changes:
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      build: ${{ steps.select.outputs.build }}
+      layout: ${{ steps.select.outputs.layout }}
+      group: ${{ steps.select.outputs.group }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check routing rules
+        run: python3 -m unittest discover -s tests -p test_select_checks.py
+      - name: Select relevant checks
+        id: select
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          GROUP: ${{ inputs.group || 'auto' }}
+        run: python3 tests/select_checks.py --base "$BASE_SHA" --head "$HEAD_SHA" --group "$GROUP" | tee -a "$GITHUB_OUTPUT"
+
+  layout:
+    needs: changes
+    if: needs.changes.outputs.layout == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: make layout
+
+  build:
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - name: Install cross compiler
-        run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-i686
+        run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-i686 ccache
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-ubuntu24-i686-${{ hashFiles('Makefile') }}-${{ github.sha }}
+          restore-keys: |
+            ccache-ubuntu24-i686-${{ hashFiles('Makefile') }}-
       - name: Build and check Windows 95 import baseline
-        run: make check
+        run: |
+          make -j2 check CCACHE=ccache
+          make check-build
       - uses: actions/upload-artifact@v4
         with:
           name: explorer95-prototype
           path: build/explorer95.exe
+
   ui-smoke:
-    name: Source UI smoke (Wine 10, x64)
+    name: Source UI smoke
+    needs: changes
+    if: needs.changes.outputs.group != 'none'
+    uses: ./.github/workflows/test-ui.yml
+    with:
+      group: ${{ needs.changes.outputs.group }}
+
+  checks:
+    name: Checks
+    if: always()
+    needs: [changes, layout, build, ui-smoke]
     runs-on: ubuntu-24.04
-    container: debian:13-slim
+    timeout-minutes: 5
     steps:
-      - name: Install the validated Wine 10 development runtime
-        run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y make python3 git ca-certificates passwd gcc-mingw-w64-x86-64 wine wine64 xvfb xauth
-          useradd --create-home --uid 1001 ex95test
-          wine --version
-      - uses: actions/checkout@v4
-      - name: Test source UI in an isolated Wine prefix
+      - name: Require all selected checks to pass
         env:
-          WINEPREFIX: ${{ runner.temp }}/explorer95-wine
-          WINEDEBUG: -all
-          WINEDLLOVERRIDES: mscoree,mshtml=
+          RESULTS: ${{ join(needs.*.result, ' ') }}
         run: |
-          mkdir -p "$WINEPREFIX"
-          chown -R ex95test:ex95test "$GITHUB_WORKSPACE" "$WINEPREFIX"
-          set +e
-          runuser -u ex95test -- xvfb-run -a make ui64-smoke WINE=wine CC64=x86_64-w64-mingw32-gcc-win32 > source-ui.log 2>&1
-          result=$?
-          set -e
-          cat source-ui.log
-          {
-            echo '### Source UI smoke output'
-            echo '```text'
-            tail -n 100 source-ui.log
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-          if [ "$result" -ne 0 ]; then
-            python3 -c 'from pathlib import Path; lines=Path("source-ui.log").read_text(errors="replace").splitlines(); failures=[line for line in lines if line.startswith(("FAIL:","Shutdown:"))]; message="\n".join(failures[-12:]) if failures else "\n".join(lines[-12:]); print("::error title=Source UI smoke::"+message.replace("%","%25").replace("\r","%0D").replace("\n","%0A"))'
-          fi
-          exit "$result"
+          for result in $RESULTS; do
+            case "$result" in success|skipped) ;; *) exit 1 ;; esac
+          done

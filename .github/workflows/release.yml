@@ -6,21 +6,37 @@ on:
       - 'v*'
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  release:
+  # Tags do not also run build.yml. Full UI checks gate publication here.
+  validate-ui:
+    uses: ./.github/workflows/test-ui.yml
+    with:
+      group: full
+  build:
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - name: Install cross compiler
-        run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-i686
+        run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-i686 ccache
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-ubuntu24-i686-${{ hashFiles('Makefile') }}-${{ github.sha }}
+          restore-keys: |
+            ccache-ubuntu24-i686-${{ hashFiles('Makefile') }}-
       - name: Build and check Windows 95 import baseline
-        run: make check
+        run: make -j2 check CCACHE=ccache
+      - name: Check native layout and CI routing
+        run: |
+          make layout
+          python3 -m unittest discover -s tests -p test_select_checks.py
       - name: Package Win32 executable
         env:
           RELEASE_TAG: ${{ github.ref_name }}
@@ -37,6 +53,22 @@ jobs:
           PY
           cd release
           sha256sum explorer95.exe *.zip > SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-files
+          path: release/
+  release:
+    needs: [validate-ui, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-files
+          path: release/
       - name: Publish prerelease and attach downloads
         env:
           GH_TOKEN: ${{ github.token }}

@@ -15,6 +15,7 @@
 
 static PROCESS_INFORMATION process;
 static HWND child;
+typedef enum TestGroup { GROUP_FULL, GROUP_CORE, GROUP_MENU, GROUP_BROWSER } TestGroup;
 
 void *memset(void *destination, int value, size_t count)
 {
@@ -205,32 +206,9 @@ static void HistoryTests(const char *directory, const char *module, const char *
     WritePrivateProfileStringA("Recent", "Program3", appLink, settings);
     OleUninitialize();
 }
-static void LayoutTests(void)
-{
-    const int sizes[][2] = {{320,240}, {640,480}, {800,600}, {1024,768}, {1280,720}, {1920,1080}};
-    const int fonts[] = {14, 24, 70};
-    int size, font, edge, pins, requested, large; char description[128];
-    for (size = 0; size < 6; ++size) for (font = 0; font < 3; ++font) {
-        BOOL okay = TRUE;
-        for (edge = 0; edge < 4; ++edge) for (pins = 0; pins <= 6; pins += 2) for (requested = 0; requested <= 30; requested += 5) for (large = 0; large < 2; ++large) {
-            RECT bounds = {0, 0, sizes[size][0], sizes[size][1]}; StartLayout layout;
-            if (edge == 0) bounds.left += 100;
-            if (edge == 1) bounds.top += 28;
-            if (edge == 2) bounds.right -= 100;
-            if (edge == 3) bounds.bottom -= 28;
-            CalculateStartLayout(&bounds, edge == 2 ? bounds.right - 400 : bounds.left,
-                edge == 3 ? bounds.bottom : bounds.top, 3, 3, fonts[font], pins, requested, 9, large, &layout);
-            okay &= layout.window.left >= bounds.left && layout.window.top >= bounds.top &&
-                layout.window.right <= bounds.right && layout.window.bottom <= bounds.bottom &&
-                layout.recentRows <= requested && layout.recentRows >= 0 && layout.pinRows <= pins &&
-                layout.window.right - layout.window.left == (bounds.right - bounds.left < StartMenuWidth(large) ? bounds.right - bounds.left : StartMenuWidth(large)) &&
-                layout.programsY >= layout.recentTop + layout.recentRows * layout.rowHeight &&
-                layout.rowHeight >= (large ? 40 : 28) && layout.footerY + layout.footerHeight <= layout.window.bottom - layout.window.top - 6;
-        }
-        wsprintfA(description, "Start fits %dx%d with font height %d, all edges, pin counts and recent limits", sizes[size][0], sizes[size][1], fonts[font]);
-        Check(okay, description);
-    }
-}
+#define LAYOUT_FORMAT wsprintfA
+#include "layout_cases.h"
+#undef LAYOUT_FORMAT
 static int PaintedSamples(HWND list)
 {
     HDC dc = GetDC(list); RECT rect; int x, y, samples = 0;
@@ -600,66 +578,9 @@ static void ConfigTests(const char *directory)
     DeleteFileA(ini); DeleteFileA(backup); DeleteFileA(recovery);
 }
 
-static void EnvironmentTests(HWND bar, HWND browser, HWND childWindow, HWND menu, const char *settings)
+static HWND StartSettingsTests(HWND bar, HWND menu, const char *settings)
 {
-    typedef struct Packet { DWORD signature, operation; NOTIFYICONDATAA icon; } Packet;
-    Packet packet;
-    COPYDATASTRUCT copy;
-    HWND tray, notification, properties;
-    RECT rect;
-    char title[128], value[MAX_PATH], quickPath[MAX_PATH], module[MAX_PATH];
-    DWORD started;
-    GetWindowTextA(GetDlgItem(menu, 800), title, sizeof(title));
-    Check(title[0] != 0, "Run updates the recent-program list in Start");
-    GetPrivateProfileStringA("Recent", "Program0", "", value, sizeof(value), settings);
-    Check(value[0] != 0, "recent-program history is persisted");
-
-    CheckStartFits(bar, menu);
-    ContextPinTest(bar, menu, settings);
-    ZeroMemory(&packet, sizeof(packet));
-    packet.signature = 0x34753423; packet.operation = NIM_ADD;
-    packet.icon.cbSize = offsetof(NOTIFYICONDATAA, szTip) + 64;
-    packet.icon.hWnd = childWindow; packet.icon.uID = 95;
-    /* Wine's private tray transport transfers bitmap pixels rather than icon
-     * handles across processes. Test Win95 packet/callback semantics here;
-     * cross-process HICON transfer requires the native Win95 test matrix. */
-    packet.icon.uFlags = NIF_MESSAGE | NIF_TIP;
-    packet.icon.uCallbackMessage = WM_APP + 33;
-    packet.icon.hIcon = LoadIconA(NULL, IDI_APPLICATION);
-    lstrcpyA(packet.icon.szTip, "Explorer95 smoke notification");
-    copy.dwData = 1; copy.cbData = offsetof(Packet, icon) + packet.icon.cbSize; copy.lpData = &packet;
-    Check(SendMessageA(bar, WM_COPYDATA, (WPARAM)childWindow, (LPARAM)&copy), "tray accepts a Win95 ANSI NIM_ADD packet");
-    tray = FindWindowExA(bar, NULL, "TrayNotifyWnd", NULL);
-    notification = FindWindowExA(tray, NULL, "Explorer95.TrayIcon", NULL);
-    while (notification && GetWindowTextA(notification, title, sizeof(title)))
-        notification = FindWindowExA(tray, notification, "Explorer95.TrayIcon", NULL);
-    Check(notification && IsWindowVisible(notification), "tray displays a visible slot for the registered notification");
-    SendMessageA(notification, WM_RBUTTONUP, 0, 0);
-    started = GetTickCount();
-    do { Sleep(50); GetWindowTextA(childWindow, title, sizeof(title)); }
-    while (lstrcmpA(title, "Explorer95 tray callback received") && GetTickCount() - started < 3000);
-    Check(!lstrcmpA(title, "Explorer95 tray callback received"), "tray forwards mouse callbacks with the application message");
-    packet.operation = NIM_MODIFY; packet.icon.uFlags = NIF_TIP;
-    lstrcpyA(packet.icon.szTip, "Updated tooltip");
-    Check(SendMessageA(bar, WM_COPYDATA, (WPARAM)childWindow, (LPARAM)&copy), "tray accepts NIM_MODIFY");
-    packet.signature = 0;
-    Check(!SendMessageA(bar, WM_COPYDATA, (WPARAM)childWindow, (LPARAM)&copy), "tray rejects an invalid signature");
-    packet.signature = 0x34753423; copy.cbData = 8;
-    Check(!SendMessageA(bar, WM_COPYDATA, (WPARAM)childWindow, (LPARAM)&copy), "tray rejects truncated notification data");
-    copy.cbData = offsetof(Packet, icon) + packet.icon.cbSize; packet.operation = NIM_DELETE;
-    Check(SendMessageA(bar, WM_COPYDATA, (WPARAM)childWindow, (LPARAM)&copy), "tray accepts NIM_DELETE");
-    Check(!IsWindow(notification), "deleted notification window is removed");
-
-    lstrcpyA(value, settings);
-    { int length = lstrlenA(value); while (length && value[length - 1] != '\\') --length; value[length] = 0; }
-    wsprintfA(quickPath, "%sQuick Launch\\quick-child.exe", value);
-    GetModuleFileNameA(NULL, module, MAX_PATH);
-    Check(CopyFileA(module, quickPath, TRUE), "add a real executable to the Quick Launch folder");
-
-    SendMessageA(bar, WM_COMMAND, 609, 0); Sleep(200);
-    Check(IsIconic(browser) && IsIconic(childWindow), "Show Desktop minimizes application windows");
-    SendMessageA(bar, WM_COMMAND, 609, 0); Sleep(200);
-    Check(!IsIconic(browser) && !IsIconic(childWindow), "Show Desktop restores only the saved windows");
+    HWND properties; char module[MAX_PATH], title[128];
     SendMessageA(bar, WM_COMMAND, 600, 0);
     properties = WaitFor("Explorer95.Properties", NULL);
     Check(properties != NULL, "taskbar properties open");
@@ -721,6 +642,70 @@ static void EnvironmentTests(HWND bar, HWND browser, HWND childWindow, HWND menu
         CheckStartFits(bar, menu);
         Check(GetPrivateProfileIntA("Start", "RecentCount", -1, settings) == 2, "custom recent count is persisted");
     }
+    return properties;
+}
+
+static void EnvironmentTests(HWND bar, HWND browser, HWND childWindow, HWND menu, const char *settings)
+{
+    typedef struct Packet { DWORD signature, operation; NOTIFYICONDATAA icon; } Packet;
+    Packet packet;
+    COPYDATASTRUCT copy;
+    HWND tray, notification, properties;
+    RECT rect;
+    char title[128], value[MAX_PATH], quickPath[MAX_PATH], module[MAX_PATH];
+    DWORD started;
+    GetWindowTextA(GetDlgItem(menu, 800), title, sizeof(title));
+    Check(title[0] != 0, "Run updates the recent-program list in Start");
+    GetPrivateProfileStringA("Recent", "Program0", "", value, sizeof(value), settings);
+    Check(value[0] != 0, "recent-program history is persisted");
+
+    CheckStartFits(bar, menu);
+    ContextPinTest(bar, menu, settings);
+    ZeroMemory(&packet, sizeof(packet));
+    packet.signature = 0x34753423; packet.operation = NIM_ADD;
+    packet.icon.cbSize = offsetof(NOTIFYICONDATAA, szTip) + 64;
+    packet.icon.hWnd = childWindow; packet.icon.uID = 95;
+    /* Wine's private tray transport transfers bitmap pixels rather than icon
+     * handles across processes. Test Win95 packet/callback semantics here;
+     * cross-process HICON transfer requires the native Win95 test matrix. */
+    packet.icon.uFlags = NIF_MESSAGE | NIF_TIP;
+    packet.icon.uCallbackMessage = WM_APP + 33;
+    packet.icon.hIcon = LoadIconA(NULL, IDI_APPLICATION);
+    lstrcpyA(packet.icon.szTip, "Explorer95 smoke notification");
+    copy.dwData = 1; copy.cbData = offsetof(Packet, icon) + packet.icon.cbSize; copy.lpData = &packet;
+    Check(SendMessageA(bar, WM_COPYDATA, (WPARAM)childWindow, (LPARAM)&copy), "tray accepts a Win95 ANSI NIM_ADD packet");
+    tray = FindWindowExA(bar, NULL, "TrayNotifyWnd", NULL);
+    notification = FindWindowExA(tray, NULL, "Explorer95.TrayIcon", NULL);
+    while (notification && GetWindowTextA(notification, title, sizeof(title)))
+        notification = FindWindowExA(tray, notification, "Explorer95.TrayIcon", NULL);
+    Check(notification && IsWindowVisible(notification), "tray displays a visible slot for the registered notification");
+    SendMessageA(notification, WM_RBUTTONUP, 0, 0);
+    started = GetTickCount();
+    do { Sleep(50); GetWindowTextA(childWindow, title, sizeof(title)); }
+    while (lstrcmpA(title, "Explorer95 tray callback received") && GetTickCount() - started < 3000);
+    Check(!lstrcmpA(title, "Explorer95 tray callback received"), "tray forwards mouse callbacks with the application message");
+    packet.operation = NIM_MODIFY; packet.icon.uFlags = NIF_TIP;
+    lstrcpyA(packet.icon.szTip, "Updated tooltip");
+    Check(SendMessageA(bar, WM_COPYDATA, (WPARAM)childWindow, (LPARAM)&copy), "tray accepts NIM_MODIFY");
+    packet.signature = 0;
+    Check(!SendMessageA(bar, WM_COPYDATA, (WPARAM)childWindow, (LPARAM)&copy), "tray rejects an invalid signature");
+    packet.signature = 0x34753423; copy.cbData = 8;
+    Check(!SendMessageA(bar, WM_COPYDATA, (WPARAM)childWindow, (LPARAM)&copy), "tray rejects truncated notification data");
+    copy.cbData = offsetof(Packet, icon) + packet.icon.cbSize; packet.operation = NIM_DELETE;
+    Check(SendMessageA(bar, WM_COPYDATA, (WPARAM)childWindow, (LPARAM)&copy), "tray accepts NIM_DELETE");
+    Check(!IsWindow(notification), "deleted notification window is removed");
+
+    lstrcpyA(value, settings);
+    { int length = lstrlenA(value); while (length && value[length - 1] != '\\') --length; value[length] = 0; }
+    wsprintfA(quickPath, "%sQuick Launch\\quick-child.exe", value);
+    GetModuleFileNameA(NULL, module, MAX_PATH);
+    Check(CopyFileA(module, quickPath, TRUE), "add a real executable to the Quick Launch folder");
+
+    SendMessageA(bar, WM_COMMAND, 609, 0); Sleep(200);
+    Check(IsIconic(browser) && IsIconic(childWindow), "Show Desktop minimizes application windows");
+    SendMessageA(bar, WM_COMMAND, 609, 0); Sleep(200);
+    Check(!IsIconic(browser) && !IsIconic(childWindow), "Show Desktop restores only the saved windows");
+    properties = StartSettingsTests(bar, menu, settings);
     SendMessageA(GetDlgItem(properties, 601), BM_SETCHECK, BST_UNCHECKED, 0);
     SendMessageA(GetDlgItem(properties, 620), CB_SETCURSEL, 1, 0);
     SendMessageA(GetDlgItem(properties, 621), CB_SETCURSEL, 1, 0);
@@ -796,6 +781,7 @@ void start(void)
     RECT originalWork;
     HANDLE file;
     int i, length;
+    TestGroup group = GROUP_FULL;
     DWORD started;
     GetModuleFileNameA(NULL, module, MAX_PATH);
     /* The helper mode supplies a real top-level task for taskbar/Run tests. */
@@ -821,6 +807,18 @@ void start(void)
         ExitProcess(0);
     }
 
+    {
+        const char *args = GetCommandLineA();
+        if (*args == '"') { ++args; while (*args && *args != '"') ++args; if (*args) ++args; }
+        else while (*args && *args != ' ' && *args != '\t') ++args;
+        while (*args == ' ' || *args == '\t') ++args;
+        if (*args) {
+            if (!lstrcmpA(args, "--group=core")) group = GROUP_CORE;
+            else if (!lstrcmpA(args, "--group=menu")) group = GROUP_MENU;
+            else if (!lstrcmpA(args, "--group=browser")) group = GROUP_BROWSER;
+            else Check(!lstrcmpA(args, "--group=full"), "known test group (full, core, menu, browser)");
+        }
+    }
     Check(!FindWindowA("Explorer95.Taskbar", NULL), "test starts without an existing Explorer95 instance");
     SystemParametersInfoA(SPI_GETWORKAREA, 0, &originalWork, 0);
     GetTempPathA(MAX_PATH, temp);
@@ -839,23 +837,33 @@ void start(void)
     wsprintfA(settingsDir, "%s profile", fixture);
     Check(CreateDirectoryA(settingsDir, NULL), "create isolated settings directory");
     wsprintfA(settings, "%s\\settings.ini", settingsDir);
-    PaintTests(); LayoutTests(); HistoryTests(settingsDir, module, settings);
-    ConfigTests(settingsDir);
+    if (group != GROUP_BROWSER) { LayoutTests(); HistoryTests(settingsDir, module, settings); }
+    if (group == GROUP_FULL || group == GROUP_CORE) { PaintTests(); ConfigTests(settingsDir); }
+    if (group == GROUP_CORE) goto cleanup;
     wsprintfA(command, "\"%s\" --settings=\"%s\"", executable, settings);
     ZeroMemory(&startup, sizeof(startup)); startup.cb = sizeof(startup);
     Check(CreateProcessA(NULL, command, NULL, NULL, FALSE, 0, NULL, NULL, &startup, &process), "launch built EXE");
     bar = WaitFor("Explorer95.Taskbar", NULL);
     desktop = WaitFor("Explorer95.Desktop", NULL);
     Check(bar && desktop, "taskbar and full desktop created");
-    GetPrivateProfileStringA("Recent", "Program0", "", actual, sizeof(actual), settings);
-    Check(!lstrcmpiA(actual, module), "existing history drops document shortcuts and compacts the remaining programs");
-    GetPrivateProfileStringA("Recent", "Arguments0", "", actual, sizeof(actual), settings);
-    Check(!lstrcmpA(actual, "!\"--child\""), "history cleanup preserves the surviving program arguments");
-    GetPrivateProfileStringA("Recent", "Program2", "", actual, sizeof(actual), settings);
-    Check(!actual[0], "filtered document entries are removed from the persisted program history");
+    if (group != GROUP_BROWSER) {
+        GetPrivateProfileStringA("Recent", "Program0", "", actual, sizeof(actual), settings);
+        Check(!lstrcmpiA(actual, module), "existing history drops document shortcuts and compacts the remaining programs");
+        GetPrivateProfileStringA("Recent", "Arguments0", "", actual, sizeof(actual), settings);
+        Check(!lstrcmpA(actual, "!\"--child\""), "history cleanup preserves the surviving program arguments");
+        GetPrivateProfileStringA("Recent", "Program2", "", actual, sizeof(actual), settings);
+        Check(!actual[0], "filtered document entries are removed from the persisted program history");
+    }
     started = GetTickCount();
     while (!FindWindowExA(desktop, NULL, NULL, NULL) && GetTickCount() - started < 10000) Sleep(50);
     Check(FindWindowExA(desktop, NULL, NULL, NULL) != NULL, "desktop hosts the installed native shell view");
+    if (group == GROUP_MENU) {
+        menu = FindWindowA("Explorer95.Start", NULL);
+        CheckStartFits(bar, menu); ContextPinTest(bar, menu, settings);
+        dialog = StartSettingsTests(bar, menu, settings);
+        SendMessageA(dialog, WM_COMMAND, IDCANCEL, 0);
+        goto shutdown;
+    }
     SendMessageA(bar, WM_COMMAND, 315, 0);
     browser = WaitFor("Explorer95.Files", NULL);
     Check(browser != NULL, "Explorer opens an independent file window");
@@ -908,6 +916,7 @@ void start(void)
 
     BrowserTests(browser, fixture, settingsDir, settings);
     NativeFolderTests(menu);
+    if (group == GROUP_BROWSER) goto shutdown;
     SendMessageA(menu, WM_COMMAND, 305, 0);
     run = WaitFor("Explorer95.Run", NULL);
     Check(run != NULL, "Run dialog opens");
@@ -935,6 +944,7 @@ void start(void)
     started = GetTickCount(); while (IsIconic(child) && GetTickCount() - started < 3000) Sleep(50);
     Check(!IsIconic(child), "task button restores minimized window");
     EnvironmentTests(bar, browser, child, menu, settings);
+shutdown:
     PostMessageA(child, WM_CLOSE, 0, 0);
     PostMessageA(bar, WM_CLOSE, 0, 0);
     { DWORD result = WaitForGuiProcess(process.hProcess, 5000);
@@ -946,6 +956,7 @@ void start(void)
         SystemParametersInfoA(SPI_GETWORKAREA, 0, &work, 0);
         Check(EqualRect(&work, &originalWork), "exit restores the original desktop work area");
     }
+    if (group != GROUP_FULL) goto cleanup;
     wsprintfA(command, "\"%s\" --settings=\"%s\"", executable, settings);
     Check(CreateProcessA(NULL, command, NULL, NULL, FALSE, 0, NULL, NULL, &startup, &process), "restart with saved profile");
     bar = WaitFor("Explorer95.Taskbar", NULL);
@@ -984,6 +995,7 @@ void start(void)
     PostMessageA(bar, WM_CLOSE, 0, 0);
     Check(WaitForGuiProcess(process.hProcess, 5000) == WAIT_OBJECT_0, "restarted shell exits cleanly");
     CloseHandle(process.hThread); CloseHandle(process.hProcess);
+cleanup:
     DeleteFileA(settings);
     wsprintfA(path, "%s\\history-document.txt", settingsDir); DeleteFileA(path);
     wsprintfA(path, "%s\\document.lnk", settingsDir); DeleteFileA(path);
@@ -995,6 +1007,6 @@ void start(void)
     wsprintfA(path, "%s\\empty", fixture); RemoveDirectoryA(path);
     wsprintfA(path, "%s\\sub", fixture); RemoveDirectoryA(path);
     Check(RemoveDirectoryA(fixture), "temporary fixtures removed");
-    Log("All UI smoke checks passed.\r\n");
+    Log("Selected smoke group passed.\r\n");
     ExitProcess(0);
 }
