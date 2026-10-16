@@ -221,6 +221,28 @@ static int PaintedSamples(HWND list)
     ReleaseDC(list, dc); return samples;
 }
 static BOOL Exists(const char *path) { return GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES; }
+static BOOL DialogBackground(HWND window, int x, int y, BOOL children)
+{
+    POINT point = {x, y}; RECT patch; HDC screen; COLORREF color, expected; DWORD started;
+    ClientToScreen(window, &point); SetRect(&patch, point.x, point.y, point.x + 6, point.y + 6);
+    screen = GetDC(NULL); expected = GetPixel(screen, point.x + 2, point.y + 2);
+    FillRect(screen, &patch, GetStockObject(expected == RGB(0,0,0) ? WHITE_BRUSH : BLACK_BRUSH));
+    GetPixel(screen, point.x + 2, point.y + 2); /* Flush our GDI batch before the other process paints. */
+    ReleaseDC(NULL, screen);
+    /* Test the parent's background contract independently of Wine's tab and
+     * groupbox implementation: Win95 leaves these child interiors transparent. */
+    RedrawWindow(window, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | (children ? RDW_ALLCHILDREN : RDW_NOCHILDREN));
+    started = GetTickCount();
+    do {
+        Sleep(20); screen = GetDC(NULL); color = GetPixel(screen, point.x + 2, point.y + 2); ReleaseDC(NULL, screen);
+    } while (color != expected && GetTickCount() - started < 1000);
+    if (color != expected) {
+        char note[160], kind[64]; GetClassNameA(GetForegroundWindow(), kind, sizeof(kind));
+        wsprintfA(note, "dialog background at %d,%d: actual %08lx expected %08lx, foreground %s\r\n", x, y, color, expected, kind); Log(note);
+    }
+    RedrawWindow(window, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+    return (expected == GetSysColor(COLOR_BTNFACE) || (children && expected == GetSysColor(COLOR_WINDOW))) && color == expected;
+}
 static void WaitSelection(HWND list)
 {
     DWORD started = GetTickCount();
@@ -369,6 +391,7 @@ static void BrowserTests(HWND browser, const char *fixture, const char *settings
       Check(SendMessageA(list, LVM_GETITEMCOUNT, 0, 0) == 3, "hidden files are excluded by default"); }
     SendMessageA(browser, WM_COMMAND, ID_BROWSER_OPTIONS, 0); options = WaitFor("Explorer95.FolderOptions", NULL);
     Check(options != NULL, "Folder Options exposes appearance and preset toolbar controls");
+    Check(DialogBackground(options, 120, 136, FALSE), "Folder Options erases behind transparent Win95 groupboxes");
     for (i = 0; i < 6; ++i) SendDlgItemMessageA(options, 480 + i, BM_SETCHECK, BST_CHECKED, 0);
     SendDlgItemMessageA(options, 490, BM_SETCHECK, BST_UNCHECKED, 0);
     SendDlgItemMessageA(options, 491, BM_SETCHECK, BST_UNCHECKED, 0);
@@ -589,6 +612,51 @@ static HWND OpenSettings(HWND bar)
     HWND window; SendMessageA(bar, WM_COMMAND, 600, 0); window = WaitFor("Explorer95.Properties", NULL);
     Check(window != NULL, "unified environment properties open"); return window;
 }
+static BOOL PreviewStartMatches(HWND preview, HWND start, int x, int y)
+{
+    HDC sample = GetDC(preview), live = GetDC(start); RECT rect; int px, py; BOOL equal;
+    DWORD started = GetTickCount();
+    GetClientRect(start, &rect);
+    /* RedrawWindow on another process can return before Wine finishes that
+     * process's paints. Wait for the complete image rather than a partial one. */
+    do {
+        equal = TRUE;
+        for (py = 0; py < rect.bottom && equal; ++py) for (px = 0; px < rect.right; ++px) {
+            COLORREF expected = GetPixel(live, px, py), actual = GetPixel(sample, x + px, y + py);
+            if (expected == CLR_INVALID || expected != actual) { equal = FALSE; break; }
+        }
+        if (!equal) Sleep(20);
+    } while (!equal && GetTickCount() - started < 1000);
+    ReleaseDC(start, live); ReleaseDC(preview, sample); return equal;
+}
+static void SettingsPaintingTests(HWND window, HWND bar)
+{
+    HWND preview, cover; RECT rect; int i, barHeight;
+    BOOL large = SendDlgItemMessageA(window, 603, BM_GETCHECK, 0, 0) == BST_CHECKED &&
+        SendDlgItemMessageA(window, 607, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    barHeight = large ? 40 : 28;
+    Check(DialogBackground(window, 40, 256, FALSE), "Taskbar page erases behind transparent Win95 tabs and groupboxes");
+    preview = GetDlgItem(window, 1018); GetClientRect(preview, &rect);
+    Check(PreviewStartMatches(preview, GetDlgItem(bar, 100), 4, (rect.bottom - barHeight) / 2 + 3),
+        "Taskbar preview Start matches every pixel of the real Start button at native size");
+    for (i = 1; i < 5; ++i) SettingsPage(window, i, 0);
+    for (i = 0; i < 3; ++i) SettingsPage(window, 1, i);
+    SettingsPage(window, 2, -1);
+    Check(IsWindowVisible(GetDlgItem(window, 1010)), "Desktop controls are visible after cycling main and Start tabs");
+    Check(DialogBackground(window, 505, 300, TRUE), "Desktop page erases old page contents behind the native tab");
+    preview = GetDlgItem(window, 1020); GetClientRect(preview, &rect);
+    Check(PreviewStartMatches(preview, GetDlgItem(bar, 100), 6, rect.bottom - 4 - barHeight + 3),
+        "Desktop preview contains the complete native Start button instead of a floating flag");
+    GetWindowRect(window, &rect);
+    cover = CreateWindowExA(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, "STATIC", "", WS_POPUP | WS_VISIBLE | SS_BLACKRECT,
+        rect.left + 25, rect.top + 75, 460, 230, NULL, NULL, GetModuleHandleA(NULL), NULL);
+    Sleep(50); DestroyWindow(cover);
+    RedrawWindow(window, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+    GetClientRect(preview, &rect);
+    Check(cover != NULL && PreviewStartMatches(preview, GetDlgItem(bar, 100), 6, rect.bottom - 4 - barHeight + 3),
+        "settings recover after an overlapping window is removed");
+    SettingsPage(window, 0, -1);
+}
 static void CloseStartPopup(HWND menu)
 {
     DWORD started = GetTickCount(); HWND popup = FindWindowA("#32768", NULL);
@@ -649,6 +717,7 @@ static HWND StartSettingsTests(HWND bar, HWND menu, const char *settings)
     GetWindowRect(properties, &rect);
     Check(rect.left >= 0 && rect.top >= 0 && rect.right <= GetSystemMetrics(SM_CXSCREEN) && rect.bottom <= GetSystemMetrics(SM_CYSCREEN), "environment settings fit the screen");
     Check(!IsWindowEnabled(GetDlgItem(properties, 0x3021)), "Apply starts disabled");
+    SettingsPaintingTests(properties, bar);
     WritePrivateProfileStringA("Explorer", "SettingsSentinel", "keep", settings);
     { UINT initialMaximum;
       SetDlgItemInt(properties, 627, 30, FALSE); SendMessageA(properties, WM_COMMAND, 1003, 0);

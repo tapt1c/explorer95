@@ -801,59 +801,61 @@ static HFONT CreateStartFont(void)
     font.lfWeight = FW_BOLD;
     return CreateFontIndirectA(&font);
 }
-int EnvStartButtonWidth(void)
+int EnvStartLabelWidth(const char *label)
 {
     HDC dc = GetDC(env.bar); SIZE size = {0, 0}; HFONT old, font = CreateStartFont();
     old = SelectObject(dc, font ? font : env.host.font);
-    GetTextExtentPoint32A(dc, env.options.startLabel, lstrlenA(env.options.startLabel), &size);
+    GetTextExtentPoint32A(dc, label, lstrlenA(label), &size);
     SelectObject(dc, old); if (font) DeleteObject(font); ReleaseDC(env.bar, dc);
     /* 54 x 22 is the classic Start size at default Win95 font metrics.
      * Keep that minimum while allowing the user's caption/font to grow. */
     return Clamp(size.cx + 26, 54, 240);
 }
-static BOOL DrawStartButton(const DRAWITEMSTRUCT *item)
+int EnvStartButtonWidth(void) { return EnvStartLabelWidth(env.options.startLabel); }
+void EnvPaintStartButton(HDC dc, const RECT *bounds, const char *label, BOOL down, BOOL focus)
 {
-    RECT frame = item->rcItem, text = frame; char label[32];
-    /* A button can lose its transient pushed state when focus enters the
-     * popup. Keep the classic latched appearance until Start actually closes. */
-    BOOL down = (item->itemState & ODS_SELECTED) != 0 || IsWindowVisible(env.start);
+    RECT frame = *bounds, text = frame;
     int offset = down ? 1 : 0;
     HFONT font = CreateStartFont(), old;
-    FillRect(item->hDC, &frame, (HBRUSH)(COLOR_BTNFACE + 1));
-    DrawFrameControl(item->hDC, &frame, DFC_BUTTON, DFCS_BUTTONPUSH | (down ? DFCS_PUSHED : 0));
-    PaintStartLogo(item->hDC, frame.left + 3 + offset, frame.top + (frame.bottom - frame.top - 16) / 2 + offset);
-    old = SelectObject(item->hDC, font ? font : env.host.font);
-    SetBkMode(item->hDC, TRANSPARENT); SetTextColor(item->hDC, GetSysColor(COLOR_BTNTEXT));
-    GetWindowTextA(item->hwndItem, label, sizeof(label));
+    FillRect(dc, &frame, (HBRUSH)(COLOR_BTNFACE + 1));
+    DrawFrameControl(dc, &frame, DFC_BUTTON, DFCS_BUTTONPUSH | (down ? DFCS_PUSHED : 0));
+    PaintStartLogo(dc, frame.left + 3 + offset, frame.top + (frame.bottom - frame.top - 16) / 2 + offset);
+    old = SelectObject(dc, font ? font : env.host.font);
+    SetBkMode(dc, TRANSPARENT); SetTextColor(dc, GetSysColor(COLOR_BTNTEXT));
     text.left += 23 + offset; text.right -= 3 - offset;
     text.top += offset; text.bottom += offset;
-    DrawTextA(item->hDC, label, -1, &text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
-    if (item->itemState & ODS_FOCUS) { InflateRect(&frame, -3, -3); DrawFocusRect(item->hDC, &frame); }
-    SelectObject(item->hDC, old); if (font) DeleteObject(font); return TRUE;
+    DrawTextA(dc, label, -1, &text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    if (focus) { InflateRect(&frame, -3, -3); DrawFocusRect(dc, &frame); }
+    SelectObject(dc, old); if (font) DeleteObject(font);
 }
-BOOL EnvDrawBarButton(const DRAWITEMSTRUCT *item)
+void EnvPaintTaskButton(HDC dc, const RECT *bounds, const char *label, HICON icon, BOOL down, BOOL focus)
 {
-    RECT rect = item->rcItem, text = rect; char label[160];
-    BOOL down = (item->itemState & ODS_SELECTED) != 0;
-    HICON icon = NULL; HFONT font = NULL, old; LOGFONTA lf;
-    int index = (int)item->CtlID - ID_TASK;
-    if (item->CtlID == ID_START) return DrawStartButton(item);
-    if (index >= 0 && index < taskCount) {
-        down = down || tasks[index].active;
-        icon = tasks[index].icon;
-    } else return FALSE;
-    FillRect(item->hDC, &rect, (HBRUSH)(INT_PTR)((down ? COLOR_3DLIGHT : COLOR_BTNFACE) + 1));
-    DrawEdge(item->hDC, &rect, down ? EDGE_SUNKEN : EDGE_RAISED, BF_RECT);
+    RECT rect = *bounds, text = rect;
+    HFONT font = NULL, old; LOGFONTA lf;
+    FillRect(dc, &rect, (HBRUSH)(INT_PTR)((down ? COLOR_3DLIGHT : COLOR_BTNFACE) + 1));
+    DrawEdge(dc, &rect, down ? EDGE_SUNKEN : EDGE_RAISED, BF_RECT);
     if (!icon) icon = LoadIconA(NULL, IDI_APPLICATION);
-    DrawIconEx(item->hDC, 4 + (down ? 1 : 0), (rect.bottom - 16) / 2 + (down ? 1 : 0), icon, 16, 16, 0, NULL, DI_NORMAL);
+    DrawIconEx(dc, rect.left + 4 + (down ? 1 : 0), rect.top + (rect.bottom - rect.top - 16) / 2 + (down ? 1 : 0), icon, 16, 16, 0, NULL, DI_NORMAL);
     if (down) {
         GetObjectA(env.host.font, sizeof(lf), &lf); lf.lfWeight = FW_BOLD; font = CreateFontIndirectA(&lf);
     }
-    old = SelectObject(item->hDC, font ? font : env.host.font);
-    SetBkMode(item->hDC, TRANSPARENT); SetTextColor(item->hDC, GetSysColor(COLOR_BTNTEXT));
-    GetWindowTextA(item->hwndItem, label, sizeof(label));
+    old = SelectObject(dc, font ? font : env.host.font);
+    SetBkMode(dc, TRANSPARENT); SetTextColor(dc, GetSysColor(COLOR_BTNTEXT));
     text.left += 23 + (down ? 1 : 0); text.right -= 3;
-    DrawTextA(item->hDC, label, -1, &text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
-    if (item->itemState & ODS_FOCUS) { InflateRect(&rect, -3, -3); DrawFocusRect(item->hDC, &rect); }
-    SelectObject(item->hDC, old); if (font) DeleteObject(font); return TRUE;
+    DrawTextA(dc, label, -1, &text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    if (focus) { InflateRect(&rect, -3, -3); DrawFocusRect(dc, &rect); }
+    SelectObject(dc, old); if (font) DeleteObject(font);
+}
+BOOL EnvDrawBarButton(const DRAWITEMSTRUCT *item)
+{
+    char label[160]; int index = (int)item->CtlID - ID_TASK;
+    BOOL down = (item->itemState & ODS_SELECTED) != 0, focus = (item->itemState & ODS_FOCUS) != 0;
+    GetWindowTextA(item->hwndItem, label, sizeof(label));
+    if (item->CtlID == ID_START) {
+        /* Keep Start latched while focus is inside its popup. */
+        EnvPaintStartButton(item->hDC, &item->rcItem, label, down || IsWindowVisible(env.start), focus);
+    } else if (index >= 0 && index < taskCount) {
+        EnvPaintTaskButton(item->hDC, &item->rcItem, label, tasks[index].icon, down || tasks[index].active, focus);
+    } else return FALSE;
+    return TRUE;
 }

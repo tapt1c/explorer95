@@ -95,7 +95,9 @@ static void ShowPage(HWND window)
         ShowWindow(controls[i].window, show ? SW_SHOWNA : SW_HIDE);
     }
     if (page == SETTINGS_START) StartSettingsScreenChanged(window);
-    RedrawWindow(window, NULL, NULL, RDW_INVALIDATE | RDW_ALLCHILDREN);
+    /* Win95 tab/group controls leave their interior transparent. Erase the
+     * dialog first, including the previous page, then redraw its children. */
+    RedrawWindow(window, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
 }
 static HWND Control(HWND w, int p, const char *kind, const char *text, DWORD style, int id, int x, int y, int width, int height)
 { return SettingsControl(w, p, -1, kind, text, style, id, x, y, width, height); }
@@ -113,6 +115,47 @@ int SettingsRecentMaximum(HWND window, int pins, BOOL large)
     options.largeIcons = Checked(window, ID_LARGE); options.largeStartIcons = large;
     return StartMaximumRecentOptions(pins, &options);
 }
+static void PreviewTaskbar(HDC dc, const RECT *bounds, BOOL sampleTasks)
+{
+    RECT part = *bounds; char label[32], clock[32];
+    int startWidth, begin, end, i, count, taskWidth;
+    BOOL quick = Checked(env.properties, ID_QUICK), large = Checked(env.properties, ID_LARGE);
+    int iconSize = large ? 32 : 16, slot = large ? 36 : 22;
+    GetDlgItemTextA(env.properties, ID_STARTLABEL, label, sizeof(label));
+    if (!label[0]) lstrcpyA(label, "Start");
+    startWidth = EnvStartLabelWidth(label);
+    FillRect(dc, bounds, (HBRUSH)(COLOR_BTNFACE + 1)); DrawEdge(dc, &part, EDGE_RAISED, BF_TOP);
+    SetRect(&part, bounds->left + 2, bounds->top + 3, bounds->left + 2 + startWidth, bounds->top + 25);
+    EnvPaintStartButton(dc, &part, label, FALSE, FALSE);
+    begin = bounds->left + startWidth + 10; end = bounds->right - 8;
+    if (quick) {
+        HICON icon = EnvSystemIcon(35);
+        SetRect(&part, begin - 4, bounds->top + 4, begin - 2, bounds->bottom - 3); DrawEdge(dc, &part, EDGE_ETCHED, BF_LEFT);
+        if (icon) { DrawIconEx(dc, begin + (slot - iconSize) / 2, bounds->top + (bounds->bottom - bounds->top - iconSize) / 2, icon, iconSize, iconSize, 0, NULL, DI_NORMAL); DestroyIcon(icon); }
+        begin += slot + 10;
+        SetRect(&part, begin - 4, bounds->top + 4, begin - 2, bounds->bottom - 3); DrawEdge(dc, &part, EDGE_ETCHED, BF_LEFT);
+    }
+    if (Checked(env.properties, ID_CLOCK)) {
+        SetRect(&part, bounds->right - 71, bounds->top + 3, bounds->right - 3, bounds->bottom - 3);
+        DrawEdge(dc, &part, BDR_SUNKENOUTER, BF_RECT);
+        GetWindowTextA(env.clock, clock, sizeof(clock)); if (!clock[0]) lstrcpyA(clock, "12:34");
+        SelectObject(dc, env.host.font); SetBkMode(dc, TRANSPARENT); SetTextColor(dc, GetSysColor(COLOR_BTNTEXT));
+        part.left += 7; part.right -= 3;
+        DrawTextA(dc, clock, -1, &part, DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+        end -= 68;
+    }
+    if (!sampleTasks || end <= begin) return;
+    count = Checked(env.properties, ID_GROUP) ? 1 : 2;
+    taskWidth = (end - begin) / count;
+    i = GetDlgItemInt(env.properties, ID_WIDTH, NULL, FALSE);
+    if (i >= 80 && i <= 300 && taskWidth > i) taskWidth = i;
+    for (i = 0; i < count; ++i) {
+        HICON icon = EnvSystemIcon(i ? 16 : 5);
+        SetRect(&part, begin + i * taskWidth, bounds->top + 3, begin + (i + 1) * taskWidth - 2, bounds->top + 25);
+        EnvPaintTaskButton(dc, &part, count == 1 ? "Explorer95 (2)" : i ? "My Computer" : "Explorer95", icon, i == 0, FALSE);
+        if (icon) DestroyIcon(icon);
+    }
+}
 static void Preview(const DRAWITEMSTRUCT *item)
 {
     RECT rect = item->rcItem, part; HDC dc = PaintBufferBegin(&previewBuffer, item->hDC, &rect);
@@ -120,13 +163,9 @@ static void Preview(const DRAWITEMSTRUCT *item)
     FillRect(dc, &rect, (HBRUSH)(COLOR_BTNFACE + 1)); DrawEdge(dc, &rect, EDGE_SUNKEN, BF_RECT);
     SelectObject(dc, env.host.font); SetBkMode(dc, TRANSPARENT); SetTextColor(dc, GetSysColor(COLOR_BTNTEXT));
     if (item->CtlID == ID_PREVIEW_TASKBAR) {
-        part = rect; InflateRect(&part, -5, -6); DrawEdge(dc, &part, EDGE_RAISED, BF_RECT);
-        part.right = part.left + 72; DrawEdge(dc, &part, EDGE_RAISED, BF_RECT); PaintStartLogo(dc, part.left + 4, part.top + 4);
-        part.left += 24; DrawTextA(dc, "Start", -1, &part, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-        if (Checked(env.properties, ID_QUICK)) { HICON icon = EnvSystemIcon(4); DrawIconEx(dc, 86, 11, icon, 16, 16, 0, NULL, DI_NORMAL); if (icon) DestroyIcon(icon); }
-        SetRect(&part, 112, 9, width - 90, height - 9); DrawEdge(dc, &part, EDGE_SUNKEN, BF_RECT);
-        part.left += 8; DrawTextA(dc, Checked(env.properties, ID_GROUP) ? "Explorer95 (2)" : "Explorer95", -1, &part, DT_SINGLELINE | DT_VCENTER);
-        if (Checked(env.properties, ID_CLOCK)) { SetRect(&part, width - 78, 8, width - 6, height - 8); DrawEdge(dc, &part, EDGE_SUNKEN, BF_RECT); DrawTextA(dc, "12:34", -1, &part, DT_CENTER | DT_SINGLELINE | DT_VCENTER); }
+        int barHeight = Checked(env.properties, ID_QUICK) && Checked(env.properties, ID_LARGE) ? 40 : 28;
+        SetRect(&part, 2, (height - barHeight) / 2, width - 2, (height + barHeight) / 2);
+        PreviewTaskbar(dc, &part, TRUE);
     } else if (item->CtlID == ID_PREVIEW_START) {
         BOOL classic = SendDlgItemMessageA(env.properties, ID_STARTSTYLE, CB_GETCURSEL, 0, 0) == 1;
         BOOL large = Checked(env.properties, ID_STARTLARGE); int iconSize = large ? 24 : 16;
@@ -147,8 +186,8 @@ static void Preview(const DRAWITEMSTRUCT *item)
         if (Checked(env.properties, ID_DESKTOPICONS)) {
             HICON icon = EnvSystemIcon(16); DrawIconEx(dc, 16, 15, icon, 32, 32, 0, NULL, DI_NORMAL); if (icon) DestroyIcon(icon);
         }
-        SetRect(&part, 4, height - 27, width - 4, height - 4); FillRect(dc, &part, (HBRUSH)(COLOR_BTNFACE + 1)); DrawEdge(dc, &part, EDGE_RAISED, BF_TOP);
-        PaintStartLogo(dc, 10, height - 23);
+        int barHeight = Checked(env.properties, ID_QUICK) && Checked(env.properties, ID_LARGE) ? 40 : 28;
+        SetRect(&part, 4, height - 4 - barHeight, width - 4, height - 4); PreviewTaskbar(dc, &part, FALSE);
     }
     PaintBufferEnd(&previewBuffer, item->hDC, &item->rcItem);
 }
@@ -210,7 +249,7 @@ static LRESULT CALLBACK PropertiesProc(HWND window, UINT message, WPARAM wp, LPA
         control = EnvControl(window, WC_TABCONTROLA, "", WS_TABSTOP | WS_CLIPSIBLINGS, ID_SETTINGS_TABS); MoveWindow(control, 8, 8, 504, 336, FALSE);
         ZeroMemory(&item, sizeof(item)); item.mask = TCIF_TEXT;
         for (i = 0; i < 5; ++i) { item.pszText = (LPSTR)tabs[i]; SendMessageA(control, TCM_INSERTITEMA, i, (LPARAM)&item); }
-        Control(window, SETTINGS_TASKBAR, "STATIC", "", SS_OWNERDRAW, ID_PREVIEW_TASKBAR, 24, 50, 472, 42);
+        Control(window, SETTINGS_TASKBAR, "STATIC", "", SS_OWNERDRAW, ID_PREVIEW_TASKBAR, 24, 48, 472, 48);
         Control(window, SETTINGS_TASKBAR, "BUTTON", "Taskbar appearance", BS_GROUPBOX, 0, 20, 102, 480, 204);
         Checkbox(window, SETTINGS_TASKBAR, "Lock the taskbar", ID_LOCK, env.options.locked, 32, 124, 226);
         Checkbox(window, SETTINGS_TASKBAR, "Auto-hide the taskbar", ID_AUTOHIDE, env.options.autoHide, 32, 152, 226);
@@ -288,7 +327,7 @@ static LRESULT CALLBACK PropertiesProc(HWND window, UINT message, WPARAM wp, LPA
         if (x < 0) x = 0;
         if (y < 0) y = 0;
         SetWindowPos(window, NULL, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-        RedrawWindow(window, NULL, NULL, RDW_INVALIDATE | RDW_ALLCHILDREN); return 0;
+        RedrawWindow(window, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN); return 0;
     }
     case WM_CLOSE: DestroyWindow(window); return 0;
     case WM_DESTROY: PaintBufferFree(&previewBuffer); env.properties = NULL; controlCount = 0; return 0;
@@ -298,7 +337,9 @@ static LRESULT CALLBACK PropertiesProc(HWND window, UINT message, WPARAM wp, LPA
 void PropertiesOpen(void)
 {
     if (!env.properties) {
-        RECT rect = {0,0,520,390}, area; int x, y, width, height; DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN;
+        /* Native Win95 tab/groupbox interiors are transparent: the dialog must
+         * be allowed to erase behind these sibling controls. */
+        RECT rect = {0,0,520,390}, area; int x, y, width, height; DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU;
         AdjustWindowRectEx(&rect, style, FALSE, WS_EX_DLGMODALFRAME);
         SystemParametersInfoA(SPI_GETWORKAREA, 0, &area, 0);
         width = rect.right - rect.left; height = rect.bottom - rect.top;

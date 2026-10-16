@@ -598,24 +598,26 @@ static LRESULT CALLBACK OptionsProc(HWND window, UINT message, WPARAM wp, LPARAM
     switch (message) {
     case WM_CREATE: {
         int i; HWND control; browser = (Browser *)((CREATESTRUCTA *)lp)->lpCreateParams; SetWindowLongPtrA(window, GWLP_USERDATA, (LONG_PTR)browser);
-        MoveWindow(BrowserControl(window, "BUTTON", "Appearance", BS_GROUPBOX, 1), 10, 8, 490, 194, TRUE);
+        MoveWindow(BrowserControl(window, "BUTTON", "Appearance", BS_GROUPBOX | WS_CLIPSIBLINGS, 7000), 10, 8, 490, 194, TRUE);
         CheckControl(window, "Folders pane", ID_OPTION_FOLDERS, browser->options.folders, 22, 30, 214);
         CheckControl(window, "Status bar", ID_OPTION_STATUS, browser->options.status, 22, 56, 214);
         CheckControl(window, "Text labels on toolbar", ID_OPTION_LABELS, browser->options.labels, 22, 82, 214);
         CheckControl(window, "Large toolbar icons", ID_OPTION_LARGE, browser->options.largeTools, 22, 108, 214);
         CheckControl(window, "Show hidden / system files", ID_OPTION_HIDDEN, browser->options.hidden, 252, 30, 236);
         CheckControl(window, "Show file extensions", ID_OPTION_EXTENSIONS, browser->options.extensions, 252, 56, 236);
-        MoveWindow(BrowserControl(window, "STATIC", "View:", 0, 2), 252, 90, 42, 22, TRUE);
+        MoveWindow(BrowserControl(window, "STATIC", "View:", 0, 7001), 252, 90, 42, 22, TRUE);
         control = BrowserControl(window, "COMBOBOX", "", WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL, ID_OPTION_VIEW);
         MoveWindow(control, 302, 86, 180, 180, TRUE);
         for (i = 0; i < (browser->native ? 4 : 6); ++i) SendMessageA(control, CB_ADDSTRING, 0, (LPARAM)viewNames[i]);
         SendMessageA(control, CB_SETCURSEL, browser->native && browser->options.view > 3 ? 0 : browser->options.view, 0);
-        MoveWindow(BrowserControl(window, "STATIC", "Thumbnails preview BMP files; other files use Windows icons.", 0, 3), 22, 145, 458, 38, TRUE);
-        MoveWindow(BrowserControl(window, "BUTTON", "Additional toolbar buttons", BS_GROUPBOX, 4), 10, 212, 490, 112, TRUE);
+        MoveWindow(BrowserControl(window, "STATIC", "Thumbnails preview BMP files; other files use Windows icons.", 0, 7002), 22, 145, 458, 38, TRUE);
+        MoveWindow(BrowserControl(window, "BUTTON", "Additional toolbar buttons", BS_GROUPBOX | WS_CLIPSIBLINGS, 7003), 10, 212, 490, 112, TRUE);
         for (i = 0; i < BROWSER_EXTRA_TOOLS; ++i) CheckControl(window, extraNames[i], ID_OPTION_TOOL + i,
             (browser->options.extraTools & (1U << i)) != 0, 22 + (i / 3) * 230, 234 + (i % 3) * 26, 218);
         MoveWindow(BrowserControl(window, "BUTTON", "OK", WS_TABSTOP | BS_DEFPUSHBUTTON, IDOK), 320, 342, 80, 27, TRUE);
-        MoveWindow(BrowserControl(window, "BUTTON", "Cancel", WS_TABSTOP, IDCANCEL), 410, 342, 80, 27, TRUE); return 0;
+        MoveWindow(BrowserControl(window, "BUTTON", "Cancel", WS_TABSTOP, IDCANCEL), 410, 342, 80, 27, TRUE);
+        SetWindowPos(GetDlgItem(window, 7000), HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        SetWindowPos(GetDlgItem(window, 7003), HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE); return 0;
     }
     case WM_COMMAND:
         if (LOWORD(wp) == IDCANCEL) { DestroyWindow(window); return 0; }
@@ -644,7 +646,8 @@ void BrowserOpenOptions(Browser *browser)
 {
     if (!browser->optionsWindow) {
         RECT area; SystemParametersInfoA(SPI_GETWORKAREA, 0, &area, 0);
-        browser->optionsWindow = CreateWindowExA(WS_EX_DLGMODALFRAME, optionsClass, "Folder Options", WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN,
+        /* Groupbox interiors need the dialog's background on native Win95. */
+        browser->optionsWindow = CreateWindowExA(WS_EX_DLGMODALFRAME, optionsClass, "Folder Options", WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
             area.left + (area.right - area.left - 516) / 2, area.top + 6, 516, 412, browser->window, NULL, browserInstance, browser);
     }
     ShowWindow(browser->optionsWindow, SW_SHOWNORMAL); SetForegroundWindow(browser->optionsWindow);

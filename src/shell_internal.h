@@ -137,6 +137,9 @@ HICON EnvPathIcon(const char *path);
 HICON EnvSystemIcon(int index);
 BOOL EnvDrawBarButton(const DRAWITEMSTRUCT *item);
 int EnvStartButtonWidth(void);
+int EnvStartLabelWidth(const char *label);
+void EnvPaintStartButton(HDC dc, const RECT *bounds, const char *label, BOOL down, BOOL focus);
+void EnvPaintTaskButton(HDC dc, const RECT *bounds, const char *label, HICON icon, BOOL down, BOOL focus);
 
 BOOL TrayCreate(void);
 int TrayWidth(void);
