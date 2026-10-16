@@ -92,6 +92,7 @@ static void SettingsPath(void)
     env.options.startMenus = GetPrivateProfileIntA("Start", "FolderMenus", 2, env.ini);
     env.options.desktopIcons = !!GetPrivateProfileIntA("Desktop", "ShowIcons", TRUE, env.ini);
     env.options.autoArrange = !!GetPrivateProfileIntA("Desktop", "AutoArrange", FALSE, env.ini);
+    env.options.classicShutdown = !!GetPrivateProfileIntA("Desktop", "ClassicShutdown", FALSE, env.ini);
     env.options.traySeconds = Clamp(Option("InactiveSeconds", 60), 5, 3600);
     env.options.largeStartIcons = !!GetPrivateProfileIntA("Start", "LargeIcons", FALSE, env.ini);
     env.options.recentCount = Clamp((int)GetPrivateProfileIntA("Start", "RecentCount", 7, env.ini), 0, RECENT_LIMIT);

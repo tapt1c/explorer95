@@ -622,6 +622,42 @@ static void PumpFor(DWORD duration)
         Sleep(10);
     } while (GetTickCount() - started < duration);
 }
+static void ShutdownStyleTests(HWND bar, const char *settings)
+{
+    HWND properties = OpenSettings(bar), dialog; RECT rect, client, button; HDC dc; int style, id;
+    SettingsPage(properties, 2, -1);
+    Check(IsWindowVisible(GetDlgItem(properties, 1029)) && SendDlgItemMessageA(properties, 1029, CB_GETCOUNT, 0, 0) == 2,
+          "Desktop settings offer Windows XP and Windows 95 shutdown styles");
+    for (style = 1; style >= 0; --style) {
+        SendDlgItemMessageA(properties, 1029, CB_SETCURSEL, style, 0);
+        SendMessageA(properties, WM_COMMAND, MAKEWPARAM(1029, CBN_SELCHANGE), 0);
+        SendMessageA(properties, WM_COMMAND, 0x3021, 0);
+        Check(GetPrivateProfileIntA("Desktop", "ClassicShutdown", 99, settings) == (UINT)style,
+              "Apply persists the selected shutdown style");
+        SendMessageA(properties, WM_COMMAND, IDCANCEL, 0); /* Close properties before opening the choice. */
+        SendMessageA(bar, WM_COMMAND, 314, 0); dialog = WaitFor("Explorer95.Shutdown", NULL);
+        Check(dialog != NULL, "selected shutdown design opens");
+        GetWindowRect(dialog, &rect); GetClientRect(dialog, &client);
+        Check(rect.right - rect.left == 314 && rect.bottom - rect.top == 200,
+              "both shutdown styles use compact 314 by 200 outer dimensions");
+        Check(((GetWindowLongA(dialog, GWL_STYLE) & WS_CAPTION) == WS_CAPTION) == (style == 1),
+              "Windows 95 uses the native caption and XP uses its compact custom header");
+        for (id = 1700; id <= 1702; ++id) {
+            GetWindowRect(GetDlgItem(dialog, id), &button); MapWindowPoints(NULL, dialog, (POINT *)&button, 2);
+            Check(button.left >= 0 && button.top >= 0 && button.right <= client.right && button.bottom <= client.bottom,
+                  "shutdown action and its label fit inside the compact dialog");
+        }
+        PumpFor(80); dc = GetDC(dialog);
+        Check(GetPixel(dc, 8, 8) == (style ? GetSysColor(COLOR_BTNFACE) : RGB(0,45,140)),
+              "selected style paints the classic system face or XP blue header");
+        ReleaseDC(dialog, dc);
+        SendMessageA(dialog, WM_COMMAND, IDCANCEL, 0); /* Cleanup only; never execute a power action. */
+        properties = OpenSettings(bar); SettingsPage(properties, 2, -1);
+        Check(SendDlgItemMessageA(properties, 1029, CB_GETCURSEL, 0, 0) == style,
+              "reopening settings retains the selected shutdown style");
+    }
+    SendMessageA(properties, WM_COMMAND, IDCANCEL, 0);
+}
 static void ShutdownTests(HWND bar, HWND menu)
 {
     HWND dialog, overlay, fixture, logoff; HDC dc; COLORREF first, final; RECT rect; char label[32]; DWORD started;
@@ -1079,6 +1115,7 @@ void start(void)
         CheckStartFits(bar, menu); ContextPinTest(bar, menu, settings);
         dialog = StartSettingsTests(bar, menu, settings);
         SendMessageA(dialog, WM_COMMAND, IDCANCEL, 0);
+        ShutdownStyleTests(bar, settings);
         ShutdownTests(bar, menu);
         goto shutdown;
     }
@@ -1161,6 +1198,7 @@ void start(void)
     SendMessageA(task, BM_CLICK, 0, 0);
     started = GetTickCount(); while (IsIconic(child) && GetTickCount() - started < 3000) Sleep(50);
     Check(!IsIconic(child), "task button restores minimized window");
+    ShutdownStyleTests(bar, settings);
     ShutdownTests(bar, menu);
     EnvironmentTests(bar, browser, child, menu, settings);
 shutdown:

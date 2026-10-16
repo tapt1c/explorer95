@@ -100,6 +100,7 @@ static HICON SystemIcon(int resource, BOOL large)
 }
 
 HICON EnvSystemIcon(int resource) { return SystemIcon(resource, FALSE); }
+HICON EnvLargeSystemIcon(int resource) { return SystemIcon(resource, TRUE); }
 static HICON MenuSystemIcon(int resource) { return SystemIcon(resource, env.options.largeStartIcons); }
 
 static void PruneRecent(void)

@@ -80,7 +80,7 @@
 typedef struct ShellOptions {
     int edge, rows, taskWidth, recentCount;
     BOOL locked, autoHide, topmost, clock, quick, largeIcons, largeStartIcons, group, hideInactive;
-    BOOL classicStart, hoverMenus, allowDrop, highlightNew, desktopIcons, autoArrange;
+    BOOL classicStart, hoverMenus, allowDrop, highlightNew, desktopIcons, autoArrange, classicShutdown;
     UINT startMenus, traySeconds;
     UINT startItems;
     char startLabel[32];
@@ -135,6 +135,7 @@ void StartSettingsOpen(void);
 void StartReloadRecent(void);
 HICON EnvPathIcon(const char *path);
 HICON EnvSystemIcon(int index);
+HICON EnvLargeSystemIcon(int resource);
 BOOL EnvDrawBarButton(const DRAWITEMSTRUCT *item);
 int EnvStartButtonWidth(void);
 int EnvStartLabelWidth(const char *label);

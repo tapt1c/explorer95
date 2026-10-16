@@ -63,6 +63,7 @@ static BOOL WriteOptions(const char *ini, const ShellOptions *o)
     SAVE("Start", "RecentCount", recentCount); SAVE("Start", "Classic", classicStart); SAVE("Start", "HoverMenus", hoverMenus);
     SAVE("Start", "AllowDrop", allowDrop); SAVE("Start", "HighlightNew", highlightNew);
     SAVE("Desktop", "ShowIcons", desktopIcons); SAVE("Desktop", "AutoArrange", autoArrange);
+    SAVE("Desktop", "ClassicShutdown", classicShutdown);
 #undef SAVE
     okay &= WritePrivateProfileStringA("Start", "ButtonLabel", o->startLabel, ini);
     return okay;
@@ -234,6 +235,7 @@ static BOOL Apply(HWND window)
     options.clock = Checked(window, ID_CLOCK); options.quick = Checked(window, ID_QUICK); options.largeIcons = Checked(window, ID_LARGE);
     options.group = Checked(window, ID_GROUP); options.hideInactive = Checked(window, ID_INACTIVE);
     options.desktopIcons = Checked(window, ID_DESKTOPICONS); options.autoArrange = Checked(window, ID_AUTOARRANGE);
+    options.classicShutdown = SendDlgItemMessageA(window, ID_SHUTDOWNSTYLE, CB_GETCURSEL, 0, 0) == 1;
     if (!StartSettingsValidate(window, &options) || !CommitFile(window, &options)) return FALSE;
     env.options = options; loading = TRUE; StartSettingsCommit(window); TraySettingsCommit(); EnvApplyOptions(); loading = FALSE;
     EnableWindow(GetDlgItem(window, ID_APPLY_NOW), FALSE); return TRUE;
@@ -272,9 +274,13 @@ static LRESULT CALLBACK PropertiesProc(HWND window, UINT message, WPARAM wp, LPA
         Control(window, SETTINGS_DESKTOP, "STATIC", "", SS_OWNERDRAW, ID_PREVIEW_DESKTOP, 30, 52, 454, 124);
         Checkbox(window, SETTINGS_DESKTOP, "Show desktop icons", ID_DESKTOPICONS, env.options.desktopIcons, 30, 194, 450);
         Checkbox(window, SETTINGS_DESKTOP, "Auto-arrange desktop icons", ID_AUTOARRANGE, env.options.autoArrange, 30, 226, 450);
-        Control(window, SETTINGS_DESKTOP, "BUTTON", "Line up icons now", WS_TABSTOP, ID_LINEUP, 30, 270, 212, 26);
-        Control(window, SETTINGS_DESKTOP, "BUTTON", "Background / display settings...", WS_TABSTOP, ID_BACKGROUND, 252, 270, 232, 26);
-        Control(window, SETTINGS_DESKTOP, "STATIC", "Wallpaper, colors and screen saver use Windows display properties.", 0, 0, 30, 312, 454, 32);
+        Control(window, SETTINGS_DESKTOP, "STATIC", "Shutdown dialog style:", 0, 0, 30, 256, 170, 20);
+        control = Control(window, SETTINGS_DESKTOP, "COMBOBOX", "", WS_TABSTOP | CBS_DROPDOWNLIST, ID_SHUTDOWNSTYLE, 206, 252, 278, 100);
+        SendMessageA(control, CB_ADDSTRING, 0, (LPARAM)"Windows XP"); SendMessageA(control, CB_ADDSTRING, 0, (LPARAM)"Windows 95");
+        SendMessageA(control, CB_SETCURSEL, env.options.classicShutdown ? 1 : 0, 0);
+        Control(window, SETTINGS_DESKTOP, "BUTTON", "Line up icons now", WS_TABSTOP, ID_LINEUP, 30, 284, 212, 26);
+        Control(window, SETTINGS_DESKTOP, "BUTTON", "Background / display settings...", WS_TABSTOP, ID_BACKGROUND, 252, 284, 232, 26);
+        Control(window, SETTINGS_DESKTOP, "STATIC", "Wallpaper, colors and screen saver use Windows display properties.", 0, 0, 30, 316, 454, 24);
         TraySettingsBegin(); TraySettingsCreate(window);
         Control(window, SETTINGS_SHELL, "BUTTON", "Windows 95 startup shell", BS_GROUPBOX, 0, 24, 54, 472, 194);
         Control(window, SETTINGS_SHELL, "STATIC", "Select which shell starts with Windows.\r\nYour current session stays open; the change takes effect after restart.", 0, 0, 38, 82, 442, 48);
