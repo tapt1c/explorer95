@@ -116,7 +116,7 @@ BOOL BrowserTreeNotify(Browser *browser, NMHDR *header)
         TreeNode *node = (TreeNode *)notice->itemNew.lParam;
         return node && !LoadChildren(browser, node);
     }
-    if (header->code == TVN_SELCHANGEDA && !browser->treeSync) {
+    if (header->code == TVN_SELCHANGEDA && !browser->treeSync && !browser->closing) {
         TreeNode *node = (TreeNode *)notice->itemNew.lParam;
         if (node) {
             BOOL okay = FALSE;
@@ -144,8 +144,12 @@ void BrowserTreeRefreshCurrent(Browser *browser)
 }
 void BrowserTreeDestroy(Browser *browser)
 {
-    TreeNode *node;
+    TreeNode *node; BOOL previous = browser->treeSync;
+    /* Deleting the selected node may emit selection changes on older controls.
+     * Those are teardown notifications, not requests to open another folder. */
+    browser->treeSync = TRUE;
     if (browser->tree) DestroyWindow(browser->tree);
+    browser->treeSync = previous;
     browser->tree = NULL; node = browser->nodes;
     while (node) { TreeNode *next = node->next; EnvFree(node); node = next; }
     browser->nodes = NULL;

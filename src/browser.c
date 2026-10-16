@@ -65,7 +65,9 @@ void BrowserSaveOptions(const BrowserOptions *options)
 static BOOL CanUp(Browser *browser) { return browser->path[0] || (browser->pidl && browser->pidl->mkid.cb); }
 void BrowserUpdate(Browser *browser)
 {
-    int i, selected = browser->native ? ListView_GetSelectedCount(NativeViewList(browser->native)) : ListView_GetSelectedCount(browser->files);
+    int i, selected;
+    if (browser->closing) return;
+    selected = browser->native ? ListView_GetSelectedCount(NativeViewList(browser->native)) : ListView_GetSelectedCount(browser->files);
     HMENU menu = GetMenu(browser->window);
     const int commands[] = {ID_BACK, ID_FORWARD, ID_UP, ID_COPY, ID_CUT, ID_PASTE, ID_DELETE, ID_RENAME, ID_FILE_PROPERTIES};
     BOOL states[9];
@@ -188,6 +190,7 @@ BOOL BrowserNavigate(Browser *browser, const char *requested, LPCITEMIDLIST pidl
 {
     char path[MAX_PATH], title[MAX_PATH + 32]; LPITEMIDLIST absolute = NULL, recorded = NULL; NativeView *native = NULL;
     FileEntry *entries = NULL; HANDLE watch = NULL; int total = 0, i; BOOL same; DWORD length;
+    if (browser->closing) return FALSE;
     path[0] = 0;
     if (pidl && pidl->mkid.cb) SHGetPathFromIDListA(pidl, path);
     if (requested) {
