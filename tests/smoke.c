@@ -646,7 +646,7 @@ static HWND StartSettingsTests(HWND bar, HWND menu, const char *settings)
       initialMaximum = GetDlgItemInt(properties, 627, NULL, FALSE);
       SendDlgItemMessageA(properties, 621, CB_SETCURSEL, 2, 0); SendMessageA(properties, WM_COMMAND, MAKELONG(621, CBN_SELCHANGE), 0);
       { UINT pending = GetDlgItemInt(properties, 627, NULL, FALSE);
-        Check(pending <= initialMaximum && (pending < initialMaximum || pending == RECENT_LIMIT),
+        Check(pending <= initialMaximum && (pending < initialMaximum || pending == 30),
             "pending taskbar rows update the Start limit before Apply, respecting its cap"); }
       SendDlgItemMessageA(properties, 621, CB_SETCURSEL, 0, 0); SendMessageA(properties, WM_COMMAND, MAKELONG(621, CBN_SELCHANGE), 0);
       SetDlgItemInt(properties, 627, 7, FALSE); }
