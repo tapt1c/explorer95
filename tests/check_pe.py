@@ -19,7 +19,9 @@ ALLOWED = {
     "comctl32.dll": {"InitCommonControls", "ImageList_Create", "ImageList_Destroy",
                       "ImageList_AddMasked", "ImageList_GetImageCount", "ImageList_ReplaceIcon"},
     "comdlg32.dll": {"GetOpenFileNameA"},
-    "gdi32.dll": {"LineTo", "MoveToEx", "GetStockObject", "SelectObject", "SetBkMode", "SetTextColor", "BitBlt",
+    # Classic GDI drawing and DIB transfer APIs, available in Windows 95;
+    # shutdown fade does not import AlphaBlend, GradientFill or layered-window APIs.
+    "gdi32.dll": {"Arc", "CreatePen", "Ellipse", "CreateSolidBrush", "GetDIBits", "SetDIBits", "LineTo", "MoveToEx", "GetStockObject", "SelectObject", "SetBkMode", "SetTextColor", "BitBlt",
                   "CreateCompatibleBitmap", "CreateBitmap", "SetBkColor", "SetWindowOrgEx", "CreateFontIndirectA", "GetTextExtentPoint32A", "GetTextMetricsA", "CreateCompatibleDC", "DeleteDC", "DeleteObject", "GetObjectA"},
     "kernel32.dll": set("""
         CreateToolhelp32Snapshot Process32First Process32Next GetSystemTimeAsFileTime GetTempFileNameA MoveFileA
@@ -51,7 +53,7 @@ ALLOWED = {
         GetDlgCtrlID GetDlgItemInt GetMenuItemCount GetMenuStringA GetPropA GetSystemMenu InsertMenuA
         GetSystemMetrics GetWindowThreadProcessId IsChild LoadImageA PtInRect
         GetSysColor GetWindow GetWindowLongA GetWindowRect GetWindowTextA InflateRect InvalidateRect
-        IsDialogMessageA IsIconic IsWindow IsWindowVisible KillTimer
+        IsDialogMessageA IsIconic IsWindow IsWindowVisible IsWindowEnabled GetLastActivePopup KillTimer
         LoadCursorA LoadIconA MessageBoxA MoveWindow PostMessageA PostQuitMessage
         RedrawWindow RegisterClassA RegisterWindowMessageA SendDlgItemMessageA SendMessageA
         RegisterHotKey ReleaseCapture RemovePropA ScreenToClient SendNotifyMessageA

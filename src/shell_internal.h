@@ -150,5 +150,10 @@ void TrayDestroy(void);
 void PropertiesOpen(void);
 void PropertiesSelectPage(int page);
 BOOL PropertiesTranslate(MSG *message);
+void ShutdownShow(void);
+void ShutdownClose(void);
+void ShutdownFocus(void);
+BOOL ShutdownActive(void);
+BOOL ShutdownTranslate(MSG *message);
 
 #endif

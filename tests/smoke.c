@@ -614,6 +614,55 @@ static HWND OpenSettings(HWND bar)
     HWND window; SendMessageA(bar, WM_COMMAND, 600, 0); window = WaitFor("Explorer95.Properties", NULL);
     Check(window != NULL, "unified environment properties open"); return window;
 }
+static void PumpFor(DWORD duration)
+{
+    DWORD started = GetTickCount(); MSG message;
+    do {
+        while (PeekMessageA(&message, NULL, 0, 0, PM_REMOVE)) { TranslateMessage(&message); DispatchMessageA(&message); }
+        Sleep(10);
+    } while (GetTickCount() - started < duration);
+}
+static void ShutdownTests(HWND bar, HWND menu)
+{
+    HWND dialog, overlay, fixture, logoff; HDC dc; COLORREF first, final; RECT rect; char label[32]; DWORD started;
+    fixture = CreateWindowExA(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, "STATIC", "", WS_POPUP | WS_VISIBLE | SS_WHITERECT,
+        2, 2, 40, 40, NULL, NULL, GetModuleHandleA(NULL), NULL);
+    UpdateWindow(fixture); SetForegroundWindow(bar); PumpFor(60);
+    SendMessageA(menu, WM_COMMAND, 314, 0); dialog = WaitFor("Explorer95.Shutdown", NULL); overlay = WaitFor("Explorer95.ShutdownShade", NULL);
+    Check(dialog && overlay && !IsWindowVisible(menu), "Shut Down opens a separate choice dialog over a desktop snapshot");
+    GetWindowRect(dialog, &rect);
+    Check(rect.left >= 0 && rect.top >= 0 && rect.right <= GetSystemMetrics(SM_CXSCREEN) && rect.bottom <= GetSystemMetrics(SM_CYSCREEN), "shutdown choice fits the screen");
+    Check(GetDlgItem(dialog, 1700) && GetDlgItem(dialog, 1701) && GetDlgItem(dialog, 1702) && GetDlgItem(dialog, IDCANCEL), "shutdown offers Stand By, Turn Off, Restart and Cancel");
+    Check(!IsWindowEnabled(bar), "shutdown choice disables interaction with the taskbar");
+    { HWND browser = FindWindowA(BROWSER_CLASS, NULL);
+      Check(IsWindowEnabled(fixture) && (!browser || !IsWindowVisible(browser) || !IsWindowEnabled(browser)),
+          "modal choice disables other Explorer95 windows without disabling external applications"); }
+    dc = GetDC(overlay); first = GetPixel(dc, 10, 10); ReleaseDC(overlay, dc); started = GetTickCount();
+    do {
+        PumpFor(50); dc = GetDC(overlay); final = GetPixel(dc, 10, 10); ReleaseDC(overlay, dc);
+    } while ((final == CLR_INVALID || GetRValue(final) >= 160) && GetTickCount() - started < 3000);
+    { char note[96]; wsprintfA(note, "shutdown fade sample: %08lx -> %08lx\r\n", first, final); Log(note); }
+    Check(first != CLR_INVALID && final != CLR_INVALID && GetRValue(first) > GetRValue(final) && GetRValue(final) < 160, "desktop snapshot gradually darkens while the choice stays visible");
+    SendMessageA(overlay, WM_LBUTTONDOWN, 0, 0); SendMessageA(bar, WM_COMMAND, 100, 0); PumpFor(60);
+    Check(IsWindowVisible(dialog) && !IsWindowVisible(menu), "background clicks and taskbar commands cannot leave the modal choice");
+    SetForegroundWindow(fixture); PumpFor(350);
+    Check(GetForegroundWindow() == dialog, "shutdown choice regains focus after another application tries to activate");
+    keybd_event(VK_SHIFT, 0, 0, 0); PumpFor(100); GetDlgItemTextA(dialog, 1700, label, sizeof(label));
+    keybd_event(VK_SHIFT, 0, KEYEVENTF_KEYUP, 0); PumpFor(100);
+    Check(!lstrcmpA(label, "Hibernate"), "holding Shift exposes the Hibernate choice without executing a power action");
+    GetDlgItemTextA(dialog, 1700, label, sizeof(label)); Check(!lstrcmpA(label, "Stand By"), "releasing Shift restores Stand By");
+    SendMessageA(dialog, WM_COMMAND, IDCANCEL, 0); PumpFor(150);
+    Check(!IsWindow(dialog) && !IsWindow(overlay) && IsWindowEnabled(bar), "Cancel removes the dimming layer and restores taskbar input");
+    dc = GetDC(NULL); final = GetPixel(dc, 10, 10); ReleaseDC(NULL, dc);
+    Check(final == RGB(255,255,255), "Cancel reveals the original undimmed desktop contents");
+    SendMessageA(menu, WM_COMMAND, 314, 0); dialog = WaitFor("Explorer95.Shutdown", NULL);
+    PostMessageA(dialog, WM_KEYDOWN, VK_ESCAPE, 0); PumpFor(150);
+    Check(dialog && !IsWindow(dialog) && !FindWindowA("Explorer95.ShutdownShade", NULL) && IsWindowEnabled(bar), "Escape also cancels while the background fade is in progress");
+    DestroyWindow(fixture);
+    PostMessageA(menu, WM_COMMAND, 313, 0); logoff = WaitFor("#32770", "Explorer95");
+    Check(logoff && !FindWindowA("Explorer95.Shutdown", NULL), "Log Off keeps its existing confirmation instead of opening the new shutdown choice");
+    SendMessageA(logoff, WM_COMMAND, IDNO, 0); PumpFor(60);
+}
 static BOOL PreviewStartMatches(HWND preview, HWND start, int x, int y)
 {
     HDC sample = GetDC(preview), live = GetDC(start); RECT rect; int px, py; BOOL equal;
@@ -1030,6 +1079,7 @@ void start(void)
         CheckStartFits(bar, menu); ContextPinTest(bar, menu, settings);
         dialog = StartSettingsTests(bar, menu, settings);
         SendMessageA(dialog, WM_COMMAND, IDCANCEL, 0);
+        ShutdownTests(bar, menu);
         goto shutdown;
     }
     SendMessageA(bar, WM_COMMAND, 315, 0);
@@ -1111,6 +1161,7 @@ void start(void)
     SendMessageA(task, BM_CLICK, 0, 0);
     started = GetTickCount(); while (IsIconic(child) && GetTickCount() - started < 3000) Sleep(50);
     Check(!IsIconic(child), "task button restores minimized window");
+    ShutdownTests(bar, menu);
     EnvironmentTests(bar, browser, child, menu, settings);
 shutdown:
     PostMessageA(child, WM_CLOSE, 0, 0);

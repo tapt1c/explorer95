@@ -508,7 +508,8 @@ void EnvCommand(int id)
         GetWindowsDirectoryA(path, MAX_PATH);
         { char help[MAX_PATH]; if (EnvJoin(help, path, "HELP\\WINDOWS.HLP")) WinHelpA(env.bar, help, HELP_FINDER, 0); }
         break;
-    case ID_LOGOFF: case ID_SHUTDOWN:
+    case ID_SHUTDOWN: ShutdownShow(); break;
+    case ID_LOGOFF:
         if (MessageBoxA(env.bar, id == ID_LOGOFF ? "Save your work. Log off Windows now?" : "Save your work. Shut down Windows now?",
             "Explorer95", MB_YESNO | MB_DEFBUTTON2 | MB_ICONQUESTION) == IDYES)
             {
@@ -598,6 +599,7 @@ static PaintBuffer barBuffer, barButtonBuffer;
 
 static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
 {
+    if (ShutdownActive() && (message == WM_COMMAND || message == WM_HOTKEY || message == WM_CONTEXTMENU)) { ShutdownFocus(); return 0; }
     switch (message) {
     case WM_SIZE: EnvLayoutBar(); return 0;
     case WM_ERASEBKGND: return TRUE;
@@ -750,6 +752,7 @@ HWND EnvironmentCreate(const EnvironmentHost *callbacks)
 }
 BOOL EnvironmentTranslate(MSG *message)
 {
+    if (ShutdownTranslate(message)) return TRUE;
     if ((message->message == WM_LBUTTONDOWN || message->message == WM_RBUTTONDOWN || message->message == WM_MBUTTONDOWN) &&
         IsWindowVisible(env.start) && message->hwnd != env.start && message->hwnd != env.startButton &&
         !IsChild(env.start, message->hwnd)) StartHide();
@@ -760,6 +763,7 @@ void EnvironmentShutdown(void)
     APPBARDATA data; int i;
     if (env.closing) return;
     env.closing = TRUE;
+    ShutdownClose();
     KillTimer(env.bar, 1); DragAcceptFiles(env.bar, FALSE);
     if (hotkeyDesktop) UnregisterHotKey(env.bar, 1);
     if (hotkeyStart) UnregisterHotKey(env.bar, 2);
