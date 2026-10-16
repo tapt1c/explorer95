@@ -25,4 +25,16 @@ jobs:
           WINEPREFIX: ${{ runner.temp }}/explorer95-wine
           WINEDEBUG: -all
           WINEDLLOVERRIDES: mscoree,mshtml=
-        run: xvfb-run -a make ui64-smoke WINE=wine
+        run: |
+          set +e
+          xvfb-run -a make ui64-smoke WINE=wine > source-ui.log 2>&1
+          result=$?
+          set -e
+          cat source-ui.log
+          {
+            echo '### Source UI smoke output'
+            echo '```text'
+            tail -n 100 source-ui.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$result"
