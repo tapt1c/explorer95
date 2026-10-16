@@ -17,11 +17,14 @@ from pathlib import Path
 ALLOWED = {
     "advapi32.dll": {"GetUserNameA", "RegOpenKeyExA", "RegQueryValueExA", "RegCloseKey"},
     "comctl32.dll": {"InitCommonControls", "ImageList_Create", "ImageList_Destroy",
-                      "ImageList_AddMasked", "ImageList_GetImageCount", "ImageList_ReplaceIcon"},
+                      "ImageList_AddMasked", "ImageList_GetImageCount", "ImageList_ReplaceIcon",
+                      # Original Win95 common-controls drag-image API (no IE4+ dependency).
+                      "ImageList_BeginDrag", "ImageList_DragEnter", "ImageList_DragMove",
+                      "ImageList_DragLeave", "ImageList_EndDrag", "ImageList_Draw", "ImageList_Add"},
     "comdlg32.dll": {"GetOpenFileNameA"},
     # Classic GDI drawing and DIB transfer APIs, available in Windows 95;
     # shutdown fade does not import AlphaBlend, GradientFill or layered-window APIs.
-    "gdi32.dll": {"GetDeviceCaps", "GetClipBox", "SaveDC", "RestoreDC", "ExcludeClipRect", "Arc", "CreatePen", "Ellipse", "CreateSolidBrush", "GetDIBits", "SetDIBits", "LineTo", "MoveToEx", "GetStockObject", "SelectObject", "SetBkMode", "SetTextColor", "BitBlt",
+    "gdi32.dll": {"CreatePatternBrush", "PatBlt", "GetDeviceCaps", "GetClipBox", "SaveDC", "RestoreDC", "ExcludeClipRect", "Arc", "CreatePen", "Ellipse", "CreateSolidBrush", "GetDIBits", "SetDIBits", "LineTo", "MoveToEx", "GetStockObject", "SelectObject", "SetBkMode", "SetTextColor", "BitBlt",
                   "StretchBlt", "CreateCompatibleBitmap", "CreateBitmap", "SetBkColor", "SetWindowOrgEx", "CreateFontIndirectA", "GetTextExtentPoint32A", "GetTextMetricsA", "CreateCompatibleDC", "DeleteDC", "DeleteObject", "GetObjectA"},
     "kernel32.dll": set("""
         CreateToolhelp32Snapshot Process32First Process32Next GetSystemTimeAsFileTime GetTempFileNameA MoveFileA
@@ -54,7 +57,7 @@ ALLOWED = {
         GetSystemMetrics GetWindowThreadProcessId IsChild LoadImageA PtInRect
         GetSysColor GetWindow GetWindowLongA GetWindowRect GetWindowTextA InflateRect InvalidateRect
         IsDialogMessageA IsIconic IsWindow IsWindowVisible IsWindowEnabled GetLastActivePopup KillTimer
-        LoadCursorA LoadIconA MessageBoxA MoveWindow PostMessageA PostQuitMessage
+        SetCursor LoadCursorA LoadIconA MessageBoxA MoveWindow PostMessageA PostQuitMessage
         RedrawWindow RegisterClassA RegisterWindowMessageA SendDlgItemMessageA SendMessageA
         RegisterHotKey ReleaseCapture RemovePropA ScreenToClient SendNotifyMessageA
         SetCapture SetDlgItemInt SetPropA ShowWindowAsync UnregisterHotKey WinHelpA

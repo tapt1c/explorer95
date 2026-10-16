@@ -8,6 +8,7 @@
 #define POSITION_MAGIC 0x50443945UL
 typedef struct IconPosition { char name[MAX_PATH]; LONG x, y; } IconPosition;
 typedef struct DragPosition { int index; POINT point; RECT bounds; } DragPosition;
+typedef struct Placement { POINT from, to; RECT offset; BOOL fixed, moving; } Placement;
 struct DesktopIcons {
     HWND list;
     char path[MAX_PATH];
@@ -16,10 +17,16 @@ struct DesktopIcons {
     int count, width, height;
     BOOL automatic, locked, snap, restoring, ready, dragging, saveWarned, pending;
     DragPosition *drag;
-    int dragCount;
+    int dragCount, dragAnchor;
     POINT start, delta;
+    HIMAGELIST ghost;
+    BOOL ghostEntered;
 };
 static void EndDrag(DesktopIcons *icons, BOOL commit);
+static void MoveDrag(DesktopIcons *icons, POINT point);
+static BOOL ResolvePositions(DesktopIcons *icons, Placement *plan, int count);
+static Placement *MakePlan(DesktopIcons *icons, int *count);
+static void ApplyPlan(DesktopIcons *icons, const Placement *plan, int count);
 static int Clamp(int value, int low, int high) { return value < low ? low : value > high ? high : value; }
 static BOOL Name(HWND list, int index, char *name)
 {
@@ -73,6 +80,21 @@ static void Capture(DesktopIcons *icons)
         }
     }
 }
+static void RememberVisible(DesktopIcons *icons)
+{
+    BYTE used[ICON_LIMIT]; int i, j, count = ListView_GetItemCount(icons->list);
+    ZeroMemory(used,sizeof(used));
+    for (i = 0; i < count && i < ICON_LIMIT; ++i) {
+        char name[MAX_PATH]; POINT point;
+        if (!Name(icons->list,i,name) || !ListView_GetItemPosition(icons->list,i,&point)) continue;
+        for (j = 0; j < icons->count; ++j) if (!used[j] && !lstrcmpA(name,icons->saved[j].name)) break;
+        if (j == icons->count) {
+            if (icons->count == ICON_LIMIT) continue;
+            ZeroMemory(&icons->saved[j],sizeof(icons->saved[j])); lstrcpyA(icons->saved[j].name,name); ++icons->count;
+        }
+        used[j] = TRUE; icons->saved[j].x = Clamp(point.x,0,32700); icons->saved[j].y = Clamp(point.y,0,32700);
+    }
+}
 static void Restore(DesktopIcons *icons)
 {
     int i, j, count = ListView_GetItemCount(icons->list); BYTE used[ICON_LIMIT];
@@ -92,6 +114,14 @@ static void Restore(DesktopIcons *icons)
             point = Fit(icons->list, i, point); ListView_SetItemPosition(icons->list, i, point.x, point.y);
             used[j] = TRUE; break;
         }
+    }
+    if (!icons->automatic) {
+        int total; Placement *plan = MakePlan(icons,&total);
+        if (plan) {
+            if (ResolvePositions(icons,plan,total)) ApplyPlan(icons,plan,total);
+            HeapFree(GetProcessHeap(),0,plan);
+        }
+        RememberVisible(icons);
     }
     icons->restoring = FALSE; icons->ready = TRUE; icons->pending = FALSE;
     /* Do not discard unmatched records during asynchronous Shell32 enumeration. */
@@ -166,17 +196,6 @@ DesktopIcons *DesktopIconsCreate(HWND list, const char *profile)
     if (lstrlenA(profile) + 4 < MAX_PATH) { lstrcpyA(icons->path, profile); lstrcatA(icons->path, ".DIP"); }
     Load(icons); DesktopIconsChanged(icons); return icons;
 }
-static void EndDrag(DesktopIcons *icons, BOOL commit)
-{
-    int i;
-    if (!icons || !icons->dragging) return;
-    icons->dragging = FALSE;
-    if (!commit) for (i = 0; i < icons->dragCount; ++i)
-        ListView_SetItemPosition(icons->list, icons->drag[i].index, icons->drag[i].point.x, icons->drag[i].point.y);
-    if (GetCapture() == icons->list) ReleaseCapture();
-    HeapFree(GetProcessHeap(), 0, icons->drag); icons->drag = NULL; icons->dragCount = 0;
-    if (commit) { icons->ready = TRUE; icons->pending = FALSE; SaveOrReport(icons); }
-}
 void DesktopIconsDestroy(DesktopIcons *icons)
 {
     if (!icons) return;
@@ -199,75 +218,298 @@ void DesktopIconsConfigure(DesktopIcons *icons, BOOL automatic, BOOL locked, BOO
     if (!icons->ready) DesktopIconsChanged(icons);
     else if (changed) { Capture(icons); SaveOrReport(icons); }
 }
+static POINT GridPoint(DesktopIcons *icons, POINT point)
+{
+    int x = point.x - (icons->width - GetSystemMetrics(SM_CXICON)) / 2, y = point.y - 4;
+    x = x >= 0 ? (x + icons->width / 2) / icons->width : -((-x + icons->width / 2) / icons->width);
+    y = y >= 0 ? (y + icons->height / 2) / icons->height : -((-y + icons->height / 2) / icons->height);
+    point.x = x * icons->width + (icons->width - GetSystemMetrics(SM_CXICON)) / 2;
+    point.y = y * icons->height + 4; return point;
+}
+static RECT At(const Placement *p, POINT point)
+{
+    RECT r = p->offset; r.left += point.x; r.right += point.x; r.top += point.y; r.bottom += point.y; return r;
+}
+static BOOL FitPlacement(const RECT *area, const Placement *p, POINT *point)
+{
+    int left = -p->offset.left, right = area->right - p->offset.right;
+    int top = -p->offset.top, bottom = area->bottom - p->offset.bottom;
+    if (right < left || bottom < top) return FALSE;
+    point->x = Clamp(point->x,left,right); point->y = Clamp(point->y,top,bottom); return TRUE;
+}
+static BOOL FreePosition(const Placement *plan, int count, int index, POINT point)
+{
+    RECT r = At(&plan[index],point); int i;
+    for (i = 0; i < count; ++i) if (i != index && plan[i].fixed) {
+        RECT other = At(&plan[i],plan[i].to);
+        /* Labels count as occupied space. Touching edges are valid, matching
+         * the original common control's own compact icon spacing. */
+        if (r.left < other.right && r.right > other.left && r.top < other.bottom && r.bottom > other.top) return FALSE;
+    }
+    return TRUE;
+}
+static int Distance(POINT a, POINT b)
+{ int x = a.x - b.x, y = a.y - b.y; return (x < 0 ? -x : x) + (y < 0 ? -y : y); }
+static void TryPosition(const RECT *area, const Placement *plan, int count, int index, POINT candidate, POINT *best, int *score)
+{
+    if (FitPlacement(area,&plan[index],&candidate) && FreePosition(plan,count,index,candidate)) {
+        int distance = Distance(candidate,plan[index].to);
+        if (distance < *score) { *score = distance; *best = candidate; }
+    }
+}
+static void TryCell(DesktopIcons *icons, const RECT *area, const Placement *plan, int count, int index,
+    int x, int y, int columns, int rows, POINT *best, int *score)
+{
+    POINT point;
+    if (x < 0 || y < 0 || x >= columns || y >= rows) return;
+    point.x = x * icons->width + (icons->width - GetSystemMetrics(SM_CXICON)) / 2; point.y = y * icons->height + 4;
+    TryPosition(area,plan,count,index,point,best,score);
+}
+static BOOL FindFreePosition(DesktopIcons *icons, const RECT *area, Placement *plan, int count, int index)
+{
+    POINT best = plan[index].to, center = GridPoint(icons,best); int score = 0x7fffffff, i, radius, d;
+    int columns = area->right / icons->width + 1, rows = area->bottom / icons->height + 1;
+    int cx = Clamp((center.x - (icons->width - GetSystemMetrics(SM_CXICON)) / 2) / icons->width,0,columns-1);
+    int cy = Clamp((center.y - 4) / icons->height,0,rows-1);
+    /* A displaced neighbour can use the vacated position of a dragged icon. */
+    for (i = 0; i < count; ++i) if (plan[i].moving) {
+        POINT point = icons->snap ? GridPoint(icons,plan[i].from) : plan[i].from;
+        TryPosition(area,plan,count,index,point,&best,&score);
+    }
+    for (radius = 0; radius < columns || radius < rows; ++radius) {
+        for (d = -radius; d <= radius; ++d) {
+            TryCell(icons,area,plan,count,index,cx+d,cy-radius,columns,rows,&best,&score);
+            if (radius) TryCell(icons,area,plan,count,index,cx+d,cy+radius,columns,rows,&best,&score);
+        }
+        for (d = -radius+1; d < radius; ++d) {
+            TryCell(icons,area,plan,count,index,cx-radius,cy+d,columns,rows,&best,&score);
+            TryCell(icons,area,plan,count,index,cx+radius,cy+d,columns,rows,&best,&score);
+        }
+        if (score != 0x7fffffff && radius * (icons->width < icons->height ? icons->width : icons->height) > score + icons->width + icons->height) break;
+    }
+    if (score == 0x7fffffff) return FALSE;
+    plan[index].to = best; return TRUE;
+}
+static Placement *MakePlan(DesktopIcons *icons, int *count)
+{
+    Placement *plan; int i;
+    *count = ListView_GetItemCount(icons->list);
+    if (*count <= 0 || *count > ICON_LIMIT) return NULL;
+    plan = HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,*count * sizeof(*plan));
+    if (!plan) return NULL;
+    for (i = 0; i < *count; ++i) {
+        RECT bounds;
+        if (!ListView_GetItemPosition(icons->list,i,&plan[i].from) || !ListView_GetItemRect(icons->list,i,&bounds,LVIR_BOUNDS)) {
+            HeapFree(GetProcessHeap(),0,plan); return NULL;
+        }
+        plan[i].to = plan[i].from;
+        plan[i].offset.left = bounds.left - plan[i].from.x; plan[i].offset.right = bounds.right - plan[i].from.x;
+        plan[i].offset.top = bounds.top - plan[i].from.y; plan[i].offset.bottom = bounds.bottom - plan[i].from.y;
+    }
+    return plan;
+}
+static BOOL ResolvePositions(DesktopIcons *icons, Placement *plan, int count)
+{
+    RECT area; int i; GetClientRect(icons->list,&area);
+    /* Moving items have priority. Reserve all unaffected neighbours before
+     * searching, so clearing one overlap does not shuffle unrelated icons. */
+    for (i = 0; i < count; ++i) if (plan[i].moving) {
+        POINT fitted = plan[i].to;
+        if (!FitPlacement(&area,&plan[i],&fitted) || fitted.x != plan[i].to.x || fitted.y != plan[i].to.y || !FreePosition(plan,count,i,plan[i].to)) return FALSE;
+        plan[i].fixed = TRUE;
+    }
+    for (i = 0; i < count; ++i) if (!plan[i].moving) {
+        if (FitPlacement(&area,&plan[i],&plan[i].to) && FreePosition(plan,count,i,plan[i].to)) plan[i].fixed = TRUE;
+    }
+    for (i = 0; i < count; ++i) if (!plan[i].fixed) {
+        if (!FindFreePosition(icons,&area,plan,count,i)) return FALSE;
+        plan[i].fixed = TRUE;
+    }
+    return TRUE;
+}
+static void ApplyPlan(DesktopIcons *icons, const Placement *plan, int count)
+{
+    int i; BOOL restoring = icons->restoring; icons->restoring = TRUE;
+    for (i = 0; i < count; ++i) if (plan[i].from.x != plan[i].to.x || plan[i].from.y != plan[i].to.y)
+        ListView_SetItemPosition(icons->list,i,plan[i].to.x,plan[i].to.y);
+    icons->restoring = restoring;
+}
+static HIMAGELIST CreateGhost(DesktopIcons *icons, POINT *origin)
+{
+    static const BYTE checker[16] = {0x55,0,0xaa,0,0x55,0,0xaa,0,0x55,0,0xaa,0,0x55,0,0xaa,0};
+    RECT bounds = icons->drag[0].bounds; int i, first = 0, count = icons->dragCount, width, height;
+    HIMAGELIST image = NULL, native = ListView_GetImageList(icons->list,LVSIL_NORMAL);
+    HDC screen = NULL, colorDC = NULL, maskDC = NULL;
+    HBITMAP color = NULL, mask = NULL, pattern = NULL;
+    HBRUSH key = NULL, checkerBrush = NULL; HGDIOBJ oldColor = NULL, oldMask = NULL, oldBrush = NULL, oldFont = NULL;
+    BOOL okay = FALSE;
+    for (i = 1; i < count; ++i) UnionRect(&bounds,&bounds,&icons->drag[i].bounds);
+    width = bounds.right-bounds.left; height = bounds.bottom-bounds.top;
+    /* Cache once per drag. Bound the temporary GDI allocation on Win95; a very
+     * spread-out group can still use the grabbed icon as its visual marker. */
+    if (width <= 0 || height <= 0 || width > 2048 || height > 2048 || width*height > 1024*1024) {
+        first = icons->dragAnchor; count = 1; bounds = icons->drag[first].bounds;
+        width = bounds.right-bounds.left; height = bounds.bottom-bounds.top;
+    }
+    if (!native || width <= 0 || height <= 0) goto done;
+    screen = GetDC(icons->list); colorDC = CreateCompatibleDC(screen); maskDC = CreateCompatibleDC(screen);
+    color = CreateCompatibleBitmap(screen,width,height); mask = CreateBitmap(width,height,1,1,NULL);
+    pattern = CreateBitmap(8,8,1,1,checker); if (pattern) checkerBrush = CreatePatternBrush(pattern);
+    key = CreateSolidBrush(RGB(255,0,255));
+    if (!screen || !colorDC || !maskDC || !color || !mask || !checkerBrush || !key) goto done;
+    oldColor = SelectObject(colorDC,color); oldMask = SelectObject(maskDC,mask); oldBrush = SelectObject(maskDC,checkerBrush);
+    { RECT fill = {0,0,width,height}; HFONT font = (HFONT)SendMessageA(icons->list,WM_GETFONT,0,0);
+      FillRect(colorDC,&fill,key); if (font) oldFont = SelectObject(colorDC,font); }
+    SetBkMode(colorDC,TRANSPARENT); SetTextColor(colorDC,ListView_GetTextColor(icons->list));
+    for (i = first; i < first+count; ++i) {
+        LVITEMA item; RECT iconRect, label; char text[MAX_PATH]; int index = icons->drag[i].index;
+        ZeroMemory(&item,sizeof(item)); item.mask = LVIF_IMAGE | LVIF_STATE; item.iItem = index; item.stateMask = LVIS_OVERLAYMASK;
+        if (!SendMessageA(icons->list,LVM_GETITEMA,0,(LPARAM)&item) || item.iImage < 0 ||
+            !ListView_GetItemRect(icons->list,index,&iconRect,LVIR_ICON) || !ListView_GetItemRect(icons->list,index,&label,LVIR_LABEL)) goto done;
+        if (!ImageList_Draw(native,item.iImage,colorDC,iconRect.left-bounds.left,iconRect.top-bounds.top,ILD_TRANSPARENT | (item.state & LVIS_OVERLAYMASK))) goto done;
+        label.left -= bounds.left; label.right -= bounds.left; label.top -= bounds.top; label.bottom -= bounds.top;
+        if (Name(icons->list,index,text)) DrawTextA(colorDC,text,-1,&label,DT_CENTER | DT_WORDBREAK | DT_NOPREFIX);
+    }
+    /* The Win95 shell's LVM_CREATEDRAGIMAGE can include an opaque selection
+     * rectangle on CLR_NONE desktops. Build our own AND mask instead: original
+     * icon/label pixels, with alternating transparent pixels (classic 50%). */
+    SetTextColor(maskDC,RGB(0,0,0)); SetBkColor(maskDC,RGB(255,255,255));
+    if (!PatBlt(maskDC,0,0,width,height,PATCOPY)) goto done;
+    SetBkColor(colorDC,RGB(255,0,255));
+    if (!BitBlt(maskDC,0,0,width,height,colorDC,0,0,SRCPAINT)) goto done;
+    SetTextColor(colorDC,RGB(255,255,255)); SetBkColor(colorDC,RGB(0,0,0));
+    if (!BitBlt(colorDC,0,0,width,height,maskDC,0,0,SRCAND)) goto done;
+    /* ImageList_Add copies both bitmaps; deselect them before handing them off. */
+    SelectObject(colorDC,oldColor); oldColor = NULL; SelectObject(maskDC,oldMask); oldMask = NULL;
+    image = ImageList_Create(width,height,ILC_COLOR | ILC_MASK,1,1);
+    if (image && ImageList_Add(image,color,mask) >= 0) okay = TRUE;
+ done:
+    if (oldFont) SelectObject(colorDC,oldFont);
+    if (oldBrush) SelectObject(maskDC,oldBrush);
+    if (oldMask) SelectObject(maskDC,oldMask);
+    if (oldColor) SelectObject(colorDC,oldColor);
+    if (key) DeleteObject(key);
+    if (checkerBrush) DeleteObject(checkerBrush);
+    if (pattern) DeleteObject(pattern);
+    if (color) DeleteObject(color);
+    if (mask) DeleteObject(mask);
+    if (colorDC) DeleteDC(colorDC);
+    if (maskDC) DeleteDC(maskDC);
+    if (screen) ReleaseDC(icons->list,screen);
+    if (!okay) { if (image) ImageList_Destroy(image); return NULL; }
+    origin->x = bounds.left; origin->y = bounds.top; return image;
+}
+static void EndGhost(DesktopIcons *icons)
+{
+    if (icons->ghost) {
+        if (icons->ghostEntered) ImageList_DragLeave(icons->list);
+        ImageList_EndDrag(); ImageList_Destroy(icons->ghost); icons->ghost = NULL; icons->ghostEntered = FALSE;
+    }
+}
+static POINT DragDelta(DesktopIcons *icons, POINT point, BOOL snap)
+{
+    RECT bounds = icons->drag[0].bounds, area; POINT delta; int i;
+    delta.x = point.x - icons->start.x; delta.y = point.y - icons->start.y;
+    if (snap) {
+        POINT anchor = icons->drag[icons->dragAnchor].point, target = anchor;
+        target.x += delta.x; target.y += delta.y; target = GridPoint(icons,target);
+        delta.x = target.x - anchor.x; delta.y = target.y - anchor.y;
+    }
+    for (i = 1; i < icons->dragCount; ++i) UnionRect(&bounds,&bounds,&icons->drag[i].bounds);
+    GetClientRect(icons->list,&area);
+    delta.x = Clamp(delta.x,-bounds.left,area.right-bounds.right < -bounds.left ? -bounds.left : area.right-bounds.right);
+    delta.y = Clamp(delta.y,-bounds.top,area.bottom-bounds.bottom < -bounds.top ? -bounds.top : area.bottom-bounds.bottom);
+    return delta;
+}
+static void EndDrag(DesktopIcons *icons, BOOL commit)
+{
+    int i, count = 0; Placement *plan = NULL; BOOL hadGhost;
+    if (!icons || !icons->dragging) return;
+    /* Remove the cached ghost BEFORE changing any real icon or label pixels. */
+    hadGhost = icons->ghostEntered; EndGhost(icons); icons->dragging = FALSE;
+    if (!hadGhost) SetCursor(LoadCursorA(NULL,IDC_ARROW));
+    if (GetCapture() == icons->list) ReleaseCapture();
+    if (commit) {
+        POINT point = icons->start, delta;
+        point.x += icons->delta.x; point.y += icons->delta.y; delta = DragDelta(icons,point,icons->snap);
+        plan = MakePlan(icons,&count);
+        if (plan) {
+            for (i = 0; i < icons->dragCount; ++i) {
+                int index = icons->drag[i].index;
+                if (index >= count) break;
+                plan[index].moving = TRUE; plan[index].to.x = icons->drag[i].point.x+delta.x; plan[index].to.y = icons->drag[i].point.y+delta.y;
+            }
+            if (i == icons->dragCount && ResolvePositions(icons,plan,count)) ApplyPlan(icons,plan,count);
+            else commit = FALSE; /* No room: leave the complete original layout. */
+            HeapFree(GetProcessHeap(),0,plan);
+        } else commit = FALSE;
+    }
+    HeapFree(GetProcessHeap(),0,icons->drag); icons->drag = NULL; icons->dragCount = 0;
+    if (commit) { icons->ready = TRUE; icons->pending = FALSE; SaveOrReport(icons); }
+}
 BOOL DesktopIconsBeginDrag(DesktopIcons *icons, const NMLISTVIEW *notify)
 {
-    int index = -1, count;
+    int index = -1, count; POINT origin;
     if (!icons || notify->hdr.hwndFrom != icons->list || (notify->hdr.code != LVN_BEGINDRAG && notify->hdr.code != LVN_BEGINRDRAG)) return FALSE;
     if (icons->locked) return TRUE;
-    /* Modifier/right drags remain Shell32 file operations, including drops to
-     * other windows. An ordinary left drag arranges this desktop only. */
-    if (notify->hdr.code == LVN_BEGINRDRAG || icons->automatic || GetKeyState(VK_CONTROL) < 0 || GetKeyState(VK_SHIFT) < 0 || GetKeyState(VK_MENU) < 0) return FALSE;
+    if (notify->hdr.code == LVN_BEGINRDRAG || icons->automatic || GetKeyState(VK_CONTROL)<0 || GetKeyState(VK_SHIFT)<0 || GetKeyState(VK_MENU)<0) return FALSE;
     count = ListView_GetSelectedCount(icons->list);
     if (!count || icons->dragging) return TRUE;
-    icons->drag = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, count * sizeof(DragPosition));
+    icons->drag = HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,count*sizeof(DragPosition));
     if (!icons->drag) return TRUE;
-    while ((index = ListView_GetNextItem(icons->list, index, LVNI_SELECTED)) != -1 && icons->dragCount < count) {
-        DragPosition *p = &icons->drag[icons->dragCount++]; p->index = index;
-        ListView_GetItemPosition(icons->list, index, &p->point); ListView_GetItemRect(icons->list, index, &p->bounds, LVIR_BOUNDS);
+    icons->dragAnchor = 0;
+    while ((index = ListView_GetNextItem(icons->list,index,LVNI_SELECTED)) != -1 && icons->dragCount < count) {
+        DragPosition *p = &icons->drag[icons->dragCount];
+        if (index == notify->iItem) icons->dragAnchor = icons->dragCount;
+        ++icons->dragCount; p->index = index;
+        ListView_GetItemPosition(icons->list,index,&p->point); ListView_GetItemRect(icons->list,index,&p->bounds,LVIR_BOUNDS);
     }
-    KillTimer(icons->list, RESTORE_TIMER); icons->pending = FALSE; icons->start = notify->ptAction;
+    KillTimer(icons->list,RESTORE_TIMER); icons->pending = FALSE; icons->start = notify->ptAction;
     icons->delta.x = icons->delta.y = 0; icons->dragging = TRUE;
-    SetFocus(icons->list); SetCapture(icons->list); return TRUE;
+    SetFocus(icons->list); SetCapture(icons->list);
+    icons->ghost = CreateGhost(icons,&origin);
+    if (icons->ghost) {
+        if (ImageList_BeginDrag(icons->ghost,0,icons->start.x-origin.x,icons->start.y-origin.y))
+            icons->ghostEntered = ImageList_DragEnter(icons->list,icons->start.x,icons->start.y);
+        else { ImageList_Destroy(icons->ghost); icons->ghost = NULL; }
+    }
+    if (!icons->ghostEntered) SetCursor(LoadCursorA(NULL,IDC_SIZEALL));
+    { POINT cursor; if (GetCursorPos(&cursor)) { ScreenToClient(icons->list,&cursor); MoveDrag(icons,cursor); } }
+    return TRUE;
 }
 static void MoveDrag(DesktopIcons *icons, POINT point)
 {
-    RECT bounds, area; POINT delta; int i;
-    delta.x = point.x - icons->start.x; delta.y = point.y - icons->start.y;
-    if (icons->snap) {
-        POINT anchor = icons->drag[0].point;
-        int margin = (icons->width - GetSystemMetrics(SM_CXICON)) / 2;
-        delta.x = ((anchor.x + delta.x - margin + icons->width / 2) / icons->width) * icons->width + margin - anchor.x;
-        delta.y = ((anchor.y + delta.y - 4 + icons->height / 2) / icons->height) * icons->height + 4 - anchor.y;
-    }
-    bounds = icons->drag[0].bounds;
-    for (i = 1; i < icons->dragCount; ++i) UnionRect(&bounds, &bounds, &icons->drag[i].bounds);
-    GetClientRect(icons->list, &area);
-    delta.x = Clamp(delta.x, -bounds.left, area.right - bounds.right < -bounds.left ? -bounds.left : area.right - bounds.right);
-    delta.y = Clamp(delta.y, -bounds.top, area.bottom - bounds.bottom < -bounds.top ? -bounds.top : area.bottom - bounds.bottom);
+    POINT delta = DragDelta(icons,point,FALSE);
     if (delta.x == icons->delta.x && delta.y == icons->delta.y) return;
     icons->delta = delta;
-    for (i = 0; i < icons->dragCount; ++i) {
-        DragPosition *p = &icons->drag[i]; ListView_SetItemPosition(icons->list, p->index, p->point.x + delta.x, p->point.y + delta.y);
-    }
+    if (icons->ghostEntered) ImageList_DragMove(icons->start.x+delta.x,icons->start.y+delta.y);
 }
 BOOL DesktopIconsMessage(DesktopIcons *icons, UINT message, WPARAM wp, LPARAM lp)
 {
     if (!icons) return FALSE;
-    if (message == WM_TIMER && wp == RESTORE_TIMER) { KillTimer(icons->list, RESTORE_TIMER); Restore(icons); return TRUE; }
+    if (message == WM_TIMER && wp == RESTORE_TIMER) { KillTimer(icons->list,RESTORE_TIMER); Restore(icons); return TRUE; }
     if (!icons->dragging) return FALSE;
+    if (message == WM_SETCURSOR && !icons->ghostEntered) { SetCursor(LoadCursorA(NULL,IDC_SIZEALL)); return TRUE; }
     if (message == WM_MOUSEMOVE || message == WM_LBUTTONUP) {
-        POINT point; point.x = (short)LOWORD(lp); point.y = (short)HIWORD(lp); MoveDrag(icons, point);
-        if (message == WM_LBUTTONUP) EndDrag(icons, TRUE);
+        POINT point; point.x = (short)LOWORD(lp); point.y = (short)HIWORD(lp); MoveDrag(icons,point);
+        if (message == WM_LBUTTONUP) EndDrag(icons,TRUE);
         return TRUE;
     }
-    if (message == WM_CANCELMODE || message == WM_CAPTURECHANGED || message == WM_RBUTTONDOWN || (message == WM_KEYDOWN && wp == VK_ESCAPE)) { EndDrag(icons, FALSE); return TRUE; }
+    if (message == WM_CANCELMODE || message == WM_CAPTURECHANGED || message == WM_RBUTTONDOWN || (message == WM_KEYDOWN && wp == VK_ESCAPE)) { EndDrag(icons,FALSE); return TRUE; }
     return FALSE;
 }
 void DesktopIconsLineUp(DesktopIcons *icons)
 {
-    int i, count, margin;
+    int i, count; Placement *plan;
     if (!icons || icons->locked) return;
-    EndDrag(icons, FALSE);
-    if (icons->automatic) ListView_Arrange(icons->list, LVA_DEFAULT);
+    EndDrag(icons,FALSE);
+    if (icons->automatic) ListView_Arrange(icons->list,LVA_DEFAULT);
     else {
-        margin = (icons->width - GetSystemMetrics(SM_CXICON)) / 2;
-        count = ListView_GetItemCount(icons->list);
-        for (i = 0; i < count; ++i) {
-            POINT point; ListView_GetItemPosition(icons->list, i, &point);
-            point.x = ((point.x - margin + icons->width / 2) / icons->width) * icons->width + margin;
-            point.y = ((point.y - 4 + icons->height / 2) / icons->height) * icons->height + 4; point = Fit(icons->list, i, point);
-            ListView_SetItemPosition(icons->list, i, point.x, point.y);
-        }
+        plan = MakePlan(icons,&count);
+        if (!plan) return;
+        for (i = 0; i < count; ++i) plan[i].to = GridPoint(icons,plan[i].to);
+        if (ResolvePositions(icons,plan,count)) ApplyPlan(icons,plan,count);
+        HeapFree(GetProcessHeap(),0,plan);
     }
     icons->ready = TRUE; icons->pending = FALSE; SaveOrReport(icons);
 }
