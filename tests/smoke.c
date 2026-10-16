@@ -52,6 +52,27 @@ static BOOL CALLBACK ShutdownWindowInfo(HWND window, LPARAM unused)
     return TRUE;
 }
 
+/* This test thread calls GUI APIs and can receive synchronous focus/setting
+ * broadcasts from the process under test. Keep servicing those while waiting
+ * for shutdown, without extending the existing deadline. */
+static DWORD WaitForGuiProcess(HANDLE target, DWORD timeout)
+{
+    DWORD started = GetTickCount();
+    for (;;) {
+        MSG message; DWORD elapsed, result;
+        while (PeekMessageA(&message, NULL, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&message); DispatchMessageA(&message);
+            if (GetTickCount() - started >= timeout) break;
+        }
+        result = WaitForSingleObject(target, 0);
+        if (result != WAIT_TIMEOUT) return result;
+        elapsed = GetTickCount() - started;
+        if (elapsed >= timeout) return WAIT_TIMEOUT;
+        result = MsgWaitForMultipleObjects(1, &target, FALSE, timeout - elapsed, QS_ALLINPUT);
+        if (result == WAIT_FAILED || result == WAIT_TIMEOUT || result == WAIT_OBJECT_0) return result;
+    }
+}
+
 static void Check(BOOL okay, const char *description)
 {
     Log(okay ? "PASS: " : "FAIL: "); Log(description); Log("\r\n");
@@ -916,7 +937,7 @@ void start(void)
     EnvironmentTests(bar, browser, child, menu, settings);
     PostMessageA(child, WM_CLOSE, 0, 0);
     PostMessageA(bar, WM_CLOSE, 0, 0);
-    { DWORD result = WaitForSingleObject(process.hProcess, 5000);
+    { DWORD result = WaitForGuiProcess(process.hProcess, 5000);
       if (result != WAIT_OBJECT_0) { Log("Shutdown: process did not exit within five seconds\r\n"); EnumWindows(ShutdownWindowInfo, 0); }
       Check(result == WAIT_OBJECT_0, "Exit shuts down application"); }
     CloseHandle(process.hThread); CloseHandle(process.hProcess);
@@ -961,7 +982,7 @@ void start(void)
     Check(child != NULL && SendMessageA(child, WM_APP + 35, 0, 0), "persisted pinned program launches with its quoted arguments");
     PostMessageA(child, WM_CLOSE, 0, 0);
     PostMessageA(bar, WM_CLOSE, 0, 0);
-    Check(WaitForSingleObject(process.hProcess, 5000) == WAIT_OBJECT_0, "restarted shell exits cleanly");
+    Check(WaitForGuiProcess(process.hProcess, 5000) == WAIT_OBJECT_0, "restarted shell exits cleanly");
     CloseHandle(process.hThread); CloseHandle(process.hProcess);
     DeleteFileA(settings);
     wsprintfA(path, "%s\\history-document.txt", settingsDir); DeleteFileA(path);
