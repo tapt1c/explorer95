@@ -225,7 +225,9 @@ static BOOL DialogBackground(HWND window, int x, int y, BOOL children)
 {
     POINT point = {x, y}; RECT patch; HDC screen; COLORREF color, expected; DWORD started;
     ClientToScreen(window, &point); SetRect(&patch, point.x, point.y, point.x + 6, point.y + 6);
-    screen = GetDC(NULL); expected = GetPixel(screen, point.x + 2, point.y + 2);
+    /* Parent erasure has a defined dialog-face color, even before its first
+     * paint. A native tab page can use a different themed color under Wine. */
+    screen = GetDC(NULL); expected = children ? GetPixel(screen, point.x + 2, point.y + 2) : GetSysColor(COLOR_BTNFACE);
     FillRect(screen, &patch, GetStockObject(expected == RGB(0,0,0) ? WHITE_BRUSH : BLACK_BRUSH));
     GetPixel(screen, point.x + 2, point.y + 2); /* Flush our GDI batch before the other process paints. */
     ReleaseDC(NULL, screen);
@@ -238,7 +240,7 @@ static BOOL DialogBackground(HWND window, int x, int y, BOOL children)
     } while (color != expected && GetTickCount() - started < 1000);
     if (color != expected) {
         char note[160], kind[64]; GetClassNameA(GetForegroundWindow(), kind, sizeof(kind));
-        wsprintfA(note, "dialog background at %d,%d: actual %08lx expected %08lx, foreground %s\r\n", x, y, color, expected, kind); Log(note);
+        wsprintfA(note, "FAIL: dialog background at %d,%d: actual %08lx expected %08lx, foreground %s\r\n", x, y, color, expected, kind); Log(note);
     }
     RedrawWindow(window, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
     return (expected == GetSysColor(COLOR_BTNFACE) || (children && expected == GetSysColor(COLOR_WINDOW))) && color == expected;
