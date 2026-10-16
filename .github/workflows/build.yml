@@ -14,20 +14,27 @@ jobs:
           name: explorer95-prototype
           path: build/explorer95.exe
   ui-smoke:
-    name: Source UI smoke (Wine64)
+    name: Source UI smoke (Wine 10, x64)
     runs-on: ubuntu-24.04
+    container: debian:13-slim
     steps:
+      - name: Install the validated Wine 10 development runtime
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y make python3 git ca-certificates passwd gcc-mingw-w64-x86-64 wine wine64 xvfb xauth
+          useradd --create-home --uid 1001 ex95test
+          wine --version
       - uses: actions/checkout@v4
-      - name: Install GUI test dependencies
-        run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64 wine wine64 xvfb xauth
       - name: Test source UI in an isolated Wine prefix
         env:
           WINEPREFIX: ${{ runner.temp }}/explorer95-wine
           WINEDEBUG: -all
           WINEDLLOVERRIDES: mscoree,mshtml=
         run: |
+          mkdir -p "$WINEPREFIX"
+          chown -R ex95test:ex95test "$GITHUB_WORKSPACE" "$WINEPREFIX"
           set +e
-          xvfb-run -a make ui64-smoke WINE=wine > source-ui.log 2>&1
+          runuser -u ex95test -- xvfb-run -a make ui64-smoke WINE=wine CC64=x86_64-w64-mingw32-gcc-win32 > source-ui.log 2>&1
           result=$?
           set -e
           cat source-ui.log
