@@ -29,6 +29,16 @@ static void Log(const char *text)
     WriteFile(GetStdHandle(STD_OUTPUT_HANDLE), text, lstrlenA(text), &written, NULL);
 }
 
+static BOOL CALLBACK ShutdownDialogText(HWND window, LPARAM unused)
+{
+    char kind[40], text[512], message[560]; DWORD_PTR result; (void)unused;
+    GetClassNameA(window, kind, sizeof(kind));
+    if (!lstrcmpA(kind, "Static") && SendMessageTimeoutA(window, WM_GETTEXT, sizeof(text), (LPARAM)text, SMTO_ABORTIFHUNG, 1000, &result) && text[0]) {
+        wsprintfA(message, "Shutdown: dialog text=%s\r\n", text); Log(message);
+    }
+    return TRUE;
+}
+
 static BOOL CALLBACK ShutdownWindowInfo(HWND window, LPARAM unused)
 {
     DWORD owner; char kind[80], title[160], message[320]; (void)unused;
@@ -36,6 +46,7 @@ static BOOL CALLBACK ShutdownWindowInfo(HWND window, LPARAM unused)
     if (owner == process.dwProcessId) {
         GetClassNameA(window, kind, sizeof(kind)); GetWindowTextA(window, title, sizeof(title));
         wsprintfA(message, "Shutdown: remaining window class=%s title=%s\r\n", kind, title); Log(message);
+        if (!lstrcmpA(kind, "#32770")) EnumChildWindows(window, ShutdownDialogText, 0);
     }
     return TRUE;
 }
