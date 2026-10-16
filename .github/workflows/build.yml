@@ -14,6 +14,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: checks-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -32,10 +33,29 @@ jobs:
           fetch-depth: 0
       - name: Check routing rules
         run: python3 -m unittest discover -s tests -p test_select_checks.py
+      - name: Find the last successfully checked main commit
+        if: github.event_name == 'push'
+        id: baseline
+        uses: actions/github-script@v7
+        with:
+          script: |
+            try {
+              const {data} = await github.rest.actions.listWorkflowRuns({
+                owner: context.repo.owner, repo: context.repo.repo,
+                workflow_id: 'build.yml', branch: 'main', status: 'success', per_page: 100
+              });
+              // Manual subset runs are not a baseline for automatic CI.
+              const run = data.workflow_runs.find(run =>
+                run.event === 'push' && run.head_sha !== context.sha);
+              core.setOutput('base', run ? run.head_sha : '');
+            } catch (error) {
+              core.warning('Cannot find a verified baseline; selecting the full suite.');
+              core.setOutput('base', '');
+            }
       - name: Select relevant checks
         id: select
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || steps.baseline.outputs.base }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           GROUP: ${{ inputs.group || 'auto' }}
         run: python3 tests/select_checks.py --base "$BASE_SHA" --head "$HEAD_SHA" --group "$GROUP" | tee -a "$GITHUB_OUTPUT"
