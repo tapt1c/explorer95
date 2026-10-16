@@ -37,4 +37,7 @@ jobs:
             tail -n 100 source-ui.log
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$result" -ne 0 ]; then
+            python3 -c 'from pathlib import Path; lines=Path("source-ui.log").read_text(errors="replace").splitlines(); failures=[line for line in lines if line.startswith("FAIL:")]; message=failures[-1] if failures else "\n".join(lines[-12:]); print("::error title=Source UI smoke::"+message.replace("%","%25").replace("\r","%0D").replace("\n","%0A"))'
+          fi
           exit "$result"
