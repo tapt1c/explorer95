@@ -189,7 +189,7 @@ void start(void)
         !BrowserRegister(instance, uiFont))
         ExitProcess(1);
     host.instance = instance; host.font = uiFont;
-    host.openFolder = BrowserOpen; host.specialPath = SpecialPath; host.showRun = ShowRun;
+    host.openFolder = BrowserOpen; host.specialPath = SpecialPath; host.showRun = ShowRun; host.closeFolders = BrowserShutdown;
     bar = EnvironmentCreate(&host);
     if (!bar) { EnvironmentShutdown(); ExitProcess(1); }
     while (GetMessageA(&message, NULL, 0, 0) > 0) {

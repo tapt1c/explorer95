@@ -9,6 +9,7 @@ typedef struct EnvironmentHost {
     HWND (*openFolder)(const char *path);
     BOOL (*specialPath)(int folder, char *path);
     void (*showRun)(void);
+    void (*closeFolders)(void);
 } EnvironmentHost;
 
 HWND EnvironmentCreate(const EnvironmentHost *host);

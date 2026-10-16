@@ -29,6 +29,17 @@ static void Log(const char *text)
     WriteFile(GetStdHandle(STD_OUTPUT_HANDLE), text, lstrlenA(text), &written, NULL);
 }
 
+static BOOL CALLBACK ShutdownWindowInfo(HWND window, LPARAM unused)
+{
+    DWORD owner; char kind[80], title[160], message[320]; (void)unused;
+    GetWindowThreadProcessId(window, &owner);
+    if (owner == process.dwProcessId) {
+        GetClassNameA(window, kind, sizeof(kind)); GetWindowTextA(window, title, sizeof(title));
+        wsprintfA(message, "Shutdown: remaining window class=%s title=%s\r\n", kind, title); Log(message);
+    }
+    return TRUE;
+}
+
 static void Check(BOOL okay, const char *description)
 {
     Log(okay ? "PASS: " : "FAIL: "); Log(description); Log("\r\n");
@@ -883,7 +894,9 @@ void start(void)
     EnvironmentTests(bar, browser, child, menu, settings);
     PostMessageA(child, WM_CLOSE, 0, 0);
     PostMessageA(bar, WM_CLOSE, 0, 0);
-    Check(WaitForSingleObject(process.hProcess, 5000) == WAIT_OBJECT_0, "Exit shuts down application");
+    { DWORD result = WaitForSingleObject(process.hProcess, 5000);
+      if (result != WAIT_OBJECT_0) { Log("Shutdown: process did not exit within five seconds\r\n"); EnumWindows(ShutdownWindowInfo, 0); }
+      Check(result == WAIT_OBJECT_0, "Exit shuts down application"); }
     CloseHandle(process.hThread); CloseHandle(process.hProcess);
     {
         RECT work;

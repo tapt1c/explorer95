@@ -722,6 +722,9 @@ void EnvironmentShutdown(void)
     KillTimer(env.bar, 1); DragAcceptFiles(env.bar, FALSE);
     if (hotkeyDesktop) UnregisterHotKey(env.bar, 1);
     if (hotkeyStart) UnregisterHotKey(env.bar, 2);
+    /* Browser windows own shell objects too: release them while the desktop
+     * and its shell services are still alive. */
+    if (env.host.closeFolders) env.host.closeFolders();
     StartDestroy(); TrayDestroy(); NativeViewDestroy(env.desktopView); env.desktopView = NULL;
     if (env.desktop) DestroyWindow(env.desktop);
     if (env.properties) DestroyWindow(env.properties);
