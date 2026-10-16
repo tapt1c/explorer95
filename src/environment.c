@@ -1,5 +1,6 @@
 #define WIN32_LEAN_AND_MEAN
 #include "shell_internal.h"
+#include "render_trace.h"
 
 ShellState env;
 typedef struct TaskGroup { HWND windows[TASK_LIMIT], button; int count; DWORD process; BOOL active; HICON icon; } TaskGroup;
@@ -469,6 +470,8 @@ void EnvApplyOptions(void)
 void EnvironmentArrangeDesktop(BOOL automatic)
 { env.options.autoArrange = automatic; NativeViewArrange(env.desktopView, automatic); EnvSaveOptions(); }
 BOOL EnvironmentDesktopIconsVisible(void) { return env.options.desktopIcons; }
+void EnvironmentShowDesktopMenu(POINT point)
+{ if (env.desktopView && !env.closing) DesktopBackgroundMenu(env.desktopView, point, env.bar); }
 void EnvironmentToggleDesktopIcons(void)
 {
     env.options.desktopIcons = !env.options.desktopIcons; EnvSaveOptions();
@@ -588,13 +591,21 @@ void EnvCommand(int id)
 
 static LRESULT CALLBACK DesktopProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
 {
+    RenderTraceEvent("desktop", window, message, wp, lp);
     if (env.closing) return DefWindowProcA(window, message, wp, lp);
+    if (message == WM_WINDOWPOSCHANGING) {
+        WINDOWPOS *pos = (WINDOWPOS *)lp;
+        if (!(pos->flags & SWP_NOZORDER)) {
+            pos->hwndInsertAfter = HWND_BOTTOM;
+            RenderTraceEvent("desktop-keep-bottom", window, message, wp, lp);
+        }
+    }
     if (message == WM_PAINT) {
         PAINTSTRUCT paint; HDC dc = BeginPaint(window, &paint); NativeViewPaintDesktop(env.desktopView, dc, window); EndPaint(window, &paint); return 0;
     }
     if (message == WM_ERASEBKGND) return TRUE;
     if (message == WM_CONTEXTMENU && env.desktopView) {
-        POINT point; GetCursorPos(&point); DesktopBackgroundMenu(env.desktopView, point); return 0;
+        POINT point; GetCursorPos(&point); EnvironmentShowDesktopMenu(point); return 0;
     }
     if (message == WM_COMMAND) { EnvCommand(LOWORD(wp)); return 0; }
     if (message == WM_SYSCOLORCHANGE) {
@@ -610,9 +621,6 @@ static LRESULT CALLBACK DesktopProc(HWND window, UINT message, WPARAM wp, LPARAM
         if (wp == SPI_SETWORKAREA) ResizeDesktop();
         else { NativeViewDesktopSettingsChanged(env.desktopView); InvalidateRect(window, NULL, FALSE); }
         return 0;
-    }
-    if (message == WM_ACTIVATE && LOWORD(wp) != WA_INACTIVE) {
-        SetWindowPos(window, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE); return 0;
     }
     if (message == WM_SETFOCUS && env.desktopView && env.options.desktopIcons) { SetFocus(NativeViewWindow(env.desktopView)); return 0; }
     return DefWindowProcA(window, message, wp, lp);
@@ -641,6 +649,8 @@ static PaintBuffer barBuffer, barButtonBuffer;
 
 static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
 {
+    RenderTraceEvent("taskbar", window, message, wp, lp);
+    if (NativeViewMenuMessage(env.desktopView, message, wp, lp)) return 0;
     if (ShutdownActive() && (message == WM_COMMAND || message == WM_HOTKEY || message == WM_CONTEXTMENU)) { ShutdownFocus(); return 0; }
     switch (message) {
     case WM_SIZE: EnvLayoutBar(); return 0;
@@ -749,6 +759,7 @@ static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
 HWND EnvironmentCreate(const EnvironmentHost *callbacks)
 {
     APPBARDATA data;
+    RenderTraceOpen();
     env.host = *callbacks; SettingsPath(); NativeViewSetHost(callbacks); PaintColorsChanged(&desktopColors);
     SystemParametersInfoA(SPI_GETWORKAREA, 0, &env.originalArea, 0);
     env.primary = FindWindowA("Shell_TrayWnd", NULL) == NULL;
@@ -833,7 +844,7 @@ void EnvironmentShutdown(void)
     SetPropA(env.bar, "Explorer95.ShutdownStage", (HANDLE)7);
     if (IsWindow(env.bar)) DestroyWindow(env.bar);
     env.bar = NULL;
-    PaintBufferFree(&barBuffer); PaintBufferFree(&barButtonBuffer); PaintShutdown();
+    PaintBufferFree(&barBuffer); PaintBufferFree(&barButtonBuffer); PaintShutdown(); RenderTraceClose();
 }
 
 /* The classic shell uses the system caption font in bold for Start. The

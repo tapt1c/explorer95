@@ -60,6 +60,7 @@ Explorer95 — любительская нативная оболочка для
 | `src/shell_config.c` | Подготовка копии EXE, изменение `[boot] shell=`, резервирование и восстановление. |
 | `src/native_view.c`, `src/native_view.h` | Хост `IShellBrowser`/`IShellView`, системные виртуальные папки, рабочий стол, обои и контекстные меню. |
 | `src/tray.c` | Базовый ANSI-протокол уведомлений Win95, значки трея, подсказки и callbacks. |
+| `src/render_trace.c`, `src/render_trace.h` | Ограниченная opt-in трассировка `--trace-render`, EX95REND.LOG рядом с EXE; события активации, Z-order и рисования. |
 | `src/paint.c`, `src/paint.h` | Сохраняемые GDI-буферы, TransparentBlt с Win95-совместимым запасным путём и флажок Start. |
 | `src/shutdown.c` | Модальный выбор Stand By / Hibernate / Turn Off / Restart, GDI-затемнение снимка и необязательные API питания. |
 | `src/explorer95.rc` | Ресурсы EXE; bitmap кнопки Start имеет ID `143`. |
@@ -281,6 +282,16 @@ WINEPREFIX=/tmp/explorer95-wine640 WINEDEBUG=-all \
 
 ## Отрисовка и владение ресурсами
 
+- Полноэкранный Desktop остаётся под приложениями: WM_WINDOWPOSCHANGING
+  меняет hwndInsertAfter на HWND_BOTTOM до применения операции. Один обработчик
+  WM_ACTIVATE не предотвращает временный подъём и не защищает от SWP_NOACTIVATE.
+  Не поднимайте Desktop через SetForegroundWindow ради TrackPopupMenu:
+  владелец desktop-menu — env.bar, а NativeViewMenuMessage передаёт IContextMenu2
+  только сообщения меню, не owner-drawn кнопок панели.
+- Для нерепродуцируемого на Wine мерцания используйте --trace-render на целевой
+  системе. Журнал выключен по умолчанию, ограничен 512 КиБ, не пишет названия
+  файлов/окон/клавиши. Сохраняйте сообщения и HWND/clip/Z-order до и после сбоя;
+  успешный Wine smoke не доказывает отсутствие временного перекрытия на Win95.
 - Собственные поверхности панели, «Пуска» и пунктов меню рисуйте через существующие
   `PaintBuffer`/`PaintBufferBegin`/`PaintBufferEnd`. Формируйте законченное изображение
   перед копированием на экран; не возвращайте предварительное стирание фона.

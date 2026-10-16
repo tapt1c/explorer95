@@ -21,6 +21,7 @@ void EnvironmentShowProperties(void);
 void EnvironmentArrangeDesktop(BOOL automatic);
 void EnvironmentToggleDesktopIcons(void);
 BOOL EnvironmentDesktopIconsVisible(void);
+void EnvironmentShowDesktopMenu(POINT point);
 void EnvironmentFind(HWND owner, const char *directory);
 void EnvironmentShutdown(void);
 

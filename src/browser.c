@@ -1,5 +1,6 @@
 #define WIN32_LEAN_AND_MEAN
 #include "browser_internal.h"
+#include "render_trace.h"
 
 HINSTANCE browserInstance;
 HFONT browserFont;
@@ -458,6 +459,7 @@ static void Command(Browser *browser, int command)
 static LRESULT CALLBACK BrowserProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
 {
     Browser *browser = (Browser *)GetWindowLongPtrA(window, GWLP_USERDATA);
+    RenderTraceEvent("browser", window, message, wp, lp);
     if (browser && browser->context && (message == WM_INITMENUPOPUP || message == WM_DRAWITEM || message == WM_MEASUREITEM))
         if (SUCCEEDED(IContextMenu2_HandleMenuMsg(browser->context, message, wp, lp))) return 0;
     switch (message) {

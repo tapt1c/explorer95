@@ -283,6 +283,35 @@ static void WaitSelection(HWND list)
     PostMessageA(list, WM_KEYDOWN, VK_HOME, 0);
     while (!SendMessageA(list, LVM_GETSELECTEDCOUNT, 0, 0) && GetTickCount() - started < 3000) Sleep(30);
 }
+static BOOL WindowPrecedes(HWND first, HWND second)
+{
+    HWND window;
+    for (window = GetWindow(first, GW_HWNDFIRST); window; window = GetWindow(window, GW_HWNDNEXT)) {
+        if (window == first) return TRUE;
+        if (window == second) return FALSE;
+    }
+    return FALSE;
+}
+static void DesktopStackTests(HWND bar, HWND desktop, HWND browser)
+{
+    HWND menu; DWORD started;
+    SetForegroundWindow(browser);
+    /* Activation handlers alone do not protect the desktop against a raise
+     * without activation. Exercise the actual USER z-order operation. */
+    SetWindowPos(desktop, HWND_TOPMOST, 0,0,0,0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    Check(!(GetWindowLongA(desktop, GWL_EXSTYLE) & WS_EX_TOPMOST) && WindowPrecedes(browser, desktop),
+          "desktop rejects being raised over an existing browser before changing z-order");
+    SetForegroundWindow(desktop);
+    Check(WindowPrecedes(browser, desktop), "desktop activation preserves the browser above the wallpaper");
+    SetCursorPos(1, 1); PostMessageA(desktop, WM_CONTEXTMENU, (WPARAM)desktop, MAKELPARAM(1,1));
+    menu = WaitFor("#32768", NULL);
+    Check(menu && GetForegroundWindow() == bar && WindowPrecedes(browser, desktop),
+          "desktop context menu uses the taskbar as foreground owner without raising the wallpaper window");
+    PostMessageA(bar, WM_CANCELMODE, 0, 0); started = GetTickCount();
+    while (IsWindow(menu) && IsWindowVisible(menu) && GetTickCount() - started < 3000) Sleep(20);
+    Check(!IsWindow(menu) || !IsWindowVisible(menu), "desktop menu cancels through its actual owner");
+    SetForegroundWindow(browser);
+}
 static void BrowserColorTests(HWND browser)
 {
     HWND toolbar = GetDlgItem(browser, 470), address = GetDlgItem(browser, 403), view = FindWindowExA(browser, NULL, "SHELLDLL_DefView", NULL);
@@ -1279,6 +1308,7 @@ void start(void)
 
     BrowserColorTests(browser);
     BrowserTests(browser, fixture, settingsDir, settings);
+    DesktopStackTests(bar, desktop, browser);
     NativeFolderTests(menu);
     if (group == GROUP_BROWSER) goto shutdown;
     SendMessageA(menu, WM_COMMAND, 305, 0);
@@ -1324,7 +1354,7 @@ shutdown:
         Check(EqualRect(&work, &originalWork), "exit restores the original desktop work area");
     }
     if (group != GROUP_FULL) goto cleanup;
-    wsprintfA(command, "\"%s\" --settings=\"%s\"", executable, settings);
+    wsprintfA(command, "\"%s\" --settings=\"%s\" --trace-render", executable, settings);
     Check(CreateProcessA(NULL, command, NULL, NULL, FALSE, 0, NULL, NULL, &startup, &process), "restart with saved profile");
     bar = WaitFor("Explorer95.Taskbar", NULL);
     Check(bar != NULL, "shell restarts successfully");
@@ -1362,6 +1392,19 @@ shutdown:
     PostMessageA(bar, WM_CLOSE, 0, 0);
     Check(WaitForGuiProcess(process.hProcess, 5000) == WAIT_OBJECT_0, "restarted shell exits cleanly");
     CloseHandle(process.hThread); CloseHandle(process.hProcess);
+    {
+        const char prefix[] = "Explorer95 render trace 1;";
+        char header[80]; DWORD read = 0, size = 0; int end = lstrlenA(executable);
+        while (end && executable[end - 1] != '\\') --end;
+        lstrcpynA(path, executable, end + 1); lstrcatA(path, "EX95REND.LOG");
+        file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+        if (file != INVALID_HANDLE_VALUE) {
+            size = GetFileSize(file, NULL); ReadFile(file, header, sizeof(prefix) - 1, &read, NULL); header[read] = 0; CloseHandle(file);
+        }
+        Check(read == sizeof(prefix) - 1 && !lstrcmpA(header, prefix) && size > 200 && size <= 512UL * 1024,
+              "opt-in rendering trace records window events in a bounded log beside the running EXE");
+        Check(DeleteFileA(path), "diagnostic trace fixture removed after the file handle closes");
+    }
 cleanup:
     DeleteFileA(settings);
     wsprintfA(path, "%s\\history-document.txt", settingsDir); DeleteFileA(path);

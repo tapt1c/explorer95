@@ -8,6 +8,7 @@
 #include <shlobj.h>
 #include "native_view.h"
 #include "paint.h"
+#include "render_trace.h"
 #include "browser.h"
 
 struct NativeView {
@@ -238,15 +239,23 @@ static BOOL OpenDesktopSelection(NativeView *view)
     return handled;
 }
 
+BOOL NativeViewMenuMessage(NativeView *view, UINT message, WPARAM wp, LPARAM lp)
+{
+    if (!view || !view->context) return FALSE;
+    if (message == WM_DRAWITEM && ((DRAWITEMSTRUCT *)lp)->CtlType != ODT_MENU) return FALSE;
+    if (message == WM_MEASUREITEM && ((MEASUREITEMSTRUCT *)lp)->CtlType != ODT_MENU) return FALSE;
+    if (message != WM_INITMENUPOPUP && message != WM_DRAWITEM && message != WM_MEASUREITEM) return FALSE;
+    return SUCCEEDED(IContextMenu2_HandleMenuMsg(view->context, message, wp, lp));
+}
+
 static LRESULT CALLBACK Subclass(HWND window, UINT message, WPARAM wp, LPARAM lp)
 {
     NativeView *view = (NativeView *)GetPropA(window, property);
     WNDPROC original;
     if (!view) return DefWindowProcA(window, message, wp, lp);
     original = window == view->list ? view->oldList : view->oldView;
-    if (view->context && (message == WM_INITMENUPOPUP || message == WM_DRAWITEM || message == WM_MEASUREITEM)) {
-        if (SUCCEEDED(IContextMenu2_HandleMenuMsg(view->context, message, wp, lp))) return 0;
-    }
+    RenderTraceEvent(view->desktop ? (window == view->list ? "desktop-list" : "desktop-view") : "folder-view", window, message, wp, lp);
+    if (NativeViewMenuMessage(view, message, wp, lp)) return 0;
     if (view->desktop && window == view->list) {
         if (message == WM_ERASEBKGND) { PaintBackground(view, (HDC)wp, window); return TRUE; }
         if (message == WM_CONTEXTMENU) {
@@ -255,7 +264,7 @@ static LRESULT CALLBACK Subclass(HWND window, UINT message, WPARAM wp, LPARAM lp
             GetCursorPos(&point); hit.pt = point;
             ScreenToClient(window, &hit.pt);
             if ((LONG)lp == -1 || ListView_HitTest(window, &hit) == -1) {
-                DesktopBackgroundMenu(view, point); return 0;
+                EnvironmentShowDesktopMenu(point); return 0;
             }
         }
         if ((message == WM_LBUTTONDBLCLK || (message == WM_KEYDOWN && wp == VK_RETURN)) && OpenDesktopSelection(view))
@@ -303,7 +312,7 @@ static BOOL HasNewMenu(HMENU menu)
     return FALSE;
 }
 
-void DesktopBackgroundMenu(NativeView *view, POINT point)
+void DesktopBackgroundMenu(NativeView *view, POINT point, HWND owner)
 {
     IContextMenu *context = NULL;
     HMENU menu = CreatePopupMenu(), extra = CreatePopupMenu();
@@ -333,13 +342,17 @@ void DesktopBackgroundMenu(NativeView *view, POINT point)
     AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
     AppendMenuA(menu, MF_POPUP, (UINT_PTR)extra, "Explorer95");
     AppendMenuA(menu, MF_STRING, 0x8004, "Desktop Background / Display Properties...");
-    SetForegroundWindow(view->parent);
+    /* A full-screen desktop must never be promoted just to own a menu. */
+    SetForegroundWindow(owner);
     command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, 0,
-                             view->window, NULL);
+                             owner, NULL);
+    /* Win95 popup menus on tool windows need a queued benign message after
+     * tracking so a second background-menu invocation dismisses normally. */
+    PostMessageA(owner, WM_NULL, 0, 0);
     if (command > 0 && command < 0x7000 && context) {
         CMINVOKECOMMANDINFO invoke;
         ZeroMemory(&invoke, sizeof(invoke));
-        invoke.cbSize = sizeof(invoke); invoke.hwnd = view->parent;
+        invoke.cbSize = sizeof(invoke); invoke.hwnd = owner;
         invoke.lpVerb = MAKEINTRESOURCEA(command - 1); invoke.nShow = SW_SHOWNORMAL;
         IContextMenu_InvokeCommand(context, &invoke);
     }

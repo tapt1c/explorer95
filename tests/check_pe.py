@@ -21,12 +21,12 @@ ALLOWED = {
     "comdlg32.dll": {"GetOpenFileNameA"},
     # Classic GDI drawing and DIB transfer APIs, available in Windows 95;
     # shutdown fade does not import AlphaBlend, GradientFill or layered-window APIs.
-    "gdi32.dll": {"SaveDC", "RestoreDC", "ExcludeClipRect", "Arc", "CreatePen", "Ellipse", "CreateSolidBrush", "GetDIBits", "SetDIBits", "LineTo", "MoveToEx", "GetStockObject", "SelectObject", "SetBkMode", "SetTextColor", "BitBlt",
+    "gdi32.dll": {"GetDeviceCaps", "GetClipBox", "SaveDC", "RestoreDC", "ExcludeClipRect", "Arc", "CreatePen", "Ellipse", "CreateSolidBrush", "GetDIBits", "SetDIBits", "LineTo", "MoveToEx", "GetStockObject", "SelectObject", "SetBkMode", "SetTextColor", "BitBlt",
                   "StretchBlt", "CreateCompatibleBitmap", "CreateBitmap", "SetBkColor", "SetWindowOrgEx", "CreateFontIndirectA", "GetTextExtentPoint32A", "GetTextMetricsA", "CreateCompatibleDC", "DeleteDC", "DeleteObject", "GetObjectA"},
     "kernel32.dll": set("""
         CreateToolhelp32Snapshot Process32First Process32Next GetSystemTimeAsFileTime GetTempFileNameA MoveFileA
         CompareFileTime FileTimeToLocalFileTime FileTimeToSystemTime GetDateFormatA
-        GlobalAlloc GlobalFree GlobalLock GlobalSize GlobalUnlock
+        WriteFile GlobalAlloc GlobalFree GlobalLock GlobalSize GlobalUnlock
         CloseHandle CopyFileA CreateDirectoryA CreateFileA ExitProcess ExpandEnvironmentStringsA FindClose FindFirstFileA
         FindNextFileA FindFirstChangeNotificationA FindNextChangeNotification FindCloseChangeNotification WaitForSingleObject FormatMessageA GetFileAttributesA GetFullPathNameA
         DeleteFileA GetSystemDirectoryA SetLastError GetTimeFormatA GetLastError GetLocalTime GetLogicalDriveStringsA GetModuleHandleA

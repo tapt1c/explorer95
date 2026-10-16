@@ -9,6 +9,7 @@
 #include <shlobj.h>
 #include "environment.h"
 #include "browser.h"
+#include "render_trace.h"
 
 #define APP "Explorer95"
 #define BAR_CLASS "Explorer95.Taskbar"
@@ -177,6 +178,9 @@ void start(void)
     instance = GetModuleHandleA(NULL);
     previous = FindWindowA(BAR_CLASS, NULL);
     if (previous) {
+        if (RenderTraceRequested()) MessageBoxA(previous,
+            "Explorer95 is already running. Exit that instance before starting rendering diagnostics.",
+            "Explorer95 diagnostics", MB_OK | MB_ICONINFORMATION);
         SetForegroundWindow(previous);
         ExitProcess(0);
     }
