@@ -62,6 +62,7 @@ build/ui64/resources.o: src/explorer95.rc resources/Bitmap143.bmp build/obj64/.f
 	$(WINDRES64) --preprocessor="$(CC64)" --preprocessor-arg=-E --preprocessor-arg=-xc -I. -i $< -o $@
 
 check: all
+	python3 -m unittest discover -s tests -p test_check_pe.py
 	python3 tests/check_pe.py build/explorer95.exe
 
 check-build:

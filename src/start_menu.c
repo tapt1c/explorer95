@@ -330,7 +330,9 @@ static void ProgramsPopup(BOOL documents)
 
 void StartHide(void)
 {
-    if (classicActive) { EndMenu(); return; }
+    /* Win95 does not export EndMenu. DefWindowProc cancels menu tracking
+     * when its owner receives WM_CANCELMODE (the documented legacy path). */
+    if (classicActive) { SendMessageA(env.start, WM_CANCELMODE, 0, 0); return; }
     if (popupActive) return;
     ShowWindow(env.start, SW_HIDE);
     SendMessageA(env.startButton, BM_SETSTATE, FALSE, 0);
@@ -416,7 +418,7 @@ void StartPosition(void)
 }
 void StartToggle(void)
 {
-    if (env.options.classicStart) { if (classicActive) EndMenu(); else ClassicPopup(); return; }
+    if (env.options.classicStart) { if (classicActive) StartHide(); else ClassicPopup(); return; }
     if (IsWindowVisible(env.start)) StartHide();
     else {
         UpdateRecent(); StartPosition();

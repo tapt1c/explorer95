@@ -10,10 +10,10 @@ import sys
 from pathlib import Path
 
 
-# Reviewed Win95 RTM imports: image lists, clipboard, menus, file operations,
-# properties, dates, Toolhelp32 process identity, file staging/rename, task allocation, recent-doc
-# clearing and basic window/GDI helpers below are also present in Win95 RTM.
-# All reviewed imports are part of the original Win95 Win32/Common Controls/Shell32 baseline.
+# Project's reviewed baseline, not an export dump from a Windows 95 installation.
+# Keep the independent negative fixtures in test_check_pe.py passing when editing
+# this list. In particular EndMenu was mistakenly allowed in v0.7.0-alpha.1;
+# the user's real Windows 95 loader rejected it before our entry point ran.
 ALLOWED = {
     "advapi32.dll": {"GetUserNameA", "RegOpenKeyExA", "RegQueryValueExA", "RegCloseKey"},
     "comctl32.dll": {"InitCommonControls", "ImageList_Create", "ImageList_Destroy",
@@ -40,7 +40,7 @@ ALLOWED = {
         DragAcceptFiles DragQueryFileA DragFinish
     """.split()),
     "user32.dll": set("""
-        AdjustWindowRectEx EnableWindow EndMenu CheckMenuItem ClientToScreen CloseClipboard DeleteMenu EmptyClipboard EnableMenuItem
+        AdjustWindowRectEx EnableWindow CheckMenuItem ClientToScreen CloseClipboard DeleteMenu EmptyClipboard EnableMenuItem
         GetClipboardData GetMenu GetMenuDefaultItem GetMenuItemID IsClipboardFormatAvailable OpenClipboard RegisterClipboardFormatA SetClipboardData
         AppendMenuA CreateMenu CreatePopupMenu CreateWindowExA DefWindowProcA
         CallWindowProcA CopyIcon DestroyIcon DrawIconEx ExitWindowsEx FindWindowExA

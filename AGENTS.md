@@ -64,6 +64,7 @@ Explorer95 — любительская нативная оболочка для
 | `src/explorer95.rc` | Ресурсы EXE; bitmap кнопки Start имеет ID `143`. |
 | `resources/Bitmap143.bmp` | Предоставленный пользователем исходный флажок 16×16. |
 | `tests/check_pe.py` | Структурная проверка PE и разрешённых импортов; только стандартная библиотека Python. |
+| `tests/test_check_pe.py` | Независимые PE-примеры для регрессий проверяющего кода, включая отказ для отсутствующего в Win95 EndMenu. |
 | `tests/layout.c`, `tests/layout_cases.h`, `tests/compat/windows.h` | Нативная проверка геометрии и общие с Windows smoke случаи; минимальные Win32-типы только для host-теста. |
 | `tests/select_checks.py`, `tests/test_select_checks.py` | Консервативный выбор групп CI и проверка правил, включая переименования и неизвестные пути. |
 | `tests/check_incremental.py` | Проверка настоящих Make-правил во временном дереве без изменения checkout. |
@@ -103,6 +104,10 @@ INI — в файловом backend. `EnvironmentHost` связывает обо
   DLL по пути из системного каталога; не ищите её в текущем каталоге программы.
 - Список разрешённых импортов — необходимая проверка, но не доказательство
   работоспособности на реальной Win95.
+- `USER32.EndMenu` не экспортируется Windows 95: импорт в v0.7.0-alpha.1
+  подтверждённо мешал загрузке на реальной системе. Для отмены TrackPopupMenu
+  отправляйте владельцу меню `WM_CANCELMODE`, как рекомендует документация Microsoft.
+  Не возвращайте EndMenu в ALLOWED; независимая регрессия проверяет этот отказ.
 
 ## Сборка
 
@@ -119,8 +124,9 @@ make check
 make check CC=i686-w64-mingw32-gcc-win32
 ```
 
-Результат — `build/explorer95.exe`. `make check` сначала собирает EXE и затем
-запускает `python3 tests/check_pe.py build/explorer95.exe`.
+Результат — `build/explorer95.exe`. `make check` собирает EXE, запускает быстрые
+регрессии самого PE-проверяющего кода (`python3 -m unittest discover -s tests -p test_check_pe.py`)
+и проверяет готовый файл через `python3 tests/check_pe.py build/explorer95.exe`.
 `make all` выполняет только сборку и не заменяет проверку PE.
 
 Если компилятор и binutils доступны по нестандартному пути, задавайте оба

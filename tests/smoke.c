@@ -629,7 +629,16 @@ static void StartBehaviorTests(HWND properties, HWND bar, HWND menu, const char 
     SettingsPage(properties, 1, 0); SendDlgItemMessageA(properties, 1002, CB_SETCURSEL, 1, 0); SendMessageA(properties, WM_COMMAND, 0x3021, 0);
     Check(GetPrivateProfileIntA("Start", "Classic", 0, settings) == 1, "classic Start style is persisted");
     PostMessageA(bar, WM_COMMAND, 100, 0); popup = WaitFor("#32768", NULL);
-    Check(popup != NULL && !IsWindowVisible(menu), "classic mode opens a native single-column menu"); CloseStartPopup(menu);
+    Check(popup != NULL && !IsWindowVisible(menu), "classic mode opens a native single-column menu");
+    PostMessageA(bar, WM_COMMAND, 100, 0);
+    {
+        DWORD started = GetTickCount();
+        while (popup && IsWindowVisible(popup) && GetTickCount() - started < 3000) Sleep(30);
+        Check(!popup || !IsWindowVisible(popup), "Start toggles the classic popup closed without EndMenu");
+        Check(!(SendDlgItemMessageA(bar, 100, BM_GETSTATE, 0, 0) & BST_PUSHED), "closing the classic popup releases the Start button");
+    }
+    PostMessageA(bar, WM_COMMAND, 100, 0); popup = WaitFor("#32768", NULL);
+    Check(popup != NULL, "classic Start can reopen after cancelling menu tracking"); CloseStartPopup(menu);
     SendDlgItemMessageA(properties, 1002, CB_SETCURSEL, 0, 0); SendMessageA(properties, WM_COMMAND, 0x3021, 0);
     Check(GetPrivateProfileIntA("Start", "Classic", -1, settings) == 0, "two-column Start style can be restored");
 }
