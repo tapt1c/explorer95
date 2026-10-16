@@ -21,12 +21,26 @@ struct DesktopIcons {
     POINT start, delta;
     HIMAGELIST ghost;
     BOOL ghostEntered;
+    BOOL refreshing, redrawPaused, nativeRedrawPaused, changingRedraw;
 };
 static void EndDrag(DesktopIcons *icons, BOOL commit);
 static void MoveDrag(DesktopIcons *icons, POINT point);
 static BOOL ResolvePositions(DesktopIcons *icons, Placement *plan, int count);
 static Placement *MakePlan(DesktopIcons *icons, int *count);
 static void ApplyPlan(DesktopIcons *icons, const Placement *plan, int count);
+static void EnableNativeRedraw(DesktopIcons *icons)
+{
+    if (!icons->nativeRedrawPaused) return;
+    icons->nativeRedrawPaused = FALSE; icons->changingRedraw = TRUE;
+    SendMessageA(icons->list,WM_SETREDRAW,TRUE,0);
+    icons->changingRedraw = FALSE;
+}
+static void ResumeRedraw(DesktopIcons *icons)
+{
+    if (!icons->redrawPaused) return;
+    EnableNativeRedraw(icons); icons->redrawPaused = FALSE;
+    RedrawWindow(icons->list,NULL,NULL,RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
+}
 static int Clamp(int value, int low, int high) { return value < low ? low : value > high ? high : value; }
 static BOOL Name(HWND list, int index, char *name)
 {
@@ -100,6 +114,14 @@ static void Restore(DesktopIcons *icons)
     int i, j, count = ListView_GetItemCount(icons->list); BYTE used[ICON_LIMIT];
     if (icons->dragging) return;
     ZeroMemory(used, sizeof(used)); icons->restoring = TRUE;
+    /* Enabling redraw and the first native paint can perform deferred item
+     * measurement/placement. Flush both offscreen BEFORE restoring positions.
+     * A memory DC's default 1x1 bitmap suffices; no desktop-sized allocation. */
+    EnableNativeRedraw(icons);
+    if (icons->redrawPaused) {
+        HDC dc = CreateCompatibleDC(NULL);
+        if (dc) { SendMessageA(icons->list,WM_PRINTCLIENT,(WPARAM)dc,PRF_CLIENT); DeleteDC(dc); }
+    }
     /* Some shell versions reapply their stored style while refreshing. */
     {
         LONG style = GetWindowLongA(icons->list,GWL_STYLE);
@@ -124,6 +146,7 @@ static void Restore(DesktopIcons *icons)
         RememberVisible(icons);
     }
     icons->restoring = FALSE; icons->ready = TRUE; icons->pending = FALSE;
+    ResumeRedraw(icons);
     /* Do not discard unmatched records during asynchronous Shell32 enumeration. */
 }
 BOOL DesktopIconsSave(DesktopIcons *icons)
@@ -184,7 +207,30 @@ void DesktopIconsAfterShellAction(DesktopIcons *icons)
 void DesktopIconsChanged(DesktopIcons *icons)
 {
     if (!icons || icons->restoring) return;
-    EndDrag(icons, FALSE); icons->pending = TRUE; SetTimer(icons->list, RESTORE_TIMER, 300, NULL);
+    EndDrag(icons, FALSE); icons->pending = TRUE;
+    /* A failed timer must never leave the native control unable to repaint. */
+    if (!SetTimer(icons->list, RESTORE_TIMER, 300, NULL)) ResumeRedraw(icons);
+}
+BOOL DesktopIconsBeginRefresh(DesktopIcons *icons)
+{
+    if (!icons || icons->refreshing) return FALSE;
+    EndDrag(icons,FALSE);
+    /* Repeated F5 during enumeration must retain the complete snapshot. Keep
+     * this in memory even when the profile is read-only; F5 needs no disk I/O. */
+    if (icons->ready && !icons->pending) Capture(icons);
+    icons->refreshing = TRUE; icons->pending = TRUE;
+    if (!icons->redrawPaused && (GetWindowLongA(icons->list,GWL_STYLE) & WS_VISIBLE)) {
+        icons->redrawPaused = TRUE; icons->nativeRedrawPaused = TRUE; icons->changingRedraw = TRUE;
+        SendMessageA(icons->list,WM_SETREDRAW,FALSE,0);
+        icons->changingRedraw = FALSE;
+    }
+    return TRUE;
+}
+void DesktopIconsEndRefresh(DesktopIcons *icons)
+{
+    if (!icons) return;
+    icons->refreshing = FALSE;
+    DesktopIconsChanged(icons);
 }
 DesktopIcons *DesktopIconsCreate(HWND list, const char *profile)
 {
@@ -200,6 +246,7 @@ void DesktopIconsDestroy(DesktopIcons *icons)
 {
     if (!icons) return;
     EndDrag(icons, FALSE); KillTimer(icons->list, RESTORE_TIMER);
+    ResumeRedraw(icons);
     SaveOrReport(icons);
     HeapFree(GetProcessHeap(), 0, icons->saved); HeapFree(GetProcessHeap(), 0, icons);
 }
@@ -215,7 +262,7 @@ void DesktopIconsConfigure(DesktopIcons *icons, BOOL automatic, BOOL locked, BOO
         SetWindowLongA(icons->list, GWL_STYLE, automatic ? style | LVS_AUTOARRANGE : style & ~LVS_AUTOARRANGE);
         if (automatic) ListView_Arrange(icons->list, LVA_DEFAULT);
     }
-    if (!icons->ready) DesktopIconsChanged(icons);
+    if (!icons->ready || icons->pending) DesktopIconsChanged(icons);
     else if (changed) { Capture(icons); SaveOrReport(icons); }
 }
 static POINT GridPoint(DesktopIcons *icons, POINT point)
@@ -454,7 +501,7 @@ BOOL DesktopIconsBeginDrag(DesktopIcons *icons, const NMLISTVIEW *notify)
     if (icons->locked) return TRUE;
     if (notify->hdr.code == LVN_BEGINRDRAG || icons->automatic || GetKeyState(VK_CONTROL)<0 || GetKeyState(VK_SHIFT)<0 || GetKeyState(VK_MENU)<0) return FALSE;
     count = ListView_GetSelectedCount(icons->list);
-    if (!count || icons->dragging) return TRUE;
+    if (!count || icons->dragging || icons->pending) return TRUE;
     icons->drag = HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,count*sizeof(DragPosition));
     if (!icons->drag) return TRUE;
     icons->dragAnchor = 0;
@@ -487,7 +534,19 @@ static void MoveDrag(DesktopIcons *icons, POINT point)
 BOOL DesktopIconsMessage(DesktopIcons *icons, UINT message, WPARAM wp, LPARAM lp)
 {
     if (!icons) return FALSE;
-    if (message == WM_TIMER && wp == RESTORE_TIMER) { KillTimer(icons->list,RESTORE_TIMER); Restore(icons); return TRUE; }
+    if (message == WM_TIMER && wp == RESTORE_TIMER) {
+        KillTimer(icons->list,RESTORE_TIMER);
+        if (!icons->refreshing) Restore(icons);
+        return TRUE;
+    }
+    /* Shell32 may enable redraw before its asynchronous enumeration settles.
+     * Only the layout controller can expose the final restored positions. */
+    if (icons->redrawPaused) {
+        if ((message == WM_SETREDRAW && !icons->changingRedraw) || message == WM_ERASEBKGND) return TRUE;
+        if (message == WM_PAINT) {
+            PAINTSTRUCT paint; BeginPaint(icons->list,&paint); EndPaint(icons->list,&paint); return TRUE;
+        }
+    }
     if (!icons->dragging) return FALSE;
     if (message == WM_SETCURSOR && !icons->ghostEntered) { SetCursor(LoadCursorA(NULL,IDC_SIZEALL)); return TRUE; }
     if (message == WM_MOUSEMOVE || message == WM_LBUTTONUP) {
@@ -501,7 +560,7 @@ BOOL DesktopIconsMessage(DesktopIcons *icons, UINT message, WPARAM wp, LPARAM lp
 void DesktopIconsLineUp(DesktopIcons *icons)
 {
     int i, count; Placement *plan;
-    if (!icons || icons->locked) return;
+    if (!icons || icons->locked || icons->pending) return;
     EndDrag(icons,FALSE);
     if (icons->automatic) ListView_Arrange(icons->list,LVA_DEFAULT);
     else {

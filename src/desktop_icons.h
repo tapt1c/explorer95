@@ -9,6 +9,8 @@ void DesktopIconsConfigure(DesktopIcons *icons, BOOL automatic, BOOL locked, BOO
 BOOL DesktopIconsBeginDrag(DesktopIcons *icons, const NMLISTVIEW *notify);
 BOOL DesktopIconsMessage(DesktopIcons *icons, UINT message, WPARAM wp, LPARAM lp);
 void DesktopIconsChanged(DesktopIcons *icons);
+BOOL DesktopIconsBeginRefresh(DesktopIcons *icons);
+void DesktopIconsEndRefresh(DesktopIcons *icons);
 void DesktopIconsAfterShellAction(DesktopIcons *icons);
 void DesktopIconsLineUp(DesktopIcons *icons);
 BOOL DesktopIconsSave(DesktopIcons *icons);

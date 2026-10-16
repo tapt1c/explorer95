@@ -261,7 +261,7 @@ static LRESULT CALLBACK Subclass(HWND window, UINT message, WPARAM wp, LPARAM lp
     if (view->desktop && window == view->window && message == WM_NOTIFY &&
         DesktopIconsBeginDrag(view->icons, (const NMLISTVIEW *)lp)) return 0;
     if (view->desktop && window == view->list) {
-        if (DesktopIconsMessage(view->icons, message, wp, lp)) return 0;
+        if (DesktopIconsMessage(view->icons, message, wp, lp)) return message == WM_ERASEBKGND;
         if (message == LVM_INSERTITEMA || message == LVM_INSERTITEMW || message == LVM_DELETEITEM ||
             message == LVM_DELETEALLITEMS || message == LVM_SETITEMTEXTA || message == LVM_SETITEMTEXTW || message == WM_SIZE)
             DesktopIconsChanged(view->icons);
@@ -479,10 +479,10 @@ void NativeViewDesktopSettingsChanged(NativeView *view)
 void NativeViewRefresh(NativeView *view)
 {
     if (!view) return;
-    if (view->icons) DesktopIconsSave(view->icons);
+    if (view->icons && !DesktopIconsBeginRefresh(view->icons)) return;
     if (view->desktop) ReadWallpaper(view);
     IShellView_Refresh(view->view);
-    DesktopIconsChanged(view->icons);
+    DesktopIconsEndRefresh(view->icons);
     InvalidateRect(view->list, NULL, TRUE);
 }
 void NativeViewArrange(NativeView *view, BOOL autoArrange)

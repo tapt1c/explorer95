@@ -3,9 +3,11 @@
 #include "../src/desktop_icons.h"
 static DesktopIcons *testDesktopIcons;
 static WNDPROC testDesktopListProc;
+static int testDesktopPaints;
 static LRESULT CALLBACK DesktopTestListProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
 {
-    if (DesktopIconsMessage(testDesktopIcons, message, wp, lp)) return 0;
+    if (DesktopIconsMessage(testDesktopIcons, message, wp, lp)) return message == WM_ERASEBKGND;
+    if (message == WM_PAINT) ++testDesktopPaints;
     return CallWindowProcA(testDesktopListProc, window, message, wp, lp);
 }
 static LRESULT CALLBACK DesktopTestProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
@@ -128,9 +130,43 @@ static void DesktopIconTests(const char *directory)
     { RECT first, second, intersection;
       ListView_GetItemRect(list,0,&first,LVIR_BOUNDS); ListView_GetItemRect(list,1,&second,LVIR_BOUNDS);
       Check(!IntersectRect(&intersection,&first,&second),"Line up Icons assigns distinct free places instead of stacking snapped icons"); saved = DesktopPoint(list,0); }
+    {
+        HDC dc; HBRUSH brush; RECT marker = {450,300,460,310}; int paints;
+        COLORREF color = RGB(251,7,231);
+        UpdateWindow(list); dc = GetDC(list); brush = CreateSolidBrush(color);
+        FillRect(dc,&marker,brush); DeleteObject(brush); ReleaseDC(list,dc); paints = testDesktopPaints;
+        Check(DesktopIconsBeginRefresh(testDesktopIcons),"F5 starts a desktop refresh transaction");
+        Check(!DesktopIconsBeginRefresh(testDesktopIcons),"a reentrant F5 cannot start another shell enumeration");
+        SendMessageA(list,WM_SETREDRAW,FALSE,0);
+        ListView_DeleteAllItems(list); DesktopItem(list,0,"One",30,20);
+        SetWindowLongA(list,GWL_STYLE,GetWindowLongA(list,GWL_STYLE) | LVS_AUTOARRANGE);
+        DesktopIconsChanged(testDesktopIcons); SendMessageA(list,WM_SETREDRAW,TRUE,0);
+        RedrawWindow(list,NULL,NULL,RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW); DesktopPump();
+        dc = GetDC(list);
+        Check(GetPixel(dc,450,300) == color && testDesktopPaints == paints,
+            "Shell32 redraw and a timer during enumeration cannot expose the intermediate desktop"); ReleaseDC(list,dc);
+        DesktopBegin(parent,list,0); Check(GetCapture() != list,"an incomplete refresh cannot begin a layout drag");
+        DesktopItem(list,1,"Two",30,100); DesktopItem(list,2,"Document with spaces.txt",30,180);
+        DesktopIconsEndRefresh(testDesktopIcons);
+        Check(DesktopIconsBeginRefresh(testDesktopIcons),"repeated F5 can refresh again before deferred restoration");
+        DesktopIconsConfigure(testDesktopIcons,FALSE,FALSE,FALSE,80,80);
+        DesktopIconsLineUp(testDesktopIcons); DesktopIconsEndRefresh(testDesktopIcons); DesktopPump();
+        a = DesktopPoint(list,0); dc = GetDC(list);
+        if (a.x != saved.x || a.y != saved.y || (GetWindowLongA(list,GWL_STYLE) & LVS_AUTOARRANGE)) {
+            char note[160]; wsprintfA(note,"Refresh: expected=%d,%d actual=%d,%d style=%08lx\r\n",saved.x,saved.y,a.x,a.y,GetWindowLongA(list,GWL_STYLE)); Log(note);
+        }
+        Check(a.x == saved.x && a.y == saved.y && !(GetWindowLongA(list,GWL_STYLE) & LVS_AUTOARRANGE),
+            "repeated F5 preserves the complete layout and manual mode through partial enumeration");
+        Check(IsWindowVisible(list) && GetPixel(dc,450,300) != color && testDesktopPaints > paints,
+            "refresh resumes native painting only after the saved positions are restored"); ReleaseDC(list,dc);
+        ShowWindow(list,SW_HIDE); DesktopIconsBeginRefresh(testDesktopIcons); DesktopIconsEndRefresh(testDesktopIcons); DesktopPump();
+        Check(!(GetWindowLongA(list,GWL_STYLE) & WS_VISIBLE),"refresh does not show a previously hidden icon list");
+        ShowWindow(list,SW_SHOW);
+    }
     SetFileAttributesA(layout,FILE_ATTRIBUTE_READONLY); Check(!DesktopIconsSave(testDesktopIcons),"read-only layout file is preserved on a failed save");
     SetFileAttributesA(layout,FILE_ATTRIBUTE_NORMAL);
-    DesktopIconsDestroy(testDesktopIcons); testDesktopIcons = NULL;
+    DesktopIconsBeginRefresh(testDesktopIcons); DesktopIconsDestroy(testDesktopIcons); testDesktopIcons = NULL;
+    Check(GetWindowLongA(list,GWL_STYLE) & WS_VISIBLE,"destroying a pending refresh releases its redraw hold");
     ListView_DeleteAllItems(list); DesktopItem(list,0,"Two",30,20); DesktopItem(list,1,"Document with spaces.txt",30,100); DesktopItem(list,2,"One",30,180);
     testDesktopIcons = DesktopIconsCreate(list,profile); DesktopIconsConfigure(testDesktopIcons,FALSE,FALSE,FALSE,80,80); DesktopPump(); a = DesktopPoint(list,2);
     Check(a.x == saved.x && a.y == saved.y,"saved desktop positions survive recreation and a different shell enumeration order");

@@ -294,6 +294,30 @@ static BOOL WindowPrecedes(HWND first, HWND second)
     }
     return FALSE;
 }
+static void DesktopRefreshTests(HWND desktop)
+{
+    HWND view = FindWindowExA(desktop,NULL,NULL,NULL);
+    HWND list = FindWindowExA(view,NULL,WC_LISTVIEWA,NULL);
+    POINT point; void *remote; SIZE_T read; int i, count; BOOL found = FALSE;
+    Check(list != NULL,"desktop refresh test finds the native ListView");
+    DesktopPump();
+    Check(SendMessageA(list,LVM_GETITEMCOUNT,0,0) > 0,"desktop refresh fixture has namespace icons");
+    SendMessageA(list,LVM_SETITEMPOSITION,0,MAKELPARAM(290,140));
+    SendMessageA(list,WM_KEYDOWN,VK_F5,0); SendMessageA(list,WM_KEYDOWN,VK_F5,0);
+    DesktopPump(); DesktopPump();
+    /* Control messages above WM_USER do not marshal pointers across processes. */
+    remote = VirtualAllocEx(process.hProcess,NULL,sizeof(point),MEM_COMMIT | MEM_RESERVE,PAGE_READWRITE);
+    Check(remote != NULL,"allocate a remote point for native desktop inspection");
+    count = (int)SendMessageA(list,LVM_GETITEMCOUNT,0,0);
+    for (i = 0; i < count; ++i) {
+        if (SendMessageA(list,LVM_GETITEMPOSITION,i,(LPARAM)remote) &&
+            ReadProcessMemory(process.hProcess,remote,&point,sizeof(point),&read) && read == sizeof(point) &&
+            point.x == 290 && point.y == 140) found = TRUE;
+    }
+    VirtualFreeEx(process.hProcess,remote,0,MEM_RELEASE);
+    Check(found && IsWindowVisible(list) && !(GetWindowLongA(list,GWL_STYLE) & LVS_AUTOARRANGE),
+          "actual repeated F5 retains a manually moved namespace icon and resumes the native desktop");
+}
 static void DesktopStackTests(HWND bar, HWND desktop, HWND browser)
 {
     HWND menu; DWORD started;
@@ -1264,6 +1288,7 @@ void start(void)
     started = GetTickCount();
     while (!FindWindowExA(desktop, NULL, NULL, NULL) && GetTickCount() - started < 10000) Sleep(50);
     Check(FindWindowExA(desktop, NULL, NULL, NULL) != NULL, "desktop hosts the installed native shell view");
+    if (group != GROUP_MENU) DesktopRefreshTests(desktop);
     if (group == GROUP_MENU) {
         menu = FindWindowA("Explorer95.Start", NULL);
         CheckStartFits(bar, menu); ContextPinTest(bar, menu, settings);
