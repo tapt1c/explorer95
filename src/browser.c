@@ -137,44 +137,51 @@ void BrowserBuildToolbar(Browser *browser)
 }
 void BrowserLayout(Browser *browser)
 {
-    RECT rect, tool; int top = 0, bottom, width, sidebar = 0, height;
+    RECT rect, tool, previous; BOOL toolbarSized = FALSE; int top = 0, bottom, width, sidebar = 0, height;
     if (browser->closing || browser->layouting) return;
     browser->layouting = TRUE;
     GetClientRect(browser->window, &rect); width = rect.right; bottom = rect.bottom;
-    ShowWindow(browser->toolbar, browser->options.toolbar ? SW_SHOW : SW_HIDE);
+    EnvShowControl(browser->toolbar, browser->options.toolbar);
     if (browser->options.toolbar && browser->toolbar) {
-        MoveWindow(browser->toolbar, 0, 0, width, browser->options.largeTools ? 38 : 30, TRUE);
+        GetWindowRect(browser->toolbar, &previous);
+        if (previous.right - previous.left != width) {
+            /* Measure wrapping without first painting an intermediate toolbar
+             * height. Unchanged layouts must not shrink and grow the toolbar. */
+            MoveWindow(browser->toolbar, 0, 0, width, browser->options.largeTools ? 38 : 30, FALSE);
+            toolbarSized = TRUE;
+        }
         int i, count = (int)SendMessageA(browser->toolbar, TB_BUTTONCOUNT, 0, 0), extent = 0;
         /* Wrapped separators can make TB_AUTOSIZE reserve empty trailing rows.
          * Fit the actual Win95 button rectangles instead. */
         for (i = 0; i < count; ++i) if (SendMessageA(browser->toolbar, TB_GETITEMRECT, i, (LPARAM)&tool) && tool.bottom > extent) extent = tool.bottom;
-        MoveWindow(browser->toolbar, 0, 0, width, extent + 3, TRUE); top = extent + 6;
+        EnvMoveControl(browser->toolbar, 0, 0, width, extent + 3); top = extent + 6;
     }
-    ShowWindow(browser->address, browser->options.address ? SW_SHOW : SW_HIDE);
-    ShowWindow(browser->addressLabel, browser->options.address ? SW_SHOW : SW_HIDE);
-    ShowWindow(browser->go, browser->options.address ? SW_SHOW : SW_HIDE);
+    EnvShowControl(browser->address, browser->options.address);
+    EnvShowControl(browser->addressLabel, browser->options.address);
+    EnvShowControl(browser->go, browser->options.address);
     if (browser->options.address) {
-        MoveWindow(browser->addressLabel, 5, top + 5, 49, 20, TRUE);
-        MoveWindow(browser->address, 56, top + 2, width > 120 ? width - 112 : 8, 220, TRUE);
-        MoveWindow(browser->go, width - 51, top + 1, 47, 25, TRUE); top += 30;
+        EnvMoveControl(browser->addressLabel, 5, top + 5, 49, 20);
+        EnvMoveControl(browser->address, 56, top + 2, width > 120 ? width - 112 : 8, 220);
+        EnvMoveControl(browser->go, width - 51, top + 1, 47, 25); top += 30;
     }
-    ShowWindow(browser->status, browser->options.status ? SW_SHOW : SW_HIDE);
-    if (browser->options.status) { bottom -= 22; MoveWindow(browser->status, 0, bottom, width, 22, TRUE); }
+    EnvShowControl(browser->status, browser->options.status);
+    if (browser->options.status) { bottom -= 22; EnvMoveControl(browser->status, 0, bottom, width, 22); }
     if (browser->options.folders && !browser->tree) BrowserTreeCreate(browser);
-    ShowWindow(browser->treeLabel, browser->options.folders ? SW_SHOW : SW_HIDE);
-    ShowWindow(browser->treeClose, browser->options.folders ? SW_SHOW : SW_HIDE);
-    if (browser->tree) ShowWindow(browser->tree, browser->options.folders ? SW_SHOW : SW_HIDE);
+    EnvShowControl(browser->treeLabel, browser->options.folders);
+    EnvShowControl(browser->treeClose, browser->options.folders);
+    if (browser->tree) EnvShowControl(browser->tree, browser->options.folders);
     if (browser->options.folders) {
         sidebar = browser->options.treeWidth; if (sidebar > width - 180) sidebar = width - 180; if (sidebar < 100) sidebar = 100;
-        MoveWindow(browser->treeLabel, 3, top + 3, sidebar - 28, 22, TRUE);
-        MoveWindow(browser->treeClose, sidebar - 23, top + 2, 22, 21, TRUE);
-        MoveWindow(browser->tree, 2, top + 27, sidebar - 3, bottom - top > 30 ? bottom - top - 28 : 1, TRUE); sidebar += 4;
+        EnvMoveControl(browser->treeLabel, 3, top + 3, sidebar - 28, 22);
+        EnvMoveControl(browser->treeClose, sidebar - 23, top + 2, 22, 21);
+        EnvMoveControl(browser->tree, 2, top + 27, sidebar - 3, bottom - top > 30 ? bottom - top - 28 : 1); sidebar += 4;
     }
     height = bottom - top; if (height < 1) height = 1;
     if (browser->native) { RECT content; SetRect(&content, sidebar, top, width, top + height); NativeViewResize(browser->native, &content); }
-    else { MoveWindow(browser->files, sidebar, top, width > sidebar ? width - sidebar : 1, height, TRUE);
+    else { EnvMoveControl(browser->files, sidebar, top, width > sidebar ? width - sidebar : 1, height);
         if (browser->options.view == 4) ListView_SetColumnWidth(browser->files, 0, width - sidebar - 6);
         BrowserFilesArrange(browser); }
+    if (toolbarSized) InvalidateRect(browser->toolbar, NULL, FALSE);
     InvalidateRect(browser->window, NULL, FALSE); browser->layouting = FALSE;
 }
 static BOOL NavigateNative(HWND window, LPCITEMIDLIST pidl)
@@ -458,6 +465,7 @@ static LRESULT CALLBACK BrowserProc(HWND window, UINT message, WPARAM wp, LPARAM
         LVCOLUMNA column; int i;
         browser = EnvAlloc(sizeof(*browser)); if (!browser) return -1;
         browser->window = window; browser->historyIndex = -1; LoadOptions(&browser->options);
+        PaintColorsChanged(&browser->colors);
         SetWindowLongPtrA(window, GWLP_USERDATA, (LONG_PTR)browser);
         browser->addressLabel = BrowserControl(window, "STATIC", "Address", 0, ID_ADDRESS_LABEL);
         browser->address = BrowserControl(window, "COMBOBOX", "", WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWN | CBS_AUTOHSCROLL, ID_ADDRESS);
@@ -472,11 +480,14 @@ static LRESULT CALLBACK BrowserProc(HWND window, UINT message, WPARAM wp, LPARAM
         BuildMenu(browser); BrowserBuildToolbar(browser); SetTimer(window, 10, 800, NULL); return 0;
     }
     case WM_SYSCOLORCHANGE:
-        if (browser) {
-            BrowserBuildToolbar(browser);
-            if (!browser->native) BrowserFilesShow(browser);
-            BrowserLayout(browser); return 0;
-        } break;
+        if (browser && !browser->changingColors) {
+            BOOL changed;
+            browser->changingColors = TRUE; changed = PaintColorsChanged(&browser->colors);
+            /* Forward even unchanged RGB values: Win95 palette-based controls
+             * may still need to remap their stock bitmaps. Keep all HWNDs/items. */
+            PaintNotifySystemColors(window, changed); browser->changingColors = FALSE;
+        }
+        return 0;
     case WM_SIZE: if (browser && wp != SIZE_MINIMIZED) BrowserLayout(browser); return 0;
     case WM_GETMINMAXINFO: ((MINMAXINFO *)lp)->ptMinTrackSize.x = 400; ((MINMAXINFO *)lp)->ptMinTrackSize.y = 280; return 0;
     case WM_SETFOCUS: if (browser) SetFocus(browser->native ? NativeViewList(browser->native) : browser->files); return 0;

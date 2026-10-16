@@ -7,6 +7,28 @@ static TransparentBltProc transparentBlt;
 static BOOL extensionChecked;
 static HBITMAP startLogo;
 
+BOOL PaintColorsChanged(PaintColors *colors)
+{
+    int i; BOOL changed = !colors->initialized;
+    for (i = 0; i <= COLOR_INFOBK; ++i) {
+        COLORREF color = GetSysColor(i);
+        if (colors->values[i] != color) changed = TRUE;
+        colors->values[i] = color;
+    }
+    colors->initialized = TRUE; return changed;
+}
+static BOOL CALLBACK NotifyColors(HWND window, LPARAM unused)
+{
+    (void)unused; SendMessageA(window, WM_SYSCOLORCHANGE, 0, 0); return TRUE;
+}
+void PaintNotifySystemColors(HWND window, BOOL redraw)
+{
+    /* Native Win95 controls reload their stock brushes/bitmaps themselves.
+     * Recreating their HWNDs or folder items is neither required nor atomic. */
+    EnumChildWindows(window, NotifyColors, 0);
+    if (redraw) RedrawWindow(window, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+}
+
 void PaintBufferFree(PaintBuffer *buffer)
 {
     if (buffer->dc) {

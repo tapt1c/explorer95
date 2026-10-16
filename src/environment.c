@@ -14,6 +14,8 @@ static BOOL previousGrouping;
 static BOOL quickLarge;
 static DWORD awaySince, quickChecked;
 static BOOL hotkeyDesktop, hotkeyStart;
+static PaintColors desktopColors;
+static BOOL changingDesktopColors;
 
 BOOL PropertiesRegister(void);
 
@@ -595,12 +597,18 @@ static LRESULT CALLBACK DesktopProc(HWND window, UINT message, WPARAM wp, LPARAM
         POINT point; GetCursorPos(&point); DesktopBackgroundMenu(env.desktopView, point); return 0;
     }
     if (message == WM_COMMAND) { EnvCommand(LOWORD(wp)); return 0; }
-    if (message == WM_SETTINGCHANGE || message == WM_SYSCOLORCHANGE) {
-        if (message == WM_SETTINGCHANGE && wp == SPI_SETWORKAREA) ResizeDesktop();
-        else {
-            NativeViewDesktopSettingsChanged(env.desktopView);
-            InvalidateRect(window, NULL, FALSE);
+    if (message == WM_SYSCOLORCHANGE) {
+        if (!changingDesktopColors) {
+            BOOL changed;
+            changingDesktopColors = TRUE; changed = PaintColorsChanged(&desktopColors);
+            if (changed) NativeViewDesktopSettingsChanged(env.desktopView);
+            PaintNotifySystemColors(window, changed); changingDesktopColors = FALSE;
         }
+        return 0;
+    }
+    if (message == WM_SETTINGCHANGE) {
+        if (wp == SPI_SETWORKAREA) ResizeDesktop();
+        else { NativeViewDesktopSettingsChanged(env.desktopView); InvalidateRect(window, NULL, FALSE); }
         return 0;
     }
     if (message == WM_ACTIVATE && LOWORD(wp) != WA_INACTIVE) {
@@ -741,7 +749,7 @@ static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
 HWND EnvironmentCreate(const EnvironmentHost *callbacks)
 {
     APPBARDATA data;
-    env.host = *callbacks; SettingsPath(); NativeViewSetHost(callbacks);
+    env.host = *callbacks; SettingsPath(); NativeViewSetHost(callbacks); PaintColorsChanged(&desktopColors);
     SystemParametersInfoA(SPI_GETWORKAREA, 0, &env.originalArea, 0);
     env.primary = FindWindowA("Shell_TrayWnd", NULL) == NULL;
     if (!EnvRegister("Explorer95.Desktop", DesktopProc, (HBRUSH)(COLOR_BACKGROUND + 1), 0) ||

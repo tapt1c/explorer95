@@ -2,6 +2,12 @@
 #define EXPLORER95_PAINT_H
 #include <windows.h>
 
+/* Track the documented Win95 colors through COLOR_INFOBK. Keep a snapshot per
+ * top-level surface: one window consuming a notification must not hide it from another. */
+typedef struct PaintColors { COLORREF values[COLOR_INFOBK + 1]; BOOL initialized; } PaintColors;
+BOOL PaintColorsChanged(PaintColors *colors);
+void PaintNotifySystemColors(HWND window, BOOL redraw);
+
 /* Retained GDI surfaces; no compositor or newer common-control styles needed. */
 typedef struct PaintBuffer {
     HDC dc;

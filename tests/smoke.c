@@ -167,6 +167,21 @@ static void PaintTests(void)
         Check(GetPixel(memory, 30, 40) == RGB(0,0,0), "dialog background painting restores the caller's clipping region");
         DestroyWindow(dialog);
     }
+    {
+        PaintColors first = {0}, second = {0}; int index = COLOR_BTNFACE;
+        COLORREF original = GetSysColor(index), changed = original == RGB(128,128,128) ? RGB(192,192,192) : RGB(128,128,128);
+        BOOL initial = PaintColorsChanged(&first) && PaintColorsChanged(&second), applied, both, restored;
+        Check(initial && !PaintColorsChanged(&first), "system-color snapshots distinguish initial state from duplicate notifications");
+        /* Wine caches GetSysColor per process; change and inspect in this
+         * process, then restore before checking. Cross-process SetSysColors
+         * cannot reliably exercise another process's cached colors in Wine. */
+        applied = SetSysColors(1, &index, &changed);
+        both = PaintColorsChanged(&first) && PaintColorsChanged(&second);
+        SetSysColors(1, &index, &original);
+        restored = PaintColorsChanged(&first) && PaintColorsChanged(&second);
+        Check(applied && both && restored && !PaintColorsChanged(&first),
+              "real system-color changes and restoration are detected independently for each window");
+    }
     PaintShutdown(); PaintBufferFree(&buffer); DeleteObject(brush);
     SelectObject(source, old); DeleteObject(logo); DeleteDC(source); ReleaseDC(NULL, screen);
 }
@@ -267,6 +282,29 @@ static void WaitSelection(HWND list)
     DWORD started = GetTickCount();
     PostMessageA(list, WM_KEYDOWN, VK_HOME, 0);
     while (!SendMessageA(list, LVM_GETSELECTEDCOUNT, 0, 0) && GetTickCount() - started < 3000) Sleep(30);
+}
+static void BrowserColorTests(HWND browser)
+{
+    HWND toolbar = GetDlgItem(browser, 470), address = GetDlgItem(browser, 403), view = FindWindowExA(browser, NULL, "SHELLDLL_DefView", NULL);
+    HWND list = view ? FindWindowExA(view, NULL, WC_LISTVIEWA, NULL) : GetDlgItem(browser, 404);
+    int count = (int)SendMessageA(list, LVM_GETITEMCOUNT, 0, 0), selected;
+    if (count) ListView_SetItemState(list, 0, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+    selected = (int)SendMessageA(list, LVM_GETSELECTEDCOUNT, 0, 0);
+    SendMessageA(browser, WM_SYSCOLORCHANGE, 0, 0);
+    Check(IsWindow(toolbar) && toolbar == GetDlgItem(browser, 470) && address == GetDlgItem(browser, 403),
+          "system-color notification preserves the live toolbar and address controls");
+    Check(count == SendMessageA(list, LVM_GETITEMCOUNT, 0, 0) && selected == SendMessageA(list, LVM_GETSELECTEDCOUNT, 0, 0),
+          "system-color notification preserves folder items and selection without repopulating the list");
+    {
+        RECT patch, client; HDC dc; COLORREF pixel; HBRUSH marker = CreateSolidBrush(RGB(251,3,239));
+        RedrawWindow(toolbar, NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW); Sleep(100); GetClientRect(toolbar, &client);
+        SetRect(&patch, client.right - 10, client.bottom - 8, client.right - 4, client.bottom - 2);
+        dc = GetDC(toolbar); FillRect(dc, &patch, marker); GetPixel(dc, patch.left + 1, patch.top + 1); ReleaseDC(toolbar, dc);
+        GetClientRect(browser, &client); SendMessageA(browser, WM_SIZE, SIZE_RESTORED, MAKELPARAM(client.right, client.bottom)); Sleep(80);
+        dc = GetDC(toolbar); pixel = GetPixel(dc, patch.left + 1, patch.top + 1); ReleaseDC(toolbar, dc); DeleteObject(marker);
+        Check(pixel == RGB(251,3,239), "unchanged browser layout does not repaint an intermediate toolbar size");
+        RedrawWindow(toolbar, NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW);
+    }
 }
 static void BrowserTests(HWND browser, const char *fixture, const char *settingsDir, const char *settings)
 {
@@ -483,6 +521,7 @@ static void NativeFolderTests(HWND menu)
         do { Sleep(50); samples = PaintedSamples(list); }
         while ((SendMessageA(list, LVM_GETITEMCOUNT, 0, 0) == 0 || samples < 8) && GetTickCount() - started < 10000);
         Check(samples >= 8, "native icons paint on initial opening without selection or mouse input");
+        BrowserColorTests(frame);
         { HDC dc = GetDC(list); RECT patch, client; HBRUSH marker = CreateSolidBrush(RGB(251,3,239)); COLORREF pixel;
           /* In Details mode the top of a list belongs to its header child.
            * Sample the list body, independent of the saved view preference. */
@@ -1238,6 +1277,7 @@ void start(void)
     SendMessageA(GetDlgItem(bar, 100), BM_CLICK, 0, 0);
     Check(!IsWindowVisible(menu), "Start button toggles the menu closed");
 
+    BrowserColorTests(browser);
     BrowserTests(browser, fixture, settingsDir, settings);
     NativeFolderTests(menu);
     if (group == GROUP_BROWSER) goto shutdown;
