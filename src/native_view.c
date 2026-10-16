@@ -191,6 +191,13 @@ static void PaintBackgroundDirect(NativeView *view, HDC dc, HWND window)
     }
 }
 
+static void PaintBackground(NativeView *view, HDC target, HWND window);
+void NativeViewPaintDesktop(NativeView *view, HDC dc, HWND window)
+{
+    if (view) PaintBackground(view, dc, window);
+    else { RECT rect; GetClientRect(window, &rect); FillRect(dc, &rect, (HBRUSH)(COLOR_DESKTOP + 1)); }
+}
+
 /* Retain the wallpaper while other windows cover the desktop. Rebuild only
  * after a settings/size change, then restore exposed pixels in one GDI copy. */
 static void PaintBackground(NativeView *view, HDC target, HWND window)
@@ -312,6 +319,7 @@ void DesktopBackgroundMenu(NativeView *view, POINT point)
     AppendMenuA(arrange, MF_STRING | ((view->list && (GetWindowLongA(view->list, GWL_STYLE) & LVS_AUTOARRANGE)) ? MF_CHECKED : 0),
         0x8005, "Auto Arrange");
     AppendMenuA(arrange, MF_STRING, 0x8006, "Line up Icons");
+    AppendMenuA(menu, MF_STRING | (EnvironmentDesktopIconsVisible() ? MF_CHECKED : 0), 0x8009, "Show Desktop Icons");
     InsertMenuA(menu, 0, MF_BYPOSITION | MF_POPUP, (UINT_PTR)arrange, "Arrange Icons");
     if (!HasNewMenu(menu)) {
         HMENU create = CreatePopupMenu();
@@ -319,7 +327,7 @@ void DesktopBackgroundMenu(NativeView *view, POINT point)
         AppendMenuA(create, MF_STRING, 0x8008, "Text Document");
         AppendMenuA(menu, MF_POPUP, (UINT_PTR)create, "New");
     }
-    AppendMenuA(extra, MF_STRING, 0x8001, "Taskbar and Start Menu Properties...");
+    AppendMenuA(extra, MF_STRING, 0x8001, "Environment Properties...");
     AppendMenuA(extra, MF_STRING, 0x8002, "Open Desktop Folder");
     AppendMenuA(extra, MF_STRING, 0x8003, "Refresh Desktop");
     AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
@@ -339,7 +347,8 @@ void DesktopBackgroundMenu(NativeView *view, POINT point)
     if (command == 0x8002) { char path[MAX_PATH]; if (host.specialPath(CSIDL_DESKTOPDIRECTORY, path)) host.openFolder(path); }
     if (command == 0x8003) NativeViewRefresh(view);
     if (command == 0x8004) EnvironmentLaunch(view->parent, "control.exe", "desk.cpl", NULL);
-    if (command == 0x8005 && view->list) NativeViewArrange(view, !(GetWindowLongA(view->list, GWL_STYLE) & LVS_AUTOARRANGE));
+    if (command == 0x8005 && view->list) EnvironmentArrangeDesktop(!(GetWindowLongA(view->list, GWL_STYLE) & LVS_AUTOARRANGE));
+    if (command == 0x8009) EnvironmentToggleDesktopIcons();
     if (command == 0x8006 && view->list) ListView_Arrange(view->list, LVA_SNAPTOGRID);
     if (command == 0x8007 || command == 0x8008) NewDesktopItem(view, command == 0x8007);
     if (view->context) { IContextMenu2_Release(view->context); view->context = NULL; }

@@ -10,16 +10,19 @@ import sys
 from pathlib import Path
 
 
-# Image-list, clipboard, menu, shell file-operation/property and date APIs below
-# are part of the original Win95 Win32/Common Controls/Shell32 baseline.
+# Reviewed Win95 RTM imports: image lists, clipboard, menus, file operations,
+# properties, dates, Toolhelp32 process identity, file staging/rename, task allocation, recent-doc
+# clearing and basic window/GDI helpers below are also present in Win95 RTM.
+# All reviewed imports are part of the original Win95 Win32/Common Controls/Shell32 baseline.
 ALLOWED = {
     "advapi32.dll": {"GetUserNameA", "RegOpenKeyExA", "RegQueryValueExA", "RegCloseKey"},
     "comctl32.dll": {"InitCommonControls", "ImageList_Create", "ImageList_Destroy",
                       "ImageList_AddMasked", "ImageList_GetImageCount", "ImageList_ReplaceIcon"},
     "comdlg32.dll": {"GetOpenFileNameA"},
-    "gdi32.dll": {"GetStockObject", "SelectObject", "SetBkMode", "SetTextColor", "BitBlt",
+    "gdi32.dll": {"LineTo", "MoveToEx", "GetStockObject", "SelectObject", "SetBkMode", "SetTextColor", "BitBlt",
                   "CreateCompatibleBitmap", "CreateBitmap", "SetBkColor", "SetWindowOrgEx", "CreateFontIndirectA", "GetTextExtentPoint32A", "GetTextMetricsA", "CreateCompatibleDC", "DeleteDC", "DeleteObject", "GetObjectA"},
     "kernel32.dll": set("""
+        CreateToolhelp32Snapshot Process32First Process32Next GetSystemTimeAsFileTime GetTempFileNameA MoveFileA
         CompareFileTime FileTimeToLocalFileTime FileTimeToSystemTime GetDateFormatA
         GlobalAlloc GlobalFree GlobalLock GlobalSize GlobalUnlock
         CloseHandle CopyFileA CreateDirectoryA CreateFileA ExitProcess ExpandEnvironmentStringsA FindClose FindFirstFileA
@@ -30,15 +33,15 @@ ALLOWED = {
         GetPrivateProfileStringA GetPrivateProfileSectionA GetTickCount GetVersion MultiByteToWideChar WritePrivateProfileStringA
         lstrcatA lstrcmpA lstrcmpiA lstrcpyA lstrcpynA lstrlenA
     """.split()),
-    "ole32.dll": {"OleInitialize", "OleUninitialize", "CoCreateInstance", "CoTaskMemFree", "ReleaseStgMedium"},
+    "ole32.dll": {"CoTaskMemAlloc", "OleInitialize", "OleUninitialize", "CoCreateInstance", "CoTaskMemFree", "ReleaseStgMedium"},
     "shell32.dll": set("""
-        SHFileOperationA ShellExecuteExA ExtractIconExA SHGetFileInfoA SHGetMalloc SHGetPathFromIDListA
+        SHAddToRecentDocs SHFileOperationA ShellExecuteExA ExtractIconExA SHGetFileInfoA SHGetMalloc SHGetPathFromIDListA
         SHGetSpecialFolderLocation ShellExecuteA SHAppBarMessage SHGetDesktopFolder
         DragAcceptFiles DragQueryFileA DragFinish
     """.split()),
     "user32.dll": set("""
-        CheckMenuItem ClientToScreen CloseClipboard DeleteMenu EmptyClipboard EnableMenuItem
-        GetClipboardData GetMenu IsClipboardFormatAvailable OpenClipboard RegisterClipboardFormatA SetClipboardData
+        AdjustWindowRectEx EnableWindow EndMenu CheckMenuItem ClientToScreen CloseClipboard DeleteMenu EmptyClipboard EnableMenuItem
+        GetClipboardData GetMenu GetMenuDefaultItem GetMenuItemID IsClipboardFormatAvailable OpenClipboard RegisterClipboardFormatA SetClipboardData
         AppendMenuA CreateMenu CreatePopupMenu CreateWindowExA DefWindowProcA
         CallWindowProcA CopyIcon DestroyIcon DrawIconEx ExitWindowsEx FindWindowExA
         DestroyMenu DestroyWindow DispatchMessageA DrawEdge DrawFrameControl DrawFocusRect DrawTextA

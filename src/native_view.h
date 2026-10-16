@@ -7,6 +7,7 @@ NativeView *NativeViewCreateEx(HWND parent, LPCITEMIDLIST absolute, BOOL desktop
 void NativeViewResize(NativeView *view, const RECT *rect);
 void NativeViewDestroy(NativeView *view);
 void NativeViewRefresh(NativeView *view);
+void NativeViewPaintDesktop(NativeView *view, HDC dc, HWND window);
 void NativeViewArrange(NativeView *view, BOOL autoArrange);
 HWND NativeViewWindow(NativeView *view);
 HWND OpenNativeFolder(LPCITEMIDLIST absolute);

@@ -25,6 +25,7 @@
 #define ID_PRINTERS 310
 #define ID_FIND 311
 #define ID_HELP 312
+#define ID_FAVORITES 317
 #define ID_LOGOFF 313
 #define ID_SHUTDOWN 314
 #define ID_EXPLORER 315
@@ -74,11 +75,13 @@
 #define TASK_LIMIT 64
 #define RECENT_LIMIT 30
 #define PIN_LIMIT 6
-#define START_OPTION_COUNT 12
+#define START_OPTION_COUNT 13
 
 typedef struct ShellOptions {
     int edge, rows, taskWidth, recentCount;
     BOOL locked, autoHide, topmost, clock, quick, largeIcons, largeStartIcons, group, hideInactive;
+    BOOL classicStart, hoverMenus, allowDrop, highlightNew, desktopIcons, autoArrange;
+    UINT startMenus, traySeconds;
     UINT startItems;
     char startLabel[32];
 } ShellOptions;
@@ -86,14 +89,14 @@ typedef struct ShellOptions {
 typedef struct ShellState {
     EnvironmentHost host;
     ShellOptions options;
-    HWND desktop, bar, start, startButton, clock, tray, properties, startSettings;
+    HWND desktop, bar, start, startButton, clock, tray, properties;
     NativeView *desktopView;
     RECT originalArea, anchor;
     BOOL primary, appbar, positioning, hidden, dragging, closing;
     char ini[MAX_PATH], dataDir[MAX_PATH], quickDir[MAX_PATH];
 } ShellState;
 
-typedef struct PinnedProgram { char path[MAX_PATH], arguments[512], label[80]; } PinnedProgram;
+typedef struct PinnedProgram { char path[MAX_PATH], arguments[512], label[80]; int client; } PinnedProgram;
 extern PinnedProgram startPins[PIN_LIMIT];
 extern int startPinCount;
 void StartLoadPins(void);
@@ -109,6 +112,7 @@ void EnvError(HWND owner, const char *message, DWORD error);
 void EnvSaveOptions(void);
 void EnvApplyOptions(void);
 void EnvPositionBar(void);
+int EnvBarThickness(const ShellOptions *options);
 void EnvLayoutBar(void);
 void EnvShowDesktop(void);
 void EnvCommand(int id);
@@ -121,13 +125,14 @@ void StartPosition(void);
 void StartMeasure(int pins, int requestedRecent, StartLayout *layout);
 int StartMaximumRecent(int pins);
 int StartMaximumRecentFor(int pins, BOOL largeIcons);
+int StartMaximumRecentOptions(int pins, const ShellOptions *options);
 BOOL StartTranslate(MSG *message);
 void StartRecord(const char *path, const char *arguments);
 void StartClearRecent(void);
 void StartDestroy(void);
 void StartRefresh(void);
 void StartSettingsOpen(void);
-BOOL StartSettingsTranslate(MSG *message);
+void StartReloadRecent(void);
 HICON EnvPathIcon(const char *path);
 HICON EnvSystemIcon(int index);
 BOOL EnvDrawBarButton(const DRAWITEMSTRUCT *item);
@@ -140,6 +145,7 @@ void TrayPrune(void);
 LRESULT TrayCopyData(const COPYDATASTRUCT *copy);
 void TrayDestroy(void);
 void PropertiesOpen(void);
+void PropertiesSelectPage(int page);
 BOOL PropertiesTranslate(MSG *message);
 
 #endif

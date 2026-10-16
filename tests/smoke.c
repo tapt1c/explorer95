@@ -458,6 +458,7 @@ static void NativeFolderTests(HWND menu)
 static void CheckStartFits(HWND bar, HWND menu)
 {
     RECT rect, taskbar, item; BOOL okay; int id;
+    SetCursorPos(GetSystemMetrics(SM_CXSCREEN) - 2, GetSystemMetrics(SM_CYSCREEN) - 2);
     SendMessageA(GetDlgItem(bar, 100), BM_CLICK, 0, 0);
     GetWindowRect(menu, &rect); GetWindowRect(bar, &taskbar);
     okay = rect.left >= 0 && rect.top >= 0 && rect.right <= GetSystemMetrics(SM_CXSCREEN) && rect.bottom <= GetSystemMetrics(SM_CYSCREEN) &&
@@ -578,70 +579,143 @@ static void ConfigTests(const char *directory)
     DeleteFileA(ini); DeleteFileA(backup); DeleteFileA(recovery);
 }
 
+static void SettingsPage(HWND window, int mainPage, int startPage)
+{
+    if (mainPage >= 0) SendDlgItemMessageA(window, 1000, TCM_SETCURFOCUS, mainPage, 0);
+    if (startPage >= 0) SendDlgItemMessageA(window, 1001, TCM_SETCURFOCUS, startPage, 0);
+}
+static HWND OpenSettings(HWND bar)
+{
+    HWND window; SendMessageA(bar, WM_COMMAND, 600, 0); window = WaitFor("Explorer95.Properties", NULL);
+    Check(window != NULL, "unified environment properties open"); return window;
+}
+static void CloseStartPopup(HWND menu)
+{
+    DWORD started = GetTickCount(); HWND popup = FindWindowA("#32768", NULL);
+    PostMessageA(menu, WM_KEYDOWN, VK_ESCAPE, 0);
+    while (popup && IsWindowVisible(popup) && GetTickCount() - started < 3000) Sleep(30);
+    Check(!popup || !IsWindowVisible(popup), "native Start popup can be dismissed");
+    SetCursorPos(GetSystemMetrics(SM_CXSCREEN) - 2, GetSystemMetrics(SM_CYSCREEN) - 2);
+}
+static void StartBehaviorTests(HWND properties, HWND bar, HWND menu, const char *settings)
+{
+    HWND popup; RECT button; char module[MAX_PATH]; int i, choice;
+    SettingsPage(properties, 1, 0); GetModuleFileNameA(NULL, module, MAX_PATH);
+    for (i = 0; i < 2; ++i) {
+        choice = SendDlgItemMessageA(properties, 1025 + i, CB_ADDSTRING, 0, (LPARAM)module);
+        SendDlgItemMessageA(properties, 1025 + i, CB_SETCURSEL, choice, 0);
+        SendDlgItemMessageA(properties, 1023 + i, BM_SETCHECK, BST_CHECKED, 0);
+        SendMessageA(properties, WM_COMMAND, 1023 + i, 0);
+    }
+    SendMessageA(properties, WM_COMMAND, 0x3021, 0);
+    Check(GetPrivateProfileIntA("Pinned", "Count", 0, settings) == 5 && GetPrivateProfileIntA("Pinned", "Client0", 0, settings) == 1 &&
+        GetPrivateProfileIntA("Pinned", "Client1", 0, settings) == 2, "Internet and e-mail choices persist as separate top pins");
+    for (i = 0; i < 2; ++i) { SendDlgItemMessageA(properties, 1023 + i, BM_SETCHECK, BST_UNCHECKED, 0); SendMessageA(properties, WM_COMMAND, 1023 + i, 0); }
+    SendMessageA(properties, WM_COMMAND, 0x3021, 0);
+    Check(GetPrivateProfileIntA("Pinned", "Count", 0, settings) == 3, "disabling optional clients preserves other pinned programs");
+    SettingsPage(properties, 1, 1);
+    SendDlgItemMessageA(properties, 654, BM_SETCHECK, BST_CHECKED, 0);
+    SendDlgItemMessageA(properties, 1007, CB_SETCURSEL, 4, 0); SendMessageA(properties, WM_COMMAND, MAKELONG(1007, CBN_SELCHANGE), 0);
+    SendDlgItemMessageA(properties, 1008, CB_SETCURSEL, 1, 0); SendMessageA(properties, WM_COMMAND, MAKELONG(1008, CBN_SELCHANGE), 0);
+    SendMessageA(properties, WM_COMMAND, 0x3021, 0);
+    Check(GetPrivateProfileIntA("Start", "FolderMenus", 0, settings) & 16, "Control Panel can be configured as a submenu");
+    SendMessageA(GetDlgItem(bar, 100), BM_CLICK, 0, 0); GetWindowRect(GetDlgItem(menu, 304), &button);
+    Check(IsWindowVisible(GetDlgItem(menu, 304)), "configured Control Panel menu is visible");
+    SetCursorPos((button.left + button.right) / 2, (button.top + button.bottom) / 2);
+    popup = WaitFor("#32768", NULL); Check(popup != NULL, "hover opens the configured native Control Panel submenu"); CloseStartPopup(menu);
+    if (IsWindowVisible(menu)) SendMessageA(GetDlgItem(bar, 100), BM_CLICK, 0, 0);
+    SendDlgItemMessageA(properties, 1008, CB_SETCURSEL, 0, 0); SendMessageA(properties, WM_COMMAND, MAKELONG(1008, CBN_SELCHANGE), 0);
+    SendDlgItemMessageA(properties, 654, BM_SETCHECK, BST_UNCHECKED, 0);
+    SettingsPage(properties, 1, 0); SendDlgItemMessageA(properties, 1002, CB_SETCURSEL, 1, 0); SendMessageA(properties, WM_COMMAND, 0x3021, 0);
+    Check(GetPrivateProfileIntA("Start", "Classic", 0, settings) == 1, "classic Start style is persisted");
+    PostMessageA(bar, WM_COMMAND, 100, 0); popup = WaitFor("#32768", NULL);
+    Check(popup != NULL && !IsWindowVisible(menu), "classic mode opens a native single-column menu"); CloseStartPopup(menu);
+    SendDlgItemMessageA(properties, 1002, CB_SETCURSEL, 0, 0); SendMessageA(properties, WM_COMMAND, 0x3021, 0);
+    Check(GetPrivateProfileIntA("Start", "Classic", -1, settings) == 0, "two-column Start style can be restored");
+}
 static HWND StartSettingsTests(HWND bar, HWND menu, const char *settings)
 {
-    HWND properties; char module[MAX_PATH], title[128];
-    SendMessageA(bar, WM_COMMAND, 600, 0);
-    properties = WaitFor("Explorer95.Properties", NULL);
-    Check(properties != NULL, "taskbar properties open");
-    SendMessageA(properties, WM_COMMAND, 626, 0);
-    {
-        HWND customize = WaitFor("Explorer95.StartSettings", NULL);
-        Check(customize != NULL, "Start customization opens with a separate pinned-program list");
-        Check(SendDlgItemMessageA(customize, 630, LB_GETCOUNT, 0, 0) == 2, "default Explorer and DOS entries belong to the pinned list");
-        SetWindowTextA(GetDlgItem(customize, 625), "Launch & Go");
-        SendDlgItemMessageA(customize, 654, BM_SETCHECK, BST_UNCHECKED, 0);
-        SendDlgItemMessageA(customize, 653, BM_SETCHECK, BST_UNCHECKED, 0);
-        GetModuleFileNameA(NULL, module, MAX_PATH);
-        SetWindowTextA(GetDlgItem(customize, 631), module);
-        SetWindowTextA(GetDlgItem(customize, 636), "Pinned smoke program");
-        SetWindowTextA(GetDlgItem(customize, 637), "\"--child\"");
-        SendMessageA(customize, WM_COMMAND, 632, 0);
-        Check(SendDlgItemMessageA(customize, 630, LB_GETCOUNT, 0, 0) == 3, "add a program with its own label and arguments");
-        SendMessageA(customize, WM_COMMAND, 634, 0);
-        SendMessageA(customize, WM_COMMAND, IDOK, 0);
-        GetWindowTextA(GetDlgItem(bar, 100), title, sizeof(title));
-        Check(!lstrcmpA(title, "Launch & Go"), "Start button accepts a custom caption including a literal ampersand");
-        Check(GetPrivateProfileIntA("Pinned", "Count", 0, settings) == 3, "pinned list is persisted independently of history");
-        GetWindowTextA(GetDlgItem(menu, 901), title, sizeof(title));
-        Check(!lstrcmpA(title, "Pinned smoke program"), "pinned program order follows Move Up");
-        SendMessageA(GetDlgItem(bar, 100), BM_CLICK, 0, 0);
-        Check(!IsWindowVisible(GetDlgItem(menu, 304)) && !IsWindowVisible(GetDlgItem(menu, 309)) && IsWindowVisible(GetDlgItem(menu, 300)),
-            "unchecked commands disappear while other right-column entries remain visible");
-        SendMessageA(GetDlgItem(bar, 100), BM_CLICK, 0, 0);
-        SendMessageA(properties, WM_COMMAND, 626, 0);
-        customize = WaitFor("Explorer95.StartSettings", NULL);
-        SendDlgItemMessageA(customize, 630, LB_SETCURSEL, 1, 0);
-        SendMessageA(customize, WM_COMMAND, 633, 0);
-        Check(SendDlgItemMessageA(customize, 630, LB_GETCOUNT, 0, 0) == 2, "pinned-program editor removes selected entries");
-        SendMessageA(customize, WM_COMMAND, IDCANCEL, 0);
-        GetWindowTextA(GetDlgItem(menu, 901), title, sizeof(title));
-        Check(!lstrcmpA(title, "Pinned smoke program"), "Cancel discards pending pinned-list changes");
-        SendMessageA(properties, WM_COMMAND, 626, 0);
-        customize = WaitFor("Explorer95.StartSettings", NULL);
-        SetDlgItemInt(customize, 627, 0, FALSE); SendMessageA(customize, WM_COMMAND, IDOK, 0);
-        SendMessageA(GetDlgItem(bar, 100), BM_CLICK, 0, 0);
-        { int i; BOOL none = TRUE;
-          for (i = 800; i < 830; ++i) if (IsWindowVisible(GetDlgItem(menu, i))) none = FALSE;
-          Check(none && IsWindowVisible(GetDlgItem(menu, 900)), "zero recent count hides history while preserving pins"); }
-        SendMessageA(GetDlgItem(bar, 100), BM_CLICK, 0, 0);
-        SendMessageA(properties, WM_COMMAND, 626, 0); customize = WaitFor("Explorer95.StartSettings", NULL);
-        GetWindowTextA(GetDlgItem(customize, 628), title, sizeof(title));
-        Check(title[0] != 0, "settings display the calculated screen limit for recent programs");
-        SetDlgItemInt(customize, 627, 99, FALSE); PostMessageA(customize, WM_COMMAND, IDOK, 0);
-        { HWND error = WaitFor("#32770", "Start Menu");
-          Check(error != NULL, "recent count beyond the screen limit is rejected"); SendMessageA(error, WM_COMMAND, IDOK, 0); }
-        SendDlgItemMessageA(customize, 639, BM_SETCHECK, BST_CHECKED, 0);
-        SendMessageA(customize, WM_COMMAND, 639, 0);
-        SetDlgItemInt(customize, 627, 2, FALSE); SendMessageA(customize, WM_COMMAND, IDOK, 0);
-        Check(GetPrivateProfileIntA("Start", "LargeIcons", -1, settings) == 1, "large Start icons are persisted separately from Quick Launch");
-        SendMessageA(GetDlgItem(bar, 100), BM_CLICK, 0, 0);
-        { RECT row; GetWindowRect(GetDlgItem(menu, 900), &row);
-          Check(row.bottom - row.top >= 40, "large Start icons have rows tall enough for native 32px images"); }
-        SendMessageA(GetDlgItem(bar, 100), BM_CLICK, 0, 0);
-        CheckStartFits(bar, menu);
-        Check(GetPrivateProfileIntA("Start", "RecentCount", -1, settings) == 2, "custom recent count is persisted");
-    }
+    HWND properties = OpenSettings(bar), desktop, desktopView; char module[MAX_PATH], title[128], value[128]; RECT rect; BOOL visible;
+    Check(GetDlgItem(properties, 1000) && !FindWindowA("Explorer95.StartSettings", NULL), "Start and taskbar settings share one window");
+    GetWindowRect(properties, &rect);
+    Check(rect.left >= 0 && rect.top >= 0 && rect.right <= GetSystemMetrics(SM_CXSCREEN) && rect.bottom <= GetSystemMetrics(SM_CYSCREEN), "environment settings fit the screen");
+    Check(!IsWindowEnabled(GetDlgItem(properties, 0x3021)), "Apply starts disabled");
+    WritePrivateProfileStringA("Explorer", "SettingsSentinel", "keep", settings);
+    { UINT initialMaximum;
+      SetDlgItemInt(properties, 627, 30, FALSE); SendMessageA(properties, WM_COMMAND, 1003, 0);
+      initialMaximum = GetDlgItemInt(properties, 627, NULL, FALSE);
+      SendDlgItemMessageA(properties, 621, CB_SETCURSEL, 2, 0); SendMessageA(properties, WM_COMMAND, MAKELONG(621, CBN_SELCHANGE), 0);
+      Check(GetDlgItemInt(properties, 627, NULL, FALSE) < initialMaximum, "pending taskbar rows reduce the Start limit before Apply");
+      SendDlgItemMessageA(properties, 621, CB_SETCURSEL, 0, 0); SendMessageA(properties, WM_COMMAND, MAKELONG(621, CBN_SELCHANGE), 0);
+      SetDlgItemInt(properties, 627, 7, FALSE); }
+
+    SettingsPage(properties, 1, 2);
+    Check(IsWindowVisible(GetDlgItem(properties, 630)) && !IsWindowVisible(GetDlgItem(properties, 601)), "tabs expose only the selected settings page");
+    Check(SendDlgItemMessageA(properties, 630, LB_GETCOUNT, 0, 0) == 2, "default Explorer and DOS entries belong to the pinned list");
+    SetDlgItemTextA(properties, 625, "Discard me"); SetDlgItemInt(properties, 622, 211, FALSE);
+    SendMessageA(properties, WM_COMMAND, 611, 0); SendMessageA(properties, WM_COMMAND, IDCANCEL, 0);
+    GetWindowTextA(GetDlgItem(bar, 100), title, sizeof(title));
+    Check(!lstrcmpA(title, "Start") && GetPrivateProfileIntA("Taskbar", "TaskWidth", 160, settings) == 160, "Cancel discards changes across Start and taskbar tabs");
+    GetWindowTextA(GetDlgItem(menu, 800), title, sizeof(title)); Check(title[0] != 0, "Cancel also discards pending program-history clearing");
+    properties = OpenSettings(bar); SettingsPage(properties, 1, 2);
+    SetWindowTextA(GetDlgItem(properties, 625), "Launch & Go");
+    SendDlgItemMessageA(properties, 654, BM_SETCHECK, BST_UNCHECKED, 0); SendDlgItemMessageA(properties, 653, BM_SETCHECK, BST_UNCHECKED, 0);
+    GetModuleFileNameA(NULL, module, MAX_PATH); SetDlgItemTextA(properties, 631, module);
+    SetDlgItemTextA(properties, 636, "Pinned smoke program"); SetDlgItemTextA(properties, 637, "\"--child\"");
+    SendMessageA(properties, WM_COMMAND, 632, 0);
+    Check(SendDlgItemMessageA(properties, 630, LB_GETCOUNT, 0, 0) == 3, "add a program with its own label and arguments");
+    SendMessageA(properties, WM_COMMAND, 634, 0);
+    Check(IsWindowEnabled(GetDlgItem(properties, 0x3021)), "editing a pinned draft enables Apply");
+    SendMessageA(properties, WM_COMMAND, 0x3021, 0);
+    Check(IsWindow(properties) && !IsWindowEnabled(GetDlgItem(properties, 0x3021)), "Apply commits all tabs without closing the window");
+    GetWindowTextA(GetDlgItem(bar, 100), title, sizeof(title)); Check(!lstrcmpA(title, "Launch & Go"), "Start button accepts a custom caption including a literal ampersand");
+    Check(GetPrivateProfileIntA("Pinned", "Count", 0, settings) == 3, "pinned list is persisted independently of history");
+    GetPrivateProfileStringA("Explorer", "SettingsSentinel", "", value, sizeof(value), settings);
+    Check(!lstrcmpA(value, "keep"), "environment Apply preserves the separate Explorer settings section");
+    GetWindowTextA(GetDlgItem(menu, 901), title, sizeof(title)); Check(!lstrcmpA(title, "Pinned smoke program"), "pinned program order follows Move Up");
+    Check(!(GetWindowLongA(GetDlgItem(menu, 304), GWL_STYLE) & WS_VISIBLE) && !(GetWindowLongA(GetDlgItem(menu, 309), GWL_STYLE) & WS_VISIBLE), "unchecked right-column commands are hidden");
+    SendDlgItemMessageA(properties, 630, LB_SETCURSEL, 1, 0); SendMessageA(properties, WM_COMMAND, 633, 0);
+    Check(SendDlgItemMessageA(properties, 630, LB_GETCOUNT, 0, 0) == 2, "pinned-program editor removes selected entries");
+    SendMessageA(properties, WM_COMMAND, IDCANCEL, 0);
+    GetWindowTextA(GetDlgItem(menu, 901), title, sizeof(title)); Check(!lstrcmpA(title, "Pinned smoke program"), "Cancel after Apply preserves the applied pins");
+    properties = OpenSettings(bar); SettingsPage(properties, 1, 0);
+    SetDlgItemInt(properties, 627, 0, FALSE); SendMessageA(properties, WM_COMMAND, 0x3021, 0);
+    { int i; BOOL none = TRUE; SendMessageA(GetDlgItem(bar, 100), BM_CLICK, 0, 0);
+      for (i = 800; i < 830; ++i) if (IsWindowVisible(GetDlgItem(menu, i))) none = FALSE;
+      Check(none && IsWindowVisible(GetDlgItem(menu, 900)), "zero recent count hides history while preserving pins");
+      SendMessageA(GetDlgItem(bar, 100), BM_CLICK, 0, 0); }
+    GetDlgItemTextA(properties, 628, title, sizeof(title)); Check(title[0] != 0, "settings display the calculated screen limit for recent programs");
+    SetDlgItemInt(properties, 627, 99, FALSE); PostMessageA(properties, WM_COMMAND, 0x3021, 0);
+    { HWND error = WaitFor("#32770", "Start Menu"); Check(error != NULL, "recent count beyond the screen limit is rejected"); SendMessageA(error, WM_COMMAND, IDOK, 0); }
+    SendDlgItemMessageA(properties, 639, BM_SETCHECK, BST_CHECKED, 0); SendMessageA(properties, WM_COMMAND, 639, 0);
+    SetDlgItemInt(properties, 627, 2, FALSE); SendMessageA(properties, WM_COMMAND, 0x3021, 0);
+    Check(GetPrivateProfileIntA("Start", "LargeIcons", -1, settings) == 1, "large Start icons are persisted separately from Quick Launch");
+    SendMessageA(GetDlgItem(bar, 100), BM_CLICK, 0, 0);
+    { RECT row; GetWindowRect(GetDlgItem(menu, 900), &row); Check(row.bottom - row.top >= 40, "large Start icons have rows tall enough for native 32px images"); }
+    SendMessageA(GetDlgItem(bar, 100), BM_CLICK, 0, 0); CheckStartFits(bar, menu);
+    Check(GetPrivateProfileIntA("Start", "RecentCount", -1, settings) == 2, "custom recent count is persisted");
+    desktop = FindWindowA("Explorer95.Desktop", NULL); desktopView = FindWindowExA(desktop, NULL, NULL, NULL);
+    visible = IsWindowVisible(desktopView); SettingsPage(properties, 2, -1);
+    SendDlgItemMessageA(properties, 1010, BM_SETCHECK, BST_UNCHECKED, 0); SendMessageA(properties, WM_COMMAND, 0x3021, 0);
+    Check(visible && !IsWindowVisible(desktopView) && GetPrivateProfileIntA("Desktop", "ShowIcons", -1, settings) == 0, "desktop icon visibility applies and persists without closing the shell view");
+    SendDlgItemMessageA(properties, 1010, BM_SETCHECK, BST_CHECKED, 0); SendMessageA(properties, WM_COMMAND, 0x3021, 0);
+    Check(IsWindowVisible(desktopView), "desktop icons can be restored from the same window");
+    StartBehaviorTests(properties, bar, menu, settings);
+    SetDlgItemTextA(properties, 625, "Must not save"); Check(SetFileAttributesA(settings, FILE_ATTRIBUTE_READONLY), "make isolated settings read-only");
+    PostMessageA(properties, WM_COMMAND, 0x3021, 0);
+    { HWND error = WaitFor("#32770", "Explorer95"); Check(error != NULL, "failed settings save reports an error"); SendMessageA(error, WM_COMMAND, IDOK, 0); }
+    Check(SetFileAttributesA(settings, FILE_ATTRIBUTE_NORMAL), "restore writable settings fixture");
+    GetWindowTextA(GetDlgItem(bar, 100), title, sizeof(title)); GetPrivateProfileStringA("Start", "ButtonLabel", "", value, sizeof(value), settings);
+    Check(!lstrcmpA(title, "Launch & Go") && !lstrcmpA(value, "Launch & Go"), "failed Apply changes neither live state nor the saved profile");
+    { HANDLE locked = CreateFileA(settings, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+      Check(locked != INVALID_HANDLE_VALUE, "hold an isolated profile handle that prevents replacement");
+      PostMessageA(properties, WM_COMMAND, 0x3021, 0);
+      { HWND error = WaitFor("#32770", "Explorer95"); Check(error != NULL, "replacement failure reports an error after staging"); SendMessageA(error, WM_COMMAND, IDOK, 0); }
+      CloseHandle(locked);
+      GetPrivateProfileStringA("Start", "ButtonLabel", "", value, sizeof(value), settings);
+      GetWindowTextA(GetDlgItem(bar, 100), title, sizeof(title));
+      Check(!lstrcmpA(value, "Launch & Go") && !lstrcmpA(title, "Launch & Go"), "failed replacement retains the original profile and live state"); }
+    SetDlgItemTextA(properties, 625, "Launch & Go"); SettingsPage(properties, 0, -1);
     return properties;
 }
 
@@ -691,6 +765,16 @@ static void EnvironmentTests(HWND bar, HWND browser, HWND childWindow, HWND menu
     Check(!SendMessageA(bar, WM_COPYDATA, (WPARAM)childWindow, (LPARAM)&copy), "tray rejects an invalid signature");
     packet.signature = 0x34753423; copy.cbData = 8;
     Check(!SendMessageA(bar, WM_COPYDATA, (WPARAM)childWindow, (LPARAM)&copy), "tray rejects truncated notification data");
+    properties = OpenSettings(bar); SettingsPage(properties, 3, -1);
+    Check(SendDlgItemMessageA(properties, 1014, LB_GETCOUNT, 0, 0) >= 1, "notification customization lists registered applications");
+    SendDlgItemMessageA(properties, 1014, LB_SETCURSEL, 0, 0); SendMessageA(properties, WM_COMMAND, MAKELONG(1014, LBN_SELCHANGE), 0);
+    SendDlgItemMessageA(properties, 1015, CB_SETCURSEL, 2, 0); SendMessageA(properties, WM_COMMAND, MAKELONG(1015, CBN_SELCHANGE), 0);
+    SendMessageA(properties, WM_COMMAND, 0x3021, 0);
+    Check(!IsWindowVisible(notification) && IsWindowVisible(GetDlgItem(tray, 850)), "Always hide removes an icon and keeps the overflow button available");
+    SendDlgItemMessageA(properties, 1015, CB_SETCURSEL, 1, 0); SendMessageA(properties, WM_COMMAND, MAKELONG(1015, CBN_SELCHANGE), 0);
+    SendMessageA(properties, WM_COMMAND, 0x3021, 0);
+    Check(IsWindowVisible(notification) && GetPrivateProfileIntA("TrayPolicies", "Mode0", 0, settings) == 1, "Always show restores the icon and persists its policy");
+    SendMessageA(properties, WM_COMMAND, IDCANCEL, 0);
     copy.cbData = offsetof(Packet, icon) + packet.icon.cbSize; packet.operation = NIM_DELETE;
     Check(SendMessageA(bar, WM_COPYDATA, (WPARAM)childWindow, (LPARAM)&copy), "tray accepts NIM_DELETE");
     Check(!IsWindow(notification), "deleted notification window is removed");
@@ -714,6 +798,7 @@ static void EnvironmentTests(HWND bar, HWND browser, HWND childWindow, HWND menu
     SendMessageA(properties, WM_COMMAND, 0x3021, 0);
     GetWindowRect(bar, &rect);
     Check(rect.top <= 2 && rect.bottom - rect.top >= 55, "properties dock taskbar to the top with two rows");
+    Check(GetDlgItemInt(properties, 627, NULL, FALSE) == 2, "work-area broadcasts during Apply preserve the Start draft count");
     Check(GetPrivateProfileIntA("Taskbar", "Rows", 0, settings) == 2 &&
           GetPrivateProfileIntA("Taskbar", "TaskWidth", 0, settings) == 188, "taskbar options are persisted");
     CheckStartFits(bar, menu);
@@ -819,6 +904,7 @@ void start(void)
             else Check(!lstrcmpA(args, "--group=full"), "known test group (full, core, menu, browser)");
         }
     }
+    SetCursorPos(GetSystemMetrics(SM_CXSCREEN) - 2, GetSystemMetrics(SM_CYSCREEN) - 2);
     Check(!FindWindowA("Explorer95.Taskbar", NULL), "test starts without an existing Explorer95 instance");
     SystemParametersInfoA(SPI_GETWORKAREA, 0, &originalWork, 0);
     GetTempPathA(MAX_PATH, temp);
@@ -964,7 +1050,7 @@ shutdown:
     Check(GetPrivateProfileIntA("Start", "RecentCount", -1, settings) == 2, "recent count survives restart");
     SendMessageA(bar, WM_COMMAND, 600, 0);
     { HWND properties = WaitFor("Explorer95.Properties", NULL), customize;
-      SendMessageA(properties, WM_COMMAND, 626, 0); customize = WaitFor("Explorer95.StartSettings", NULL);
+      SendMessageA(properties, WM_COMMAND, 626, 0); customize = properties;
       Check(SendDlgItemMessageA(customize, 639, BM_GETCHECK, 0, 0) == BST_CHECKED, "large icon setting is restored after restart");
       SendMessageA(customize, WM_COMMAND, IDCANCEL, 0); SendMessageA(properties, WM_COMMAND, IDCANCEL, 0); }
     {
@@ -985,7 +1071,7 @@ shutdown:
     Check(!(GetWindowLongA(GetDlgItem(menu, 304), GWL_STYLE) & WS_VISIBLE), "hidden right-column commands survive restart");
     SendMessageA(bar, WM_COMMAND, 600, 0);
     dialog = WaitFor("Explorer95.Properties", NULL);
-    SendMessageA(dialog, WM_COMMAND, 611, 0); SendMessageA(dialog, WM_COMMAND, IDCANCEL, 0);
+    SendMessageA(dialog, WM_COMMAND, 611, 0); SendMessageA(dialog, WM_COMMAND, 0x3021, 0); SendMessageA(dialog, WM_COMMAND, IDCANCEL, 0);
     GetWindowTextA(GetDlgItem(menu, 901), actual, sizeof(actual));
     Check(!lstrcmpA(actual, "Pinned smoke program"), "clearing recent programs preserves the separate pinned list");
     SendMessageA(menu, WM_COMMAND, 901, 0);

@@ -1,27 +1,6 @@
 #define WIN32_LEAN_AND_MEAN
-#include "shell_internal.h"
+#include "settings_internal.h"
 #define ID_APPLY_NOW 0x3021
-
-static void SaveNumber(const char *name, int value)
-{
-    char text[24]; wsprintfA(text, "%d", value);
-    WritePrivateProfileStringA("Taskbar", name, text, env.ini);
-}
-
-void EnvSaveOptions(void)
-{
-    SaveNumber("Edge", env.options.edge); SaveNumber("Rows", env.options.rows);
-    SaveNumber("TaskWidth", env.options.taskWidth); SaveNumber("Locked", env.options.locked);
-    SaveNumber("AutoHide", env.options.autoHide); SaveNumber("AlwaysOnTop", env.options.topmost);
-    SaveNumber("Clock", env.options.clock); SaveNumber("QuickLaunch", env.options.quick);
-    SaveNumber("LargeIcons", env.options.largeIcons); SaveNumber("GroupTasks", env.options.group);
-    SaveNumber("HideInactive", env.options.hideInactive);
-    { char value[24]; wsprintfA(value, "%u", env.options.startItems);
-      WritePrivateProfileStringA("Start", "VisibleItems", value, env.ini);
-      wsprintfA(value, "%d", env.options.largeStartIcons); WritePrivateProfileStringA("Start", "LargeIcons", value, env.ini);
-      wsprintfA(value, "%d", env.options.recentCount); WritePrivateProfileStringA("Start", "RecentCount", value, env.ini);
-      WritePrivateProfileStringA("Start", "ButtonLabel", env.options.startLabel, env.ini); }
-}
 
 static void ShellSelection(HWND owner, BOOL restore)
 {
@@ -65,111 +44,286 @@ static void ShellSelection(HWND owner, BOOL restore)
                 "Explorer95 Shell", MB_OK | MB_ICONINFORMATION);
 }
 
-static void Checkbox(HWND parent, const char *text, int id, BOOL checked, int x, int y, int width)
+typedef struct SettingControl { HWND window; int page, subpage; } SettingControl;
+static SettingControl controls[192];
+static int controlCount, page, subpage;
+static BOOL loading;
+static PaintBuffer previewBuffer;
+static BOOL WriteNumber(const char *ini, const char *section, const char *key, UINT value)
+{ char text[24]; wsprintfA(text, "%u", value); return WritePrivateProfileStringA(section, key, text, ini); }
+static BOOL WriteOptions(const char *ini, const ShellOptions *o)
 {
-    HWND box = EnvControl(parent, "BUTTON", text, WS_TABSTOP | BS_AUTOCHECKBOX, id);
-    MoveWindow(box, x, y, width, 23, TRUE);
+    BOOL okay = TRUE;
+#define SAVE(section, key, member) okay &= WriteNumber(ini, section, key, o->member)
+    SAVE("Taskbar", "Edge", edge); SAVE("Taskbar", "Rows", rows); SAVE("Taskbar", "TaskWidth", taskWidth);
+    SAVE("Taskbar", "Locked", locked); SAVE("Taskbar", "AutoHide", autoHide); SAVE("Taskbar", "AlwaysOnTop", topmost);
+    SAVE("Taskbar", "Clock", clock); SAVE("Taskbar", "QuickLaunch", quick); SAVE("Taskbar", "LargeIcons", largeIcons);
+    SAVE("Taskbar", "GroupTasks", group); SAVE("Taskbar", "HideInactive", hideInactive); SAVE("Taskbar", "InactiveSeconds", traySeconds);
+    SAVE("Start", "VisibleItems", startItems); SAVE("Start", "FolderMenus", startMenus); SAVE("Start", "LargeIcons", largeStartIcons);
+    SAVE("Start", "RecentCount", recentCount); SAVE("Start", "Classic", classicStart); SAVE("Start", "HoverMenus", hoverMenus);
+    SAVE("Start", "AllowDrop", allowDrop); SAVE("Start", "HighlightNew", highlightNew);
+    SAVE("Desktop", "ShowIcons", desktopIcons); SAVE("Desktop", "AutoArrange", autoArrange);
+#undef SAVE
+    okay &= WritePrivateProfileStringA("Start", "ButtonLabel", o->startLabel, ini);
+    return okay;
+}
+void EnvSaveOptions(void) { WriteOptions(env.ini, &env.options); }
+HWND SettingsControl(HWND window, int ownerPage, int ownerSubpage, const char *kind,
+    const char *text, DWORD style, int id, int x, int y, int width, int height)
+{
+    HWND control = EnvControl(window, kind, text, style | WS_CLIPSIBLINGS, id ? id : 1400 + controlCount);
+    MoveWindow(control, x, y, width, height, FALSE);
+    if (controlCount < 192) {
+        controls[controlCount].window = control; controls[controlCount].page = ownerPage;
+        controls[controlCount++].subpage = ownerSubpage;
+    }
+    return control;
+}
+void SettingsChanged(HWND window)
+{ if (!loading) EnableWindow(GetDlgItem(window, ID_APPLY_NOW), TRUE); }
+void SettingsPreviewChanged(HWND window)
+{
+    InvalidateRect(GetDlgItem(window, ID_PREVIEW_TASKBAR), NULL, FALSE);
+    InvalidateRect(GetDlgItem(window, ID_PREVIEW_START), NULL, FALSE);
+    InvalidateRect(GetDlgItem(window, ID_PREVIEW_DESKTOP), NULL, FALSE); SettingsChanged(window);
+}
+static void ShowPage(HWND window)
+{
+    int i;
+    for (i = 0; i < controlCount; ++i) {
+        BOOL show = controls[i].page == page && (controls[i].subpage < 0 || controls[i].subpage == subpage);
+        ShowWindow(controls[i].window, show ? SW_SHOWNA : SW_HIDE);
+    }
+    if (page == SETTINGS_START) StartSettingsScreenChanged(window);
+    RedrawWindow(window, NULL, NULL, RDW_INVALIDATE | RDW_ALLCHILDREN);
+}
+static HWND Control(HWND w, int p, const char *kind, const char *text, DWORD style, int id, int x, int y, int width, int height)
+{ return SettingsControl(w, p, -1, kind, text, style, id, x, y, width, height); }
+static void Checkbox(HWND w, int p, const char *text, int id, BOOL checked, int x, int y, int width)
+{
+    HWND box = Control(w, p, "BUTTON", text, WS_TABSTOP | BS_AUTOCHECKBOX, id, x, y, width, 23);
     SendMessageA(box, BM_SETCHECK, checked ? BST_CHECKED : BST_UNCHECKED, 0);
 }
-
-static BOOL Checked(HWND parent, int id)
-{ return SendDlgItemMessageA(parent, id, BM_GETCHECK, 0, 0) == BST_CHECKED; }
-
+static BOOL Checked(HWND w, int id) { return SendDlgItemMessageA(w, id, BM_GETCHECK, 0, 0) == BST_CHECKED; }
+int SettingsRecentMaximum(HWND window, int pins, BOOL large)
+{
+    ShellOptions options = env.options;
+    options.edge = SendDlgItemMessageA(window, ID_EDGE, CB_GETCURSEL, 0, 0);
+    options.rows = SendDlgItemMessageA(window, ID_ROWS, CB_GETCURSEL, 0, 0) + 1;
+    options.largeIcons = Checked(window, ID_LARGE); options.largeStartIcons = large;
+    return StartMaximumRecentOptions(pins, &options);
+}
+static void Preview(const DRAWITEMSTRUCT *item)
+{
+    RECT rect = item->rcItem, part; HDC dc = PaintBufferBegin(&previewBuffer, item->hDC, &rect);
+    int width = rect.right - rect.left, height = rect.bottom - rect.top, i;
+    FillRect(dc, &rect, (HBRUSH)(COLOR_BTNFACE + 1)); DrawEdge(dc, &rect, EDGE_SUNKEN, BF_RECT);
+    SelectObject(dc, env.host.font); SetBkMode(dc, TRANSPARENT); SetTextColor(dc, GetSysColor(COLOR_BTNTEXT));
+    if (item->CtlID == ID_PREVIEW_TASKBAR) {
+        part = rect; InflateRect(&part, -5, -6); DrawEdge(dc, &part, EDGE_RAISED, BF_RECT);
+        part.right = part.left + 72; DrawEdge(dc, &part, EDGE_RAISED, BF_RECT); PaintStartLogo(dc, part.left + 4, part.top + 4);
+        part.left += 24; DrawTextA(dc, "Start", -1, &part, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+        if (Checked(env.properties, ID_QUICK)) { HICON icon = EnvSystemIcon(4); DrawIconEx(dc, 86, 11, icon, 16, 16, 0, NULL, DI_NORMAL); if (icon) DestroyIcon(icon); }
+        SetRect(&part, 112, 9, width - 90, height - 9); DrawEdge(dc, &part, EDGE_SUNKEN, BF_RECT);
+        part.left += 8; DrawTextA(dc, Checked(env.properties, ID_GROUP) ? "Explorer95 (2)" : "Explorer95", -1, &part, DT_SINGLELINE | DT_VCENTER);
+        if (Checked(env.properties, ID_CLOCK)) { SetRect(&part, width - 78, 8, width - 6, height - 8); DrawEdge(dc, &part, EDGE_SUNKEN, BF_RECT); DrawTextA(dc, "12:34", -1, &part, DT_CENTER | DT_SINGLELINE | DT_VCENTER); }
+    } else if (item->CtlID == ID_PREVIEW_START) {
+        BOOL classic = SendDlgItemMessageA(env.properties, ID_STARTSTYLE, CB_GETCURSEL, 0, 0) == 1;
+        BOOL large = Checked(env.properties, ID_STARTLARGE); int iconSize = large ? 24 : 16;
+        int menuWidth = classic ? width / 2 + 16 : width - 12;
+        SetRect(&part, 5, 5, menuWidth, 25); FillRect(dc, &part, (HBRUSH)(COLOR_ACTIVECAPTION + 1));
+        SetTextColor(dc, GetSysColor(COLOR_CAPTIONTEXT)); part.left += 5; DrawTextA(dc, "Explorer95", -1, &part, DT_SINGLELINE | DT_VCENTER);
+        SetTextColor(dc, GetSysColor(COLOR_BTNTEXT));
+        for (i = 0; i < (large ? 3 : 4); ++i) {
+            HICON icon = EnvSystemIcon(i ? 4 : 5);
+            int y = 31 + i * (large ? 28 : 19);
+            DrawIconEx(dc, 10, y, icon, iconSize, iconSize, 0, NULL, DI_NORMAL);
+            if (!classic) { DrawIconEx(dc, menuWidth / 2 + 5, y, icon, iconSize, iconSize, 0, NULL, DI_NORMAL); MoveToEx(dc, menuWidth / 2 + iconSize + 10, y + iconSize / 2, NULL); LineTo(dc, menuWidth - 8, y + iconSize / 2); }
+            MoveToEx(dc, 10 + iconSize + 6, y + iconSize / 2, NULL); LineTo(dc, classic ? menuWidth - 8 : menuWidth / 2 - 5, y + iconSize / 2);
+            if (icon) DestroyIcon(icon);
+        }
+    } else {
+        SetRect(&part, 4, 4, width - 4, height - 4); FillRect(dc, &part, (HBRUSH)(COLOR_DESKTOP + 1));
+        if (Checked(env.properties, ID_DESKTOPICONS)) {
+            HICON icon = EnvSystemIcon(16); DrawIconEx(dc, 16, 15, icon, 32, 32, 0, NULL, DI_NORMAL); if (icon) DestroyIcon(icon);
+        }
+        SetRect(&part, 4, height - 27, width - 4, height - 4); FillRect(dc, &part, (HBRUSH)(COLOR_BTNFACE + 1)); DrawEdge(dc, &part, EDGE_RAISED, BF_TOP);
+        PaintStartLogo(dc, 10, height - 23);
+    }
+    PaintBufferEnd(&previewBuffer, item->hDC, &item->rcItem);
+}
+static BOOL CommitFile(HWND window, const ShellOptions *options)
+{
+    char staged[MAX_PATH], backup[MAX_PATH]; BOOL exists = GetFileAttributesA(env.ini) != INVALID_FILE_ATTRIBUTES;
+    DWORD error;
+    if (exists && (GetFileAttributesA(env.ini) & FILE_ATTRIBUTE_READONLY)) {
+        EnvError(window, "The settings file is read-only. No changes were applied.", ERROR_ACCESS_DENIED); return FALSE;
+    }
+    if (!GetTempFileNameA(env.dataDir, "E95", 0, staged)) { EnvError(window, "Cannot create settings file.", GetLastError()); return FALSE; }
+    WritePrivateProfileStringA(NULL, NULL, NULL, env.ini);
+    if ((exists && !CopyFileA(env.ini, staged, FALSE)) || !WriteOptions(staged, options) ||
+        !StartSettingsWrite(staged) || !TraySettingsWrite(staged)) {
+        error = GetLastError(); DeleteFileA(staged); EnvError(window, "Cannot save settings. Your previous settings are unchanged.", error ? error : ERROR_WRITE_FAULT); return FALSE;
+    }
+    WritePrivateProfileStringA(NULL, NULL, NULL, staged);
+    backup[0] = 0;
+    if (exists) {
+        if (!GetTempFileNameA(env.dataDir, "E95", 0, backup)) { error = GetLastError(); DeleteFileA(staged); EnvError(window, "Cannot back up settings.", error); return FALSE; }
+        DeleteFileA(backup);
+        if (!MoveFileA(env.ini, backup)) { error = GetLastError(); DeleteFileA(staged); EnvError(window, "Cannot replace settings.", error); return FALSE; }
+    }
+    if (!MoveFileA(staged, env.ini)) {
+        error = GetLastError();
+        if (exists && !MoveFileA(backup, env.ini)) {
+            char recovery[400]; wsprintfA(recovery, "Cannot restore the settings file. Your previous settings remain in:\r\n%s", backup);
+            EnvError(window, recovery, GetLastError()); return FALSE;
+        }
+        DeleteFileA(staged); EnvError(window, "Cannot apply settings; the previous file was kept.", error); return FALSE;
+    }
+    if (exists) DeleteFileA(backup);
+    WritePrivateProfileStringA(NULL, NULL, NULL, env.ini); return TRUE;
+}
+static BOOL Apply(HWND window)
+{
+    ShellOptions options = env.options; BOOL valid; UINT width = GetDlgItemInt(window, ID_WIDTH, &valid, FALSE), seconds;
+    if (!valid || width < 80 || width > 300) { MessageBoxA(window, "Button width must be between 80 and 300 pixels.", "Explorer95 Settings", MB_OK | MB_ICONEXCLAMATION); return FALSE; }
+    seconds = GetDlgItemInt(window, ID_TRAYSECONDS, &valid, FALSE);
+    if (!valid || seconds < 5 || seconds > 3600) { MessageBoxA(window, "Inactive timeout must be between 5 and 3600 seconds.", "Explorer95 Settings", MB_OK | MB_ICONEXCLAMATION); return FALSE; }
+    options.edge = SendDlgItemMessageA(window, ID_EDGE, CB_GETCURSEL, 0, 0); options.rows = SendDlgItemMessageA(window, ID_ROWS, CB_GETCURSEL, 0, 0) + 1;
+    options.taskWidth = width; options.traySeconds = seconds;
+    options.locked = Checked(window, ID_LOCK); options.autoHide = Checked(window, ID_AUTOHIDE); options.topmost = Checked(window, ID_TOPMOST);
+    options.clock = Checked(window, ID_CLOCK); options.quick = Checked(window, ID_QUICK); options.largeIcons = Checked(window, ID_LARGE);
+    options.group = Checked(window, ID_GROUP); options.hideInactive = Checked(window, ID_INACTIVE);
+    options.desktopIcons = Checked(window, ID_DESKTOPICONS); options.autoArrange = Checked(window, ID_AUTOARRANGE);
+    if (!StartSettingsValidate(window, &options) || !CommitFile(window, &options)) return FALSE;
+    env.options = options; loading = TRUE; StartSettingsCommit(window); TraySettingsCommit(); EnvApplyOptions(); loading = FALSE;
+    EnableWindow(GetDlgItem(window, ID_APPLY_NOW), FALSE); return TRUE;
+}
 static LRESULT CALLBACK PropertiesProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
 {
     switch (message) {
     case WM_CREATE: {
-        HWND edges, rows, label;
-        int i;
-        const char *names[] = {"Left", "Top", "Right", "Bottom"};
-        label = EnvControl(window, "BUTTON", "Taskbar appearance", BS_GROUPBOX, 1);
-        MoveWindow(label, 10, 8, 420, 178, TRUE);
-        Checkbox(window, "Lock the taskbar", ID_LOCK, env.options.locked, 22, 30, 196);
-        Checkbox(window, "Auto-hide the taskbar", ID_AUTOHIDE, env.options.autoHide, 22, 56, 196);
-        Checkbox(window, "Keep taskbar on top", ID_TOPMOST, env.options.topmost, 22, 82, 196);
-        Checkbox(window, "Group windows by process", ID_GROUP, env.options.group, 22, 108, 196);
-        Checkbox(window, "Show Quick Launch", ID_QUICK, env.options.quick, 224, 30, 194);
-        Checkbox(window, "Show the clock", ID_CLOCK, env.options.clock, 224, 56, 194);
-        Checkbox(window, "Large Quick Launch icons", ID_LARGE, env.options.largeIcons, 224, 82, 194);
-        Checkbox(window, "Hide inactive tray icons", ID_INACTIVE, env.options.hideInactive, 224, 108, 194);
-        MoveWindow(EnvControl(window, "STATIC", "Dock:", 0, 2), 22, 146, 34, 20, TRUE);
-        edges = EnvControl(window, "COMBOBOX", "", WS_TABSTOP | CBS_DROPDOWNLIST, ID_EDGE);
-        MoveWindow(edges, 60, 142, 106, 150, TRUE);
-        for (i = 0; i < 4; ++i) SendMessageA(edges, CB_ADDSTRING, 0, (LPARAM)names[i]);
-        SendMessageA(edges, CB_SETCURSEL, env.options.edge, 0);
-        MoveWindow(EnvControl(window, "STATIC", "Rows:", 0, 3), 180, 146, 38, 20, TRUE);
-        rows = EnvControl(window, "COMBOBOX", "", WS_TABSTOP | CBS_DROPDOWNLIST, ID_ROWS);
-        MoveWindow(rows, 224, 142, 48, 120, TRUE);
-        SendMessageA(rows, CB_ADDSTRING, 0, (LPARAM)"1");
-        SendMessageA(rows, CB_ADDSTRING, 0, (LPARAM)"2");
-        SendMessageA(rows, CB_ADDSTRING, 0, (LPARAM)"3");
-        SendMessageA(rows, CB_SETCURSEL, env.options.rows - 1, 0);
-        MoveWindow(EnvControl(window, "STATIC", "Button width:", 0, 4), 286, 146, 78, 20, TRUE);
-        MoveWindow(EnvControl(window, "EDIT", "", WS_TABSTOP | WS_BORDER | ES_NUMBER, ID_WIDTH), 366, 142, 52, 23, TRUE);
-        SetDlgItemInt(window, ID_WIDTH, env.options.taskWidth, FALSE);
-        MoveWindow(EnvControl(window, "BUTTON", "Start menu and toolbars", BS_GROUPBOX, 5), 10, 198, 420, 88, TRUE);
-        MoveWindow(EnvControl(window, "BUTTON", "Clear recent programs", WS_TABSTOP, ID_CLEARRECENT), 22, 224, 188, 26, TRUE);
-        MoveWindow(EnvControl(window, "BUTTON", "Open Quick Launch folder", WS_TABSTOP, ID_QUICKFOLDER), 224, 224, 194, 26, TRUE);
-        MoveWindow(EnvControl(window, "BUTTON", "Customize Start menu / pinned programs...", WS_TABSTOP, ID_CUSTOMSTART), 22, 254, 396, 26, TRUE);
-        MoveWindow(EnvControl(window, "BUTTON", "Windows 95 system shell (takes effect after restart)", BS_GROUPBOX, 7), 10, 298, 420, 76, TRUE);
-        MoveWindow(EnvControl(window, "BUTTON", "Use Explorer95 as shell...", WS_TABSTOP, ID_INSTALLSHELL), 22, 326, 188, 26, TRUE);
-        MoveWindow(EnvControl(window, "BUTTON", "Restore previous shell...", WS_TABSTOP, ID_RESTORESHELL), 224, 326, 194, 26, TRUE);
-        MoveWindow(EnvControl(window, "BUTTON", "OK", WS_TABSTOP | BS_DEFPUSHBUTTON, IDOK), 170, 390, 80, 28, TRUE);
-        MoveWindow(EnvControl(window, "BUTTON", "Cancel", WS_TABSTOP, IDCANCEL), 258, 390, 80, 28, TRUE);
-        MoveWindow(EnvControl(window, "BUTTON", "Apply", WS_TABSTOP, ID_APPLY_NOW), 346, 390, 80, 28, TRUE);
+        static const char *tabs[] = {"Taskbar", "Start Menu", "Desktop", "Notifications", "System Shell"};
+        static const char *edges[] = {"Left", "Top", "Right", "Bottom"};
+        TCITEMA item; HWND control; int i;
+        env.properties = window; loading = TRUE; controlCount = 0; page = subpage = 0;
+        control = EnvControl(window, WC_TABCONTROLA, "", WS_TABSTOP | WS_CLIPSIBLINGS, ID_SETTINGS_TABS); MoveWindow(control, 8, 8, 504, 336, FALSE);
+        ZeroMemory(&item, sizeof(item)); item.mask = TCIF_TEXT;
+        for (i = 0; i < 5; ++i) { item.pszText = (LPSTR)tabs[i]; SendMessageA(control, TCM_INSERTITEMA, i, (LPARAM)&item); }
+        Control(window, SETTINGS_TASKBAR, "STATIC", "", SS_OWNERDRAW, ID_PREVIEW_TASKBAR, 24, 50, 472, 42);
+        Control(window, SETTINGS_TASKBAR, "BUTTON", "Taskbar appearance", BS_GROUPBOX, 0, 20, 102, 480, 204);
+        Checkbox(window, SETTINGS_TASKBAR, "Lock the taskbar", ID_LOCK, env.options.locked, 32, 124, 226);
+        Checkbox(window, SETTINGS_TASKBAR, "Auto-hide the taskbar", ID_AUTOHIDE, env.options.autoHide, 32, 152, 226);
+        Checkbox(window, SETTINGS_TASKBAR, "Keep taskbar on top", ID_TOPMOST, env.options.topmost, 32, 180, 226);
+        Checkbox(window, SETTINGS_TASKBAR, "Group similar windows", ID_GROUP, env.options.group, 32, 208, 226);
+        Checkbox(window, SETTINGS_TASKBAR, "Show Quick Launch", ID_QUICK, env.options.quick, 266, 124, 222);
+        Checkbox(window, SETTINGS_TASKBAR, "Large Quick Launch icons", ID_LARGE, env.options.largeIcons, 266, 152, 222);
+        Control(window, SETTINGS_TASKBAR, "BUTTON", "Open Quick Launch folder", WS_TABSTOP, ID_QUICKFOLDER, 266, 188, 218, 26);
+        Control(window, SETTINGS_TASKBAR, "BUTTON", "Customize notification area...", WS_TABSTOP, ID_CUSTOMTRAY, 266, 224, 218, 26);
+        Control(window, SETTINGS_TASKBAR, "STATIC", "Dock:", 0, 0, 32, 272, 40, 20);
+        control = Control(window, SETTINGS_TASKBAR, "COMBOBOX", "", WS_TABSTOP | CBS_DROPDOWNLIST, ID_EDGE, 76, 268, 104, 130);
+        for (i = 0; i < 4; ++i) { SendMessageA(control, CB_ADDSTRING, 0, (LPARAM)edges[i]); } SendMessageA(control, CB_SETCURSEL, env.options.edge, 0);
+        Control(window, SETTINGS_TASKBAR, "STATIC", "Rows:", 0, 0, 194, 272, 40, 20);
+        control = Control(window, SETTINGS_TASKBAR, "COMBOBOX", "", WS_TABSTOP | CBS_DROPDOWNLIST, ID_ROWS, 238, 268, 48, 100);
+        SendMessageA(control, CB_ADDSTRING, 0, (LPARAM)"1"); SendMessageA(control, CB_ADDSTRING, 0, (LPARAM)"2"); SendMessageA(control, CB_ADDSTRING, 0, (LPARAM)"3"); SendMessageA(control, CB_SETCURSEL, env.options.rows - 1, 0);
+        Control(window, SETTINGS_TASKBAR, "STATIC", "Button width:", 0, 0, 32, 316, 102, 20);
+        Control(window, SETTINGS_TASKBAR, "EDIT", "", WS_BORDER | WS_TABSTOP | ES_NUMBER, ID_WIDTH, 144, 312, 64, 23); SetDlgItemInt(window, ID_WIDTH, env.options.taskWidth, FALSE);
+        Control(window, SETTINGS_TASKBAR, "STATIC", "80 - 300 pixels", 0, 0, 222, 316, 260, 20);
+        StartSettingsBegin(); StartSettingsCreate(window);
+        Control(window, SETTINGS_DESKTOP, "STATIC", "", SS_OWNERDRAW, ID_PREVIEW_DESKTOP, 30, 52, 454, 124);
+        Checkbox(window, SETTINGS_DESKTOP, "Show desktop icons", ID_DESKTOPICONS, env.options.desktopIcons, 30, 194, 450);
+        Checkbox(window, SETTINGS_DESKTOP, "Auto-arrange desktop icons", ID_AUTOARRANGE, env.options.autoArrange, 30, 226, 450);
+        Control(window, SETTINGS_DESKTOP, "BUTTON", "Line up icons now", WS_TABSTOP, ID_LINEUP, 30, 270, 212, 26);
+        Control(window, SETTINGS_DESKTOP, "BUTTON", "Background / display settings...", WS_TABSTOP, ID_BACKGROUND, 252, 270, 232, 26);
+        Control(window, SETTINGS_DESKTOP, "STATIC", "Wallpaper, colors and screen saver use Windows display properties.", 0, 0, 30, 312, 454, 32);
+        TraySettingsBegin(); TraySettingsCreate(window);
+        Control(window, SETTINGS_SHELL, "BUTTON", "Windows 95 startup shell", BS_GROUPBOX, 0, 24, 54, 472, 194);
+        Control(window, SETTINGS_SHELL, "STATIC", "Select which shell starts with Windows.\r\nYour current session stays open; the change takes effect after restart.", 0, 0, 38, 82, 442, 48);
+        Control(window, SETTINGS_SHELL, "BUTTON", "Use Explorer95 as shell...", WS_TABSTOP, ID_INSTALLSHELL, 38, 150, 442, 28);
+        Control(window, SETTINGS_SHELL, "BUTTON", "Restore previous shell...", WS_TABSTOP, ID_RESTORESHELL, 38, 192, 442, 28);
+        Control(window, SETTINGS_SHELL, "STATIC", "These system actions have their own confirmation.\r\nExplorer95 file-window preferences remain in Tools > Folder Options.", 0, 0, 38, 270, 442, 52);
+        MoveWindow(EnvControl(window, "BUTTON", "OK", WS_TABSTOP | BS_DEFPUSHBUTTON, IDOK), 250, 352, 80, 26, FALSE);
+        MoveWindow(EnvControl(window, "BUTTON", "Cancel", WS_TABSTOP, IDCANCEL), 338, 352, 80, 26, FALSE);
+        MoveWindow(EnvControl(window, "BUTTON", "Apply", WS_TABSTOP, ID_APPLY_NOW), 426, 352, 80, 26, FALSE);
+        for (i = 0; i < controlCount; ++i) {
+            char kind[20]; GetClassNameA(controls[i].window, kind, sizeof(kind));
+            if (!lstrcmpiA(kind, "BUTTON") && (GetWindowLongA(controls[i].window, GWL_STYLE) & BS_TYPEMASK) == BS_GROUPBOX)
+                SetWindowPos(controls[i].window, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        }
+        SetWindowPos(GetDlgItem(window, ID_START_TABS), HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        SetWindowPos(GetDlgItem(window, ID_SETTINGS_TABS), HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        loading = FALSE; EnableWindow(GetDlgItem(window, ID_APPLY_NOW), FALSE); ShowPage(window); return 0;
+    }
+    case WM_NOTIFY: {
+        NMHDR *notify = (NMHDR *)lp;
+        if (notify->code == TCN_SELCHANGE) {
+            if (notify->idFrom == ID_SETTINGS_TABS) page = SendMessageA(notify->hwndFrom, TCM_GETCURSEL, 0, 0);
+            if (notify->idFrom == ID_START_TABS) subpage = SendMessageA(notify->hwndFrom, TCM_GETCURSEL, 0, 0);
+            ShowPage(window);
+        }
         return 0;
     }
+    case WM_DRAWITEM: Preview((const DRAWITEMSTRUCT *)lp); return TRUE;
     case WM_COMMAND:
-        switch (LOWORD(wp)) {
-        case IDOK: case ID_APPLY_NOW: {
-            BOOL valid;
-            UINT width = GetDlgItemInt(window, ID_WIDTH, &valid, FALSE);
-            if (!valid || width < 80 || width > 300) {
-                MessageBoxA(window, "Button width must be between 80 and 300 pixels.", "Taskbar Properties", MB_OK | MB_ICONEXCLAMATION); return 0;
-            }
-            env.options.edge = (int)SendDlgItemMessageA(window, ID_EDGE, CB_GETCURSEL, 0, 0);
-            env.options.rows = (int)SendDlgItemMessageA(window, ID_ROWS, CB_GETCURSEL, 0, 0) + 1;
-            env.options.taskWidth = width;
-            env.options.locked = Checked(window, ID_LOCK); env.options.autoHide = Checked(window, ID_AUTOHIDE);
-            env.options.topmost = Checked(window, ID_TOPMOST); env.options.clock = Checked(window, ID_CLOCK);
-            env.options.quick = Checked(window, ID_QUICK); env.options.largeIcons = Checked(window, ID_LARGE);
-            env.options.group = Checked(window, ID_GROUP); env.options.hideInactive = Checked(window, ID_INACTIVE);
-            EnvSaveOptions(); EnvApplyOptions();
-            if (LOWORD(wp) == IDOK) DestroyWindow(window);
-            return 0;
-        }
-        case IDCANCEL: DestroyWindow(window); return 0;
-        case ID_CLEARRECENT: StartClearRecent(); return 0;
-        case ID_CUSTOMSTART: StartSettingsOpen(); return 0;
-        case ID_QUICKFOLDER: env.host.openFolder(env.quickDir); return 0;
-        case ID_INSTALLSHELL: ShellSelection(window, FALSE); return 0;
-        case ID_RESTORESHELL: ShellSelection(window, TRUE); return 0;
-        }
+        if (loading) return 0;
+        if (LOWORD(wp) == IDOK || LOWORD(wp) == ID_APPLY_NOW) { if (Apply(window) && LOWORD(wp) == IDOK) DestroyWindow(window); return 0; }
+        if (LOWORD(wp) == IDCANCEL) { DestroyWindow(window); return 0; }
+        if (LOWORD(wp) == ID_CUSTOMSTART) { PropertiesSelectPage(SETTINGS_START); return 0; }
+        if (LOWORD(wp) == ID_CUSTOMTRAY) { PropertiesSelectPage(SETTINGS_TRAY); return 0; }
+        if (LOWORD(wp) == ID_QUICKFOLDER) { env.host.openFolder(env.quickDir); return 0; }
+        if (LOWORD(wp) == ID_BACKGROUND) { EnvironmentLaunch(window, "control.exe", "desk.cpl", NULL); return 0; }
+        if (LOWORD(wp) == ID_LINEUP) { HWND list = NativeViewList(env.desktopView); if (list) ListView_Arrange(list, LVA_SNAPTOGRID); return 0; }
+        if (LOWORD(wp) == ID_INSTALLSHELL || LOWORD(wp) == ID_RESTORESHELL) { ShellSelection(window, LOWORD(wp) == ID_RESTORESHELL); return 0; }
+        if (LOWORD(wp) == ID_EDGE || LOWORD(wp) == ID_ROWS || LOWORD(wp) == ID_LARGE) StartSettingsScreenChanged(window);
+        if (StartSettingsCommand(window, wp) || TraySettingsCommand(window, wp)) return 0;
+        if (HIWORD(wp) == BN_CLICKED || HIWORD(wp) == EN_CHANGE || HIWORD(wp) == CBN_SELCHANGE) SettingsPreviewChanged(window);
         return 0;
-    case WM_DESTROY: env.properties = NULL; return 0;
+    case WM_DISPLAYCHANGE: case WM_SETTINGCHANGE: case WM_SYSCOLORCHANGE: {
+        RECT rect; int x, y;
+        if (loading) return 0; /* SPI work-area broadcasts precede moving the taskbar. */
+        GetWindowRect(window, &rect); x = rect.left; y = rect.top;
+        StartSettingsScreenChanged(window);
+        if (x + rect.right - rect.left > GetSystemMetrics(SM_CXSCREEN)) x = GetSystemMetrics(SM_CXSCREEN) - (rect.right - rect.left);
+        if (y + rect.bottom - rect.top > GetSystemMetrics(SM_CYSCREEN)) y = GetSystemMetrics(SM_CYSCREEN) - (rect.bottom - rect.top);
+        if (x < 0) x = 0;
+        if (y < 0) y = 0;
+        SetWindowPos(window, NULL, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        RedrawWindow(window, NULL, NULL, RDW_INVALIDATE | RDW_ALLCHILDREN); return 0;
+    }
+    case WM_CLOSE: DestroyWindow(window); return 0;
+    case WM_DESTROY: PaintBufferFree(&previewBuffer); env.properties = NULL; controlCount = 0; return 0;
     }
     return DefWindowProcA(window, message, wp, lp);
 }
-
 void PropertiesOpen(void)
 {
-    if (!env.properties)
-        env.properties = CreateWindowExA(WS_EX_DLGMODALFRAME, "Explorer95.Properties", "Taskbar and Start Menu Properties",
-            WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 454, 460,
-            env.bar, NULL, env.host.instance, NULL);
+    if (!env.properties) {
+        RECT rect = {0,0,520,390}, area; int x, y, width, height; DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN;
+        AdjustWindowRectEx(&rect, style, FALSE, WS_EX_DLGMODALFRAME);
+        SystemParametersInfoA(SPI_GETWORKAREA, 0, &area, 0);
+        width = rect.right - rect.left; height = rect.bottom - rect.top;
+        x = area.left + (area.right - area.left - width) / 2;
+        y = area.top + (area.bottom - area.top - height) / 2;
+        if (x < 0) x = 0;
+        if (y + height > GetSystemMetrics(SM_CYSCREEN)) y = GetSystemMetrics(SM_CYSCREEN) - height;
+        if (y < 0) y = 0;
+        env.properties = CreateWindowExA(WS_EX_DLGMODALFRAME, "Explorer95.Properties", "Explorer95 Environment Properties", style, x, y,
+            width, height, env.bar, NULL, env.host.instance, NULL);
+    }
     ShowWindow(env.properties, SW_SHOWNORMAL); SetForegroundWindow(env.properties);
+}
+void PropertiesSelectPage(int selected)
+{
+    PropertiesOpen(); page = selected; SendDlgItemMessageA(env.properties, ID_SETTINGS_TABS, TCM_SETCURSEL, page, 0); ShowPage(env.properties);
 }
 BOOL PropertiesTranslate(MSG *message)
 {
-    if (!env.properties) return FALSE;
-    if (message->message == WM_KEYDOWN && message->wParam == VK_ESCAPE &&
-        (message->hwnd == env.properties || IsChild(env.properties, message->hwnd))) {
-        DestroyWindow(env.properties); return TRUE;
+    if (!env.properties || !(message->hwnd == env.properties || IsChild(env.properties, message->hwnd))) return FALSE;
+    if (message->message == WM_KEYDOWN && message->wParam == VK_ESCAPE) { DestroyWindow(env.properties); return TRUE; }
+    if (message->message == WM_KEYDOWN && message->wParam == VK_TAB && GetKeyState(VK_CONTROL) < 0) {
+        PropertiesSelectPage((page + (GetKeyState(VK_SHIFT) < 0 ? 4 : 1)) % 5); return TRUE;
     }
     return IsDialogMessageA(env.properties, message);
 }
-
 void EnvironmentShowProperties(void) { PropertiesOpen(); }
-
-BOOL PropertiesRegister(void)
-{ return EnvRegister("Explorer95.Properties", PropertiesProc, (HBRUSH)(COLOR_BTNFACE + 1), 0); }
+BOOL PropertiesRegister(void) { return EnvRegister("Explorer95.Properties", PropertiesProc, (HBRUSH)(COLOR_BTNFACE + 1), 0); }

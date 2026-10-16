@@ -18,6 +18,9 @@ void EnvironmentRecordLaunch(const char *path, const char *arguments);
 BOOL EnvironmentLaunch(HWND owner, const char *path, const char *arguments, const char *directory);
 void EnvironmentOpenNamespace(int csidl);
 void EnvironmentShowProperties(void);
+void EnvironmentArrangeDesktop(BOOL automatic);
+void EnvironmentToggleDesktopIcons(void);
+BOOL EnvironmentDesktopIconsVisible(void);
 void EnvironmentFind(HWND owner, const char *directory);
 void EnvironmentShutdown(void);
 

@@ -85,9 +85,17 @@ static void SettingsPath(void)
     env.options.topmost = !!Option("AlwaysOnTop", TRUE); env.options.clock = !!Option("Clock", TRUE);
     env.options.quick = !!Option("QuickLaunch", TRUE); env.options.largeIcons = !!Option("LargeIcons", FALSE);
     env.options.group = !!Option("GroupTasks", FALSE); env.options.hideInactive = !!Option("HideInactive", FALSE);
+    env.options.classicStart = !!GetPrivateProfileIntA("Start", "Classic", FALSE, env.ini);
+    env.options.hoverMenus = !!GetPrivateProfileIntA("Start", "HoverMenus", TRUE, env.ini);
+    env.options.allowDrop = !!GetPrivateProfileIntA("Start", "AllowDrop", TRUE, env.ini);
+    env.options.highlightNew = !!GetPrivateProfileIntA("Start", "HighlightNew", FALSE, env.ini);
+    env.options.startMenus = GetPrivateProfileIntA("Start", "FolderMenus", 2, env.ini);
+    env.options.desktopIcons = !!GetPrivateProfileIntA("Desktop", "ShowIcons", TRUE, env.ini);
+    env.options.autoArrange = !!GetPrivateProfileIntA("Desktop", "AutoArrange", FALSE, env.ini);
+    env.options.traySeconds = Clamp(Option("InactiveSeconds", 60), 5, 3600);
     env.options.largeStartIcons = !!GetPrivateProfileIntA("Start", "LargeIcons", FALSE, env.ini);
     env.options.recentCount = Clamp((int)GetPrivateProfileIntA("Start", "RecentCount", 7, env.ini), 0, RECENT_LIMIT);
-    env.options.startItems = GetPrivateProfileIntA("Start", "VisibleItems", (1U << START_OPTION_COUNT) - 1, env.ini);
+    env.options.startItems = GetPrivateProfileIntA("Start", "VisibleItems", (1U << 12) - 1, env.ini);
     GetPrivateProfileStringA("Start", "ButtonLabel", "Start", env.options.startLabel, sizeof(env.options.startLabel), env.ini);
     if (!env.options.startLabel[0]) lstrcpyA(env.options.startLabel, "Start");
 }
@@ -364,10 +372,10 @@ void EnvLayoutBar(void)
     InvalidateRect(env.bar, NULL, TRUE);
 }
 
-static int Thickness(void)
+int EnvBarThickness(const ShellOptions *options)
 {
-    if (env.options.edge == ABE_LEFT || env.options.edge == ABE_RIGHT) return 140 + (env.options.rows - 1) * 32;
-    return (env.options.largeIcons ? 40 : 28) * env.options.rows;
+    if (options->edge == ABE_LEFT || options->edge == ABE_RIGHT) return 140 + (options->rows - 1) * 32;
+    return (options->largeIcons ? 40 : 28) * options->rows;
 }
 static void ResizeDesktop(void)
 {
@@ -378,7 +386,7 @@ static void ResizeDesktop(void)
 }
 void EnvPositionBar(void)
 {
-    APPBARDATA data; RECT rect, work; int full = Thickness(), reserve = env.options.autoHide ? 2 : full;
+    APPBARDATA data; RECT rect, work; int full = EnvBarThickness(&env.options), reserve = env.options.autoHide ? 2 : full;
     BOOL vertical = env.options.edge == ABE_LEFT || env.options.edge == ABE_RIGHT;
     if (!env.bar || env.positioning || env.closing) return;
     env.positioning = TRUE;
@@ -424,7 +432,20 @@ void EnvApplyOptions(void)
     SetWindowLongA(env.bar, GWL_STYLE, style);
     SetWindowTextA(env.startButton, env.options.startLabel); StartRefresh();
     env.hidden = FALSE; RefreshQuick(); EnvPositionBar(); UpdateTasks(); EnvLayoutBar();
+    if (env.desktopView) {
+        HWND view = NativeViewWindow(env.desktopView), list = NativeViewList(env.desktopView);
+        ShowWindow(view, env.options.desktopIcons ? SW_SHOWNA : SW_HIDE);
+        if (list && !!(GetWindowLongA(list, GWL_STYLE) & LVS_AUTOARRANGE) != env.options.autoArrange)
+            NativeViewArrange(env.desktopView, env.options.autoArrange);
+        InvalidateRect(env.desktop, NULL, FALSE);
+    }
 }
+
+void EnvironmentArrangeDesktop(BOOL automatic)
+{ env.options.autoArrange = automatic; NativeViewArrange(env.desktopView, automatic); EnvSaveOptions(); }
+BOOL EnvironmentDesktopIconsVisible(void) { return env.options.desktopIcons; }
+void EnvironmentToggleDesktopIcons(void)
+{ env.options.desktopIcons = !env.options.desktopIcons; EnvSaveOptions(); EnvApplyOptions(); }
 
 static void BarMenu(HWND source)
 {
@@ -469,6 +490,10 @@ void EnvCommand(int id)
     case ID_CONTROL: EnvironmentOpenNamespace(CSIDL_CONTROLS); break;
     case ID_NETWORK: EnvironmentOpenNamespace(CSIDL_NETWORK); break;
     case ID_PRINTERS: EnvironmentOpenNamespace(CSIDL_PRINTERS); break;
+    case ID_RECENTDOCS: {
+        char recentPath[MAX_PATH]; if (env.host.specialPath(CSIDL_RECENT, recentPath)) env.host.openFolder(recentPath); break;
+    }
+    case ID_FAVORITES: { char favorites[MAX_PATH]; if (env.host.specialPath(CSIDL_FAVORITES, favorites)) env.host.openFolder(favorites); break; }
     case ID_DOCUMENTS: case ID_DESKTOP:
         if (env.host.specialPath(id == ID_DOCUMENTS ? CSIDL_PERSONAL : CSIDL_DESKTOPDIRECTORY, path)) env.host.openFolder(path);
         break;
@@ -532,6 +557,10 @@ void EnvCommand(int id)
 static LRESULT CALLBACK DesktopProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
 {
     if (env.closing) return DefWindowProcA(window, message, wp, lp);
+    if (message == WM_PAINT) {
+        PAINTSTRUCT paint; HDC dc = BeginPaint(window, &paint); NativeViewPaintDesktop(env.desktopView, dc, window); EndPaint(window, &paint); return 0;
+    }
+    if (message == WM_ERASEBKGND) return TRUE;
     if (message == WM_CONTEXTMENU && env.desktopView) {
         POINT point; GetCursorPos(&point); DesktopBackgroundMenu(env.desktopView, point); return 0;
     }
@@ -542,7 +571,7 @@ static LRESULT CALLBACK DesktopProc(HWND window, UINT message, WPARAM wp, LPARAM
     if (message == WM_ACTIVATE && LOWORD(wp) != WA_INACTIVE) {
         SetWindowPos(window, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE); return 0;
     }
-    if (message == WM_SETFOCUS && env.desktopView) { SetFocus(NativeViewWindow(env.desktopView)); return 0; }
+    if (message == WM_SETFOCUS && env.desktopView && env.options.desktopIcons) { SetFocus(NativeViewWindow(env.desktopView)); return 0; }
     return DefWindowProcA(window, message, wp, lp);
 }
 static LRESULT CALLBACK BridgeProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
@@ -699,6 +728,10 @@ HWND EnvironmentCreate(const EnvironmentHost *callbacks)
         MessageBoxA(env.bar, "The installed Shell32 could not create its desktop view.\r\nExplorer95 will exit without changing the shell.",
             "Explorer95", MB_OK | MB_ICONERROR); EnvironmentShutdown(); return NULL;
     }
+    {
+        char configured[8]; GetPrivateProfileStringA("Desktop", "AutoArrange", "", configured, sizeof(configured), env.ini);
+        if (!configured[0]) { HWND list = NativeViewList(env.desktopView); env.options.autoArrange = list && (GetWindowLongA(list, GWL_STYLE) & LVS_AUTOARRANGE); }
+    }
     if (env.primary) {
         if (EnvRegister("Shell_TrayWnd", BridgeProc, NULL, 0))
             bridge = CreateWindowExA(WS_EX_TOOLWINDOW, "Shell_TrayWnd", "Explorer95 Tray", WS_POPUP,
@@ -720,7 +753,7 @@ BOOL EnvironmentTranslate(MSG *message)
     if ((message->message == WM_LBUTTONDOWN || message->message == WM_RBUTTONDOWN || message->message == WM_MBUTTONDOWN) &&
         IsWindowVisible(env.start) && message->hwnd != env.start && message->hwnd != env.startButton &&
         !IsChild(env.start, message->hwnd)) StartHide();
-    return StartTranslate(message) || StartSettingsTranslate(message) || PropertiesTranslate(message);
+    return StartTranslate(message) || PropertiesTranslate(message);
 }
 void EnvironmentShutdown(void)
 {
@@ -743,7 +776,6 @@ void EnvironmentShutdown(void)
     if (env.desktop) DestroyWindow(env.desktop);
     SetPropA(env.bar, "Explorer95.ShutdownStage", (HANDLE)5);
     if (env.properties) DestroyWindow(env.properties);
-    if (env.startSettings) DestroyWindow(env.startSettings);
     if (bridge) DestroyWindow(bridge);
     SetPropA(env.bar, "Explorer95.ShutdownStage", (HANDLE)6);
     if (env.appbar) {
