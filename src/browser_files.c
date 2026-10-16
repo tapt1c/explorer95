@@ -310,12 +310,14 @@ static IContextMenu *SelectionContext(Browser *browser);
 static void Properties(Browser *browser)
 {
     char *paths; SHELLEXECUTEINFOA action;
-    if (ListView_GetSelectedCount(browser->files) > 1) {
+    if (ListView_GetSelectedCount(browser->files) > 0) {
         IContextMenu *context = SelectionContext(browser);
         if (context) {
             CMINVOKECOMMANDINFO invoke; HMENU menu = CreatePopupMenu();
             IContextMenu_QueryContextMenu(context, menu, 0, 1, 0x6fff, CMF_NORMAL);
             ZeroMemory(&invoke, sizeof(invoke)); invoke.cbSize = sizeof(invoke); invoke.hwnd = browser->window;
+            /* The native context verb works on stock Win95 and on shells that
+             * do not implement ShellExecuteEx's INVOKEIDLIST properties path. */
             invoke.lpVerb = "properties"; invoke.nShow = SW_SHOWNORMAL; IContextMenu_InvokeCommand(context, &invoke);
             DestroyMenu(menu); IContextMenu_Release(context);
         }
@@ -323,8 +325,8 @@ static void Properties(Browser *browser)
     }
     paths = SelectedPaths(browser);
     ZeroMemory(&action, sizeof(action)); action.cbSize = sizeof(action); action.hwnd = browser->window;
-    action.fMask = SEE_MASK_INVOKEIDLIST; action.lpVerb = "properties"; action.lpFile = paths ? paths : browser->path; action.nShow = SW_SHOWNORMAL;
-    if (!ShellExecuteExA(&action)) BrowserError(browser->window, "Cannot open the Windows properties dialog.", GetLastError());
+    action.fMask = SEE_MASK_INVOKEIDLIST | SEE_MASK_FLAG_NO_UI; action.lpVerb = "properties"; action.lpFile = paths ? paths : browser->path; action.nShow = SW_SHOWNORMAL;
+    if (!ShellExecuteExA(&action) && GetLastError() != ERROR_CANCELLED) BrowserError(browser->window, "Cannot open the Windows properties dialog.", GetLastError());
     EnvFree(paths);
 }
 static IContextMenu *SelectionContext(Browser *browser)

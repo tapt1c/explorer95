@@ -33,7 +33,7 @@ static BOOL CALLBACK ShutdownDialogText(HWND window, LPARAM unused)
 {
     char kind[40], text[512], message[560]; DWORD_PTR result; (void)unused;
     GetClassNameA(window, kind, sizeof(kind));
-    if (!lstrcmpA(kind, "Static") && SendMessageTimeoutA(window, WM_GETTEXT, sizeof(text), (LPARAM)text, SMTO_ABORTIFHUNG, 1000, &result) && text[0]) {
+    if (!lstrcmpiA(kind, "Static") && SendMessageTimeoutA(window, WM_GETTEXT, sizeof(text), (LPARAM)text, SMTO_ABORTIFHUNG, 1000, &result) && text[0]) {
         wsprintfA(message, "Shutdown: dialog text=%s\r\n", text); Log(message);
     }
     return TRUE;
@@ -353,8 +353,10 @@ static void BrowserTests(HWND browser, const char *fixture, const char *settings
     }
     SendMessageA(browser, WM_COMMAND, ID_VIEW_ICONS, 0); WaitSelection(list);
     PostMessageA(browser, WM_COMMAND, ID_FILE_PROPERTIES, 0); dialog = WaitFor("#32770", NULL);
-    Check(dialog != NULL, "Properties opens a native Windows property sheet"); SendMessageA(dialog, WM_CLOSE, 0, 0);
-    Sleep(100); SendMessageA(browser, WM_COMMAND, ID_RENAME, 0);
+    Check(dialog != NULL && FindWindowExA(dialog, NULL, WC_TABCONTROLA, NULL) != NULL, "Properties opens a native Windows property sheet with tabs"); SendMessageA(dialog, WM_CLOSE, 0, 0);
+    Sleep(100);
+    Check(FindWindowA("#32770", "Explorer95") == NULL, "closing native Properties does not leave an Explorer95 error dialog");
+    SendMessageA(browser, WM_COMMAND, ID_RENAME, 0);
     { HWND edit = (HWND)SendMessageA(list, LVM_GETEDITCONTROL, 0, 0);
       Check(edit != NULL, "Rename starts the native in-place filename editor");
       SetWindowTextA(edit, "renamed.txt"); PostMessageA(edit, WM_KEYDOWN, VK_RETURN, 0);
@@ -734,12 +736,20 @@ static void EnvironmentTests(HWND bar, HWND browser, HWND childWindow, HWND menu
     SendMessageA(bar, WM_COMMAND, 862, 0); GetWindowRect(bar, &rect);
     Check(rect.top <= 2 && rect.right - rect.left > 500, "locked taskbar rejects position changes");
     SendMessageA(properties, WM_COMMAND, IDCANCEL, 0);
+    PostMessageA(menu, WM_KEYDOWN, VK_ESCAPE, 0);
+    started = GetTickCount();
+    while (IsWindowVisible(menu) && GetTickCount() - started < 3000) Sleep(30);
+    Check(!IsWindowVisible(menu) && !IsWindow(properties), "auto-hide starts with Start and taskbar properties closed");
     SendMessageA(bar, WM_COMMAND, 602, 0);
     SetCursorPos(GetSystemMetrics(SM_CXSCREEN) / 2, GetSystemMetrics(SM_CYSCREEN) - 80);
-    Sleep(2200); GetWindowRect(bar, &rect);
+    started = GetTickCount();
+    do { Sleep(50); GetWindowRect(bar, &rect); }
+    while (rect.bottom - rect.top > 3 && GetTickCount() - started < 5000);
     Check(rect.bottom - rect.top <= 3, "auto-hide collapses the taskbar to an edge strip");
     SetCursorPos(GetSystemMetrics(SM_CXSCREEN) / 2, 0);
-    Sleep(800); GetWindowRect(bar, &rect);
+    started = GetTickCount();
+    do { Sleep(50); GetWindowRect(bar, &rect); }
+    while (rect.bottom - rect.top < 55 && GetTickCount() - started < 3000);
     Check(rect.bottom - rect.top >= 55, "moving to the edge reveals the taskbar");
     SendMessageA(bar, WM_COMMAND, 602, 0);
     PostMessageA(childWindow, WM_CLOSE, 0, 0);
