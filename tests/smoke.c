@@ -884,14 +884,29 @@ static BOOL WaitStartVisible(HWND menu, BOOL visible)
     } while (GetTickCount() - started < 3000);
     return FALSE;
 }
+static BOOL WaitWinInputReady(HWND fixture)
+{
+    DWORD started = GetTickCount(), settled = started;
+    /* X11 FocusIn may clear Wine's held-key state. Do not inject a press
+     * while foreground activation is still settling. Require released keys
+     * and stable ownership; never retry or suppress the held-key assertion. */
+    do {
+        PumpFor(20);
+        if (GetForegroundWindow() != fixture || GetFocus() != fixture ||
+            (GetAsyncKeyState(VK_LWIN) & 0x8000) || (GetAsyncKeyState(VK_RWIN) & 0x8000)) settled = GetTickCount();
+        else if (GetTickCount() - settled >= 200) return TRUE;
+    } while (GetTickCount() - started < 3000);
+    return FALSE;
+}
 static void WinKeyTests(HWND bar, HWND menu)
 {
     HWND fixture; int key;
     fixture = CreateWindowA("STATIC", "Win key input fixture", WS_OVERLAPPEDWINDOW | WS_VISIBLE,
         30, 30, 180, 100, NULL, NULL, GetModuleHandleA(NULL), NULL);
     Check(fixture != NULL && !IsWindowVisible(menu), "Win key tests start with an external foreground window and closed Start");
-    SetForegroundWindow(fixture); PumpFor(100);
     for (key = VK_LWIN; key <= VK_RWIN; ++key) {
+        SetForegroundWindow(fixture);
+        Check(WaitWinInputReady(fixture), "external input fixture owns stable focus before each Win press");
         WinKeyEvent(key, FALSE); PumpFor(90);
         Check(!IsWindowVisible(menu), "holding Win does not open Start before release");
         WinKeyEvent(key, TRUE); PumpFor(160);
@@ -901,13 +916,13 @@ static void WinKeyTests(HWND bar, HWND menu)
         WinKeyEvent(key, TRUE); PumpFor(160);
         Check(WaitStartVisible(menu, FALSE), "second Win press closes Start once, including repeated key-down");
     }
-    SetForegroundWindow(fixture); PumpFor(60);
+    SetForegroundWindow(fixture); Check(WaitWinInputReady(fixture), "Win+D starts after external fixture activation settles");
     WinKeyEvent(VK_LWIN, FALSE); PumpFor(60);
     keybd_event('D', 0, 0, 0); PumpFor(60); keybd_event('D', 0, KEYEVENTF_KEYUP, 0);
     WinKeyEvent(VK_LWIN, TRUE); PumpFor(160);
     Check(!IsWindowVisible(menu) && IsIconic(fixture), "Win+D shows desktop without also opening Start on Win release");
     SendMessageA(bar, WM_COMMAND, 609, 0); PumpFor(80);
-    SetForegroundWindow(fixture); PumpFor(60);
+    SetForegroundWindow(fixture); Check(WaitWinInputReady(fixture), "unregistered Win chord starts after external fixture activation settles");
     WinKeyEvent(VK_LWIN, FALSE); PumpFor(60);
     keybd_event('A', 0, 0, 0); keybd_event('A', 0, KEYEVENTF_KEYUP, 0); PumpFor(80);
     WinKeyEvent(VK_LWIN, TRUE); PumpFor(160);
