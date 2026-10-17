@@ -985,13 +985,18 @@ static BOOL PreviewStartMatches(HWND preview, HWND start, int x, int y)
         }
         if (!equal) PumpFor(20);
     } while (!equal && GetTickCount() - started < 1000);
+    if (!equal) {
+        char note[192];
+        wsprintfA(note, "Start preview mismatch: size=%dx%d sample=%d,%d pixel=%d,%d live=%08lx preview=%08lx\r\n",
+            rect.right, rect.bottom, x, y, px, py - 1, GetPixel(live, px, py - 1), GetPixel(sample, x + px, y + py - 1));
+        Log(note);
+    }
     ReleaseDC(start, live); ReleaseDC(preview, sample); return equal;
 }
 static void SettingsPaintingTests(HWND window, HWND bar)
 {
     HWND preview, cover; RECT rect; int i, barHeight;
-    BOOL large = SendDlgItemMessageA(window, 603, BM_GETCHECK, 0, 0) == BST_CHECKED &&
-        SendDlgItemMessageA(window, 607, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    BOOL large = SendDlgItemMessageA(window, 607, BM_GETCHECK, 0, 0) == BST_CHECKED;
     barHeight = large ? 40 : 28;
     Check(DialogBackground(window, 40, 256, FALSE), "Taskbar page erases behind transparent Win95 tabs and groupboxes");
     preview = GetDlgItem(window, 1018); GetClientRect(preview, &rect);
@@ -1231,6 +1236,51 @@ static void EnvironmentTests(HWND bar, HWND browser, HWND childWindow, HWND menu
     Check(!SendMessageA(bar, WM_COPYDATA, (WPARAM)childWindow, (LPARAM)&copy), "tray rejects an invalid signature");
     packet.signature = 0x34753423; copy.cbData = 8;
     Check(!SendMessageA(bar, WM_COPYDATA, (WPARAM)childWindow, (LPARAM)&copy), "tray rejects truncated notification data");
+    {
+        HWND second, task; RECT firstRect, secondRect, startRect, taskRect, clockRect;
+        int large, rows;
+        copy.cbData = offsetof(Packet, icon) + packet.icon.cbSize;
+        packet.operation = NIM_ADD; packet.icon.uID = 96;
+        Check(SendMessageA(bar, WM_COPYDATA, (WPARAM)childWindow, (LPARAM)&copy), "add a second notification for tall taskbar layout");
+        second = FindWindowExA(tray, NULL, "Explorer95.TrayIcon", NULL);
+        if (second == notification) second = FindWindowExA(tray, second, "Explorer95.TrayIcon", NULL);
+        SendMessageA(bar, WM_TIMER, 1, 0);
+        task = GetDlgItem(bar, 200);
+        Check(second && task, "appearance fixtures expose two notifications and a task button");
+        properties = OpenSettings(bar);
+        /* On a tall bar the dialog reaches Start's row. Keep its frame clear
+         * of Start before comparing pixels from the visible screen DC. */
+        GetWindowRect(GetDlgItem(bar, 100), &startRect); GetWindowRect(properties, &rect);
+        SetWindowPos(properties, NULL, startRect.right + 8, rect.top, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        for (large = 0; large < 2; ++large) for (rows = 1; rows <= 2; ++rows) {
+            SendDlgItemMessageA(properties, 607, BM_SETCHECK, large, 0);
+            SendDlgItemMessageA(properties, 621, CB_SETCURSEL, rows - 1, 0);
+            SendMessageA(properties, WM_COMMAND, MAKELONG(621, CBN_SELCHANGE), 0);
+            SendMessageA(properties, WM_COMMAND, 0x3021, 0); PumpFor(80);
+            GetWindowRect(GetDlgItem(bar, 100), &startRect); GetWindowRect(task, &taskRect);
+            Check(startRect.top == taskRect.top && startRect.bottom == taskRect.bottom,
+                "Start and first task row share height with small/large Quick Launch and one/two rows");
+            GetWindowRect(notification, &firstRect); GetWindowRect(second, &secondRect);
+            Check(firstRect.right - firstRect.left == 20 && firstRect.bottom - firstRect.top == 20 &&
+                secondRect.right - secondRect.left == 20 && secondRect.bottom - secondRect.top == 20,
+                "tray keeps original 20-pixel slots for its 16-pixel icons at every taskbar height");
+            Check(rows == 1 ? firstRect.top == secondRect.top && firstRect.right <= secondRect.left :
+                firstRect.left == secondRect.left && firstRect.bottom <= secondRect.top,
+                "tray uses one row on short bars and two non-overlapping rows on tall bars");
+            GetWindowRect(GetDlgItem(tray, 1), &clockRect);
+            Check(clockRect.right - clockRect.left == 58 && clockRect.bottom - clockRect.top == 20 &&
+                firstRect.right <= clockRect.left && secondRect.right <= clockRect.left,
+                "clock retains its 58 by 20 area beside notification columns");
+            SettingsPaintingTests(properties, bar);
+        }
+        SendDlgItemMessageA(properties, 607, BM_SETCHECK, BST_UNCHECKED, 0);
+        SendDlgItemMessageA(properties, 621, CB_SETCURSEL, 0, 0);
+        SendMessageA(properties, WM_COMMAND, 0x3021, 0);
+        SendMessageA(properties, WM_COMMAND, IDCANCEL, 0);
+        packet.operation = NIM_DELETE;
+        Check(SendMessageA(bar, WM_COPYDATA, (WPARAM)childWindow, (LPARAM)&copy), "remove extra notification layout fixture");
+        packet.icon.uID = 95;
+    }
     properties = OpenSettings(bar); SettingsPage(properties, 3, -1);
     Check(SendDlgItemMessageA(properties, 1014, LB_GETCOUNT, 0, 0) >= 1, "notification customization lists registered applications");
     SendDlgItemMessageA(properties, 1014, LB_SETCURSEL, 0, 0); SendMessageA(properties, WM_COMMAND, MAKELONG(1014, LBN_SELCHANGE), 0);
@@ -1282,6 +1332,22 @@ static void EnvironmentTests(HWND bar, HWND browser, HWND childWindow, HWND menu
         if (grouped) break;
     } while (GetTickCount() - started < 3000);
     Check(GetTickCount() - started < 3000, "taskbar groups windows belonging to the same process");
+    {
+        HWND computer;
+        SendMessageA(menu, WM_COMMAND, 300, 0); computer = WaitFor("Explorer95.Namespace", NULL);
+        started = GetTickCount();
+        do {
+            int id; BOOL found = FALSE;
+            PumpFor(100);
+            for (id = 200; id < 264; ++id) {
+                GetWindowTextA(GetDlgItem(bar, id), title, sizeof(title));
+                if (!lstrcmpA(title, "Windows Explorer (2)")) { found = TRUE; break; }
+            }
+            if (found) break;
+        } while (GetTickCount() - started < 3000);
+        Check(computer && GetTickCount() - started < 3000, "file and namespace windows group under Windows Explorer rather than a folder title");
+        SendMessageA(computer, WM_CLOSE, 0, 0);
+    }
     SendMessageA(bar, WM_COMMAND, 862, 0); GetWindowRect(bar, &rect);
     Check(rect.right >= GetSystemMetrics(SM_CXSCREEN) - 2 && rect.right - rect.left >= 140,
           "unlocked taskbar can dock to the right");

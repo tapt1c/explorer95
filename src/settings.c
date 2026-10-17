@@ -145,11 +145,14 @@ static void PreviewTaskbar(HDC dc, const RECT *bounds, BOOL sampleTasks)
     int startWidth, begin, end, i, count, taskWidth;
     BOOL quick = Checked(env.properties, ID_QUICK), large = Checked(env.properties, ID_LARGE);
     int iconSize = large ? 32 : 16, slot = large ? 36 : 22;
+    int rows = (int)SendDlgItemMessageA(env.properties, ID_ROWS, CB_GETCURSEL, 0, 0) + 1;
+    if (rows < 1) rows = 1;
+    int buttonHeight = EnvBarButtonHeight((large ? 40 : 28) * rows, rows);
     GetDlgItemTextA(env.properties, ID_STARTLABEL, label, sizeof(label));
     if (!label[0]) lstrcpyA(label, "Start");
     startWidth = EnvStartLabelWidth(label);
     FillRect(dc, bounds, (HBRUSH)(COLOR_BTNFACE + 1)); DrawEdge(dc, &part, EDGE_RAISED, BF_TOP);
-    SetRect(&part, bounds->left + 2, bounds->top + 3, bounds->left + 2 + startWidth, bounds->top + 25);
+    SetRect(&part, bounds->left + 2, bounds->top + 3, bounds->left + 2 + startWidth, bounds->top + 3 + buttonHeight);
     EnvPaintStartButton(dc, &part, label, FALSE, FALSE);
     begin = bounds->left + startWidth + 10; end = bounds->right - 8;
     if (quick) {
@@ -182,8 +185,8 @@ static void PreviewTaskbar(HDC dc, const RECT *bounds, BOOL sampleTasks)
     if (i >= 80 && i <= 300 && taskWidth > i) taskWidth = i;
     for (i = 0; i < count; ++i) {
         HICON icon = EnvSystemIcon(i ? 16 : 5);
-        SetRect(&part, begin + i * taskWidth, bounds->top + 3, begin + (i + 1) * taskWidth - 2, bounds->top + 25);
-        EnvPaintTaskButton(dc, &part, count == 1 ? "Explorer95 (2)" : i ? "My Computer" : "Explorer95", icon, i == 0, FALSE);
+        SetRect(&part, begin + i * taskWidth, bounds->top + 3, begin + (i + 1) * taskWidth - 2, bounds->top + 3 + buttonHeight);
+        EnvPaintTaskButton(dc, &part, count == 1 ? "Windows Explorer (2)" : i ? "My Computer" : "Explorer95", icon, i == 0, FALSE);
         if (icon) DestroyIcon(icon);
     }
 }
@@ -194,7 +197,7 @@ static void Preview(const DRAWITEMSTRUCT *item)
     FillRect(dc, &rect, (HBRUSH)(COLOR_BTNFACE + 1)); DrawEdge(dc, &rect, EDGE_SUNKEN, BF_RECT);
     SelectObject(dc, env.host.font); SetBkMode(dc, TRANSPARENT); SetTextColor(dc, GetSysColor(COLOR_BTNTEXT));
     if (item->CtlID == ID_PREVIEW_TASKBAR) {
-        int barHeight = Checked(env.properties, ID_QUICK) && Checked(env.properties, ID_LARGE) ? 40 : 28;
+        int barHeight = Checked(env.properties, ID_LARGE) ? 40 : 28;
         SetRect(&part, 2, (height - barHeight) / 2, width - 2, (height + barHeight) / 2);
         PreviewTaskbar(dc, &part, TRUE);
     } else if (item->CtlID == ID_PREVIEW_START) {
@@ -217,7 +220,7 @@ static void Preview(const DRAWITEMSTRUCT *item)
         if (Checked(env.properties, ID_DESKTOPICONS)) {
             HICON icon = EnvSystemIcon(16); DrawIconEx(dc, 16, 15, icon, 32, 32, 0, NULL, DI_NORMAL); if (icon) DestroyIcon(icon);
         }
-        int barHeight = Checked(env.properties, ID_QUICK) && Checked(env.properties, ID_LARGE) ? 40 : 28;
+        int barHeight = Checked(env.properties, ID_LARGE) ? 40 : 28;
         SetRect(&part, 4, height - 4 - barHeight, width - 4, height - 4); PreviewTaskbar(dc, &part, FALSE);
     }
     PaintBufferEnd(&previewBuffer, item->hDC, &item->rcItem);

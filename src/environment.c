@@ -9,7 +9,7 @@ static TaskGroup tasks[TASK_LIMIT];
 static HWND taskWindows[TASK_LIMIT], savedWindows[TASK_LIMIT], lastActive, bridge, quickTip, desktopButton;
 static HWND quickGrip, quickMore, quickHot;
 static QuickItem quick[24];
-static HICON desktopIcon;
+static HICON desktopIcon, explorerIcon;
 static int quickShown, quickExtent;
 static BOOL quickResizing;
 static int quickResizeSaved, quickResizeStart, quickResizeExtent;
@@ -280,9 +280,12 @@ static void UpdateTasks(void)
         EnvLayoutBar();
     }
     for (i = 0; i < taskCount; ++i) {
-        BOOL selected = FALSE; HICON icon = WindowIcon(tasks[i].windows[0]);
+        BOOL selected = FALSE;
+        BOOL explorerGroup = tasks[i].count > 1 && tasks[i].process == GetCurrentProcessId();
+        HICON icon = explorerGroup ? explorerIcon : WindowIcon(tasks[i].windows[0]);
         if (icon != tasks[i].icon) { tasks[i].icon = icon; InvalidateRect(tasks[i].button, NULL, FALSE); }
-        GetWindowTextA(tasks[i].windows[0], text, sizeof(text));
+        if (explorerGroup) lstrcpyA(text, "Windows Explorer");
+        else GetWindowTextA(tasks[i].windows[0], text, sizeof(text));
         if (tasks[i].count > 1) wsprintfA(label, "%s (%d)", text, tasks[i].count); else lstrcpyA(label, text);
         { char previous[160]; GetWindowTextA(tasks[i].button, previous, sizeof(previous));
           if (lstrcmpA(previous, label)) SetWindowTextA(tasks[i].button, label); }
@@ -526,7 +529,6 @@ void EnvLayoutBar(void)
     if (!env.bar || !env.tray) return;
     GetClientRect(env.bar, &rect); width = rect.right; height = rect.bottom;
     if (width < 10 || height < 10) return;
-    trayWidth = TrayWidth();
     if (vertical) {
         changed |= EnvMoveControl(env.startButton, 3, 3, width - 6, 26);
         end = height - 36;
@@ -535,12 +537,14 @@ void EnvLayoutBar(void)
         taskHeight = taskCount ? (end - begin) / taskCount : 26; taskHeight = Clamp(taskHeight, 8, 26);
         for (i = 0; i < taskCount; ++i) changed |= EnvMoveControl(tasks[i].button, 3, begin + i * taskHeight, width - 6, taskHeight - 2);
     } else {
-        changed |= EnvMoveControl(env.startButton, 2, 3, EnvStartButtonWidth(), 22); begin = EnvStartButtonWidth() + 10;
+        rows = env.options.rows;
+        changed |= EnvMoveControl(env.startButton, 2, 3, EnvStartButtonWidth(), EnvBarButtonHeight(height, rows)); begin = EnvStartButtonWidth() + 10;
+        trayWidth = TrayWidth(height - 8);
         if (trayWidth > width / 2) trayWidth = width / 2;
         end = width - trayWidth - 8;
         begin = LayoutQuick(begin, end, height, FALSE);
         changed |= EnvMoveControl(env.tray, width - trayWidth - 3, 3, trayWidth, height - 6); TrayLayout(trayWidth - 2, height - 8);
-        rows = env.options.rows; columns = taskCount ? (taskCount + rows - 1) / rows : 1;
+        columns = taskCount ? (taskCount + rows - 1) / rows : 1;
         taskWidth = (end - begin) / columns; taskWidth = Clamp(taskWidth, 4, env.options.taskWidth);
         taskHeight = (height - 4) / rows;
         for (i = 0; i < taskCount; ++i)
@@ -549,6 +553,7 @@ void EnvLayoutBar(void)
     if (changed) InvalidateRect(env.bar, NULL, FALSE);
 }
 
+int EnvBarButtonHeight(int height, int rows) { return (height - 4) / rows - 2; }
 int EnvBarThickness(const ShellOptions *options)
 {
     if (options->edge == ABE_LEFT || options->edge == ABE_RIGHT) return 140 + (options->rows - 1) * 32;
@@ -1011,6 +1016,7 @@ HWND EnvironmentCreate(const EnvironmentHost *callbacks)
     quickMore = QuickButton(">>", ID_QUICKMORE);
     quickGrip = EnvControl(env.bar, "Explorer95.QuickGrip", "", 0, ID_QUICKGRIP);
     desktopIcon = EnvSystemIcon(35);
+    explorerIcon = EnvSystemIcon(4);
     quickTip = CreateWindowExA(WS_EX_TOPMOST, TOOLTIPS_CLASSA, NULL, WS_POPUP | TTS_ALWAYSTIP,
         CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, env.bar, NULL, env.host.instance, NULL);
     QuickTip(desktopButton, "Show / Restore Desktop", FALSE);
@@ -1085,6 +1091,7 @@ void EnvironmentShutdown(void)
     for (i = 0; i < quickCount; ++i) if (quick[i].icon) DestroyIcon(quick[i].icon);
     if (quickTip) DestroyWindow(quickTip);
     if (desktopIcon) DestroyIcon(desktopIcon);
+    if (explorerIcon) DestroyIcon(explorerIcon);
     SetPropA(env.bar, "Explorer95.ShutdownStage", (HANDLE)7);
     if (IsWindow(env.bar)) DestroyWindow(env.bar);
     env.bar = NULL;

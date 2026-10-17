@@ -137,26 +137,43 @@ static BOOL HasHidden(void)
     for (i = 0; i < ICON_LIMIT; ++i) if (icons[i].owner) { if (!Visible(&icons[i]) || ++visible > 7) return TRUE; }
     return env.options.hideInactive;
 }
-int TrayWidth(void)
+static int IconRows(int height) { return height >= 40 ? 2 : 1; }
+int TrayWidth(int height)
 {
-    int i, count = 0;
+    int i, count = 0, rows = IconRows(height);
     for (i = 0; i < ICON_LIMIT; ++i) if (Visible(&icons[i])) ++count;
     if (count > 7) count = 7;
-    return count * 20 + (env.options.clock ? 58 : 0) + (HasHidden() ? 20 : 0) + 10;
+    return ((count + rows - 1) / rows) * 20 + (env.options.clock ? 58 : 0) + (HasHidden() ? 20 : 0) + 10;
 }
 void TrayLayout(int width, int height)
 {
-    int i, x = 4, y = (height - 20) / 2, shown = 0;
+    int i, count = 0, rows = IconRows(height), columns, capacity, shown = 0;
+    int y = (height - 20) / 2, iconY;
     int clockWidth = env.options.clock ? 58 : 0;
     BOOL changed = FALSE, overflow = HasHidden();
-    for (i = 0; i < ICON_LIMIT; ++i) {
-        BOOL show = Visible(&icons[i]);
-        icons[i].eligible = show;
-        if (shown >= 7 || x + 20 + clockWidth + (overflow ? 20 : 0) + 4 > width) { if (show) overflow = TRUE; show = FALSE; }
-        if (icons[i].button) changed |= EnvShowControl(icons[i].button, show);
-        if (show) { changed |= EnvMoveControl(icons[i].button, x, y, 20, 20); x += 20; ++shown; }
+    for (i = 0; i < ICON_LIMIT; ++i) if (Visible(&icons[i])) ++count;
+    columns = (width - clockWidth - (overflow ? 20 : 0) - 8) / 20;
+    if (count > columns * rows) {
+        overflow = TRUE;
+        columns = (width - clockWidth - 20 - 8) / 20;
     }
-    changed |= EnvShowControl(moreButton, overflow); changed |= EnvMoveControl(moreButton, x, y, 18, 20);
+    if (columns < 0) columns = 0;
+    capacity = columns * rows;
+    if (capacity > 7) capacity = 7;
+    if (count < capacity) capacity = count;
+    if (capacity < rows) rows = capacity ? capacity : 1;
+    iconY = (height - rows * 20) / 2;
+    for (i = 0; i < ICON_LIMIT; ++i) {
+        BOOL show = Visible(&icons[i]) && shown < capacity;
+        icons[i].eligible = Visible(&icons[i]);
+        if (icons[i].button) changed |= EnvShowControl(icons[i].button, show);
+        if (show) {
+            changed |= EnvMoveControl(icons[i].button, 4 + (shown / rows) * 20, iconY + (shown % rows) * 20, 20, 20);
+            ++shown;
+        }
+    }
+    changed |= EnvShowControl(moreButton, overflow);
+    changed |= EnvMoveControl(moreButton, 4 + ((shown + rows - 1) / rows) * 20, y, 18, 20);
     changed |= EnvShowControl(env.clock, env.options.clock); changed |= EnvMoveControl(env.clock, width - clockWidth - 2, y, clockWidth, 20);
     if (changed) InvalidateRect(env.tray, NULL, TRUE);
 }

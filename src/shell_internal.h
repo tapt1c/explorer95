@@ -119,6 +119,7 @@ void EnvSaveOptions(void);
 void EnvApplyOptions(void);
 void EnvPositionBar(void);
 int EnvBarThickness(const ShellOptions *options);
+int EnvBarButtonHeight(int height, int rows);
 void EnvLayoutBar(void);
 BOOL EnvMoveControl(HWND window, int x, int y, int width, int height);
 BOOL EnvShowControl(HWND window, BOOL visible);
@@ -154,7 +155,7 @@ void EnvPaintQuickButton(HDC dc, const RECT *bounds, HICON icon, int size, BOOL 
 void EnvPaintQuickGrip(HDC dc, const RECT *bounds, BOOL vertical, BOOL locked);
 
 BOOL TrayCreate(void);
-int TrayWidth(void);
+int TrayWidth(int height);
 void TrayLayout(int width, int height);
 void TrayPrune(void);
 LRESULT TrayCopyData(const COPYDATASTRUCT *copy);
