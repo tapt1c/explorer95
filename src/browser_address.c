@@ -6,7 +6,7 @@
 #define ADDRESS_LIMIT 192
 typedef struct AddressRow { BrowserPlace target; int image, indent; } AddressRow;
 struct BrowserAddress {
-    HWND icon;
+    HWND edit, icon;
     WNDPROC original;
     HICON images[10], currentIcon;
     AddressRow *rows[ADDRESS_LIMIT];
@@ -112,8 +112,8 @@ static LRESULT CALLBACK AddressProc(HWND window, UINT message, WPARAM wp, LPARAM
 {
     Browser *browser = (Browser *)GetPropA(window, property);
     if (!browser || !browser->location) return DefWindowProcA(window, message, wp, lp);
-    /* The icon is a child of ComboBox, so it stays above the edit field even
-     * when the native dropdown raises its parent. Forward only its drawing. */
+    /* The native edit owns the icon, so ComboBox may move or raise the edit
+     * without covering a sibling icon. Forward only the child's drawing. */
     if (message == WM_DRAWITEM && ((DRAWITEMSTRUCT *)lp)->CtlID == ID_ADDRESS_ICON)
         return SendMessageA(browser->window, message, wp, lp);
     return CallWindowProcA(browser->location->original, window, message, wp, lp);
@@ -121,41 +121,38 @@ static LRESULT CALLBACK AddressProc(HWND window, UINT message, WPARAM wp, LPARAM
 BOOL BrowserAddressCreate(Browser *browser)
 {
     static const int resources[] = {4, 5, 16, 18, 32, 20, 9, 7, 35, 22};
-    BrowserAddress *address = EnvAlloc(sizeof(*address)); HWND edit; int i;
+    BrowserAddress *address = EnvAlloc(sizeof(*address)); int i;
     if (!address) return FALSE;
     browser->location = address; address->current = -1;
     for (i = 0; i < 10; ++i) address->images[i] = EnvSystemIcon(resources[i]);
-    if (!SetPropA(browser->address, property, browser)) return FALSE;
-    address->original = (WNDPROC)SetWindowLongPtrA(browser->address, GWLP_WNDPROC, (LONG_PTR)AddressProc);
-    if (!address->original) { RemovePropA(browser->address, property); return FALSE; }
-    address->icon = BrowserControl(browser->address, "STATIC", "", SS_OWNERDRAW, ID_ADDRESS_ICON);
-    edit = FindWindowExA(browser->address, NULL, "EDIT", NULL);
-    if (edit) {
-        SetWindowLongA(edit, GWL_STYLE, GetWindowLongA(edit, GWL_STYLE) | WS_CLIPSIBLINGS);
-        SendMessageA(edit, EM_SETMARGINS, EC_LEFTMARGIN, MAKELPARAM(22, 0));
-    }
+    address->edit = FindWindowExA(browser->address, NULL, "EDIT", NULL);
+    if (!address->edit || !SetPropA(address->edit, property, browser)) return FALSE;
+    address->original = (WNDPROC)SetWindowLongPtrA(address->edit, GWLP_WNDPROC, (LONG_PTR)AddressProc);
+    if (!address->original) { RemovePropA(address->edit, property); return FALSE; }
+    SetWindowLongA(address->edit, GWL_STYLE, GetWindowLongA(address->edit, GWL_STYLE) | WS_CLIPCHILDREN);
+    address->icon = BrowserControl(address->edit, "STATIC", "", SS_OWNERDRAW, ID_ADDRESS_ICON);
+    SendMessageA(address->edit, EM_SETMARGINS, EC_LEFTMARGIN, MAKELPARAM(22, 0));
     SendMessageA(browser->address, CB_SETITEMHEIGHT, 0, BrowserAddressHeight(browser));
     SendMessageA(browser->address, CB_SETITEMHEIGHT, (WPARAM)-1, BrowserAddressHeight(browser));
     return address->icon != NULL;
 }
 void BrowserAddressLayout(Browser *browser)
 {
-    BrowserAddress *address = browser->location; RECT rect; HWND edit; int y;
+    BrowserAddress *address = browser->location; RECT rect; int y;
     if (!address) return;
     EnvShowControl(address->icon, browser->options.address);
     if (!browser->options.address) return;
-    GetClientRect(browser->address, &rect);
-    y = (rect.bottom - 16) / 2; edit = FindWindowExA(browser->address, NULL, "EDIT", NULL);
-    if (edit) {
-        RECT format = {0}; TEXTMETRICA metrics; POINT origin = {0,0}; HDC dc = GetDC(edit);
-        HGDIOBJ old = dc ? SelectObject(dc, (HFONT)SendMessageA(edit, WM_GETFONT, 0, 0)) : NULL;
-        SendMessageA(edit, EM_GETRECT, 0, (LPARAM)&format);
-        ClientToScreen(edit, &origin); ScreenToClient(browser->address, &origin);
-        if (dc && GetTextMetricsA(dc, &metrics)) y = origin.y + format.top + (metrics.tmHeight - 16) / 2;
-        if (dc) { SelectObject(dc, old); ReleaseDC(edit, dc); }
+    GetClientRect(address->edit, &rect);
+    y = (rect.bottom - 16) / 2;
+    {
+        RECT format = {0}; TEXTMETRICA metrics; HDC dc = GetDC(address->edit);
+        HGDIOBJ old = dc ? SelectObject(dc, (HFONT)SendMessageA(address->edit, WM_GETFONT, 0, 0)) : NULL;
+        SendMessageA(address->edit, EM_GETRECT, 0, (LPARAM)&format);
+        if (dc && GetTextMetricsA(dc, &metrics)) y = format.top + (metrics.tmHeight - 16) / 2;
+        if (dc) { SelectObject(dc, old); ReleaseDC(address->edit, dc); }
     }
-    if (y < 2) y = 2;
-    EnvMoveControl(address->icon, 3, y, 18, 16);
+    if (y < 0) y = 0;
+    EnvMoveControl(address->icon, 0, y, 18, 16);
 }
 void BrowserAddressUpdate(Browser *browser)
 {
@@ -229,9 +226,9 @@ void BrowserAddressDestroy(Browser *browser)
 {
     BrowserAddress *address = browser->location; int i;
     if (!address) return;
-    if (address->original && IsWindow(browser->address)) {
-        SetWindowLongPtrA(browser->address, GWLP_WNDPROC, (LONG_PTR)address->original);
-        RemovePropA(browser->address, property);
+    if (address->original && IsWindow(address->edit)) {
+        SetWindowLongPtrA(address->edit, GWLP_WNDPROC, (LONG_PTR)address->original);
+        RemovePropA(address->edit, property);
     }
     Clear(browser); EnvFree(address->destination.pidl);
     for (i = 0; i < 10; ++i) if (address->images[i]) DestroyIcon(address->images[i]);

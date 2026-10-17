@@ -246,7 +246,10 @@ static void Reflow(Browser *browser)
     scroll.nMax = s->contentHeight - 1; scroll.nPage = height; scroll.nPos = s->scroll;
     SetScrollInfo(s->window, SB_VERT, &scroll, TRUE);
     EnvMoveControl(s->content, 0, -s->scroll, width, s->contentHeight);
-    InvalidateRect(s->content, NULL, FALSE); s->layouting = FALSE;
+    /* Moving the content viewport can discard the pixels of unchanged row
+     * HWNDs too. Repaint the hierarchy once, after every row has its final rect. */
+    RedrawWindow(s->window, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+    s->layouting = FALSE;
 }
 void BrowserSidebarUpdate(Browser *browser)
 {

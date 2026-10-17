@@ -618,7 +618,8 @@ void NativeViewResize(NativeView *view, const RECT *rect)
     if (view->sized && origin.x == rect->left && origin.y == rect->top && previous.right - previous.left == rect->right - rect->left &&
         previous.bottom - previous.top == rect->bottom - rect->top) return;
     view->sized = TRUE;
-    MoveWindow(view->window, rect->left, rect->top, rect->right - rect->left, rect->bottom - rect->top, TRUE);
+    SetWindowPos(view->window, NULL, rect->left, rect->top, rect->right - rect->left, rect->bottom - rect->top,
+        SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
     /* A parent erase must not leave the Win95 view waiting for selection to
      * invalidate its icons. Paint the whole view hierarchy after sizing. */
     RedrawWindow(view->window, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);

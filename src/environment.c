@@ -78,8 +78,10 @@ HWND EnvControl(HWND parent, const char *kind, const char *text, DWORD style, in
         parent, (HMENU)(INT_PTR)id, env.host.instance, NULL);
     SendMessageA(child, WM_SETFONT, (WPARAM)env.host.font, TRUE); return child;
 }
-/* MoveWindow(TRUE) repaints synchronously even for identical rectangles on
- * old USER implementations. Avoid touching controls whose layout is unchanged. */
+/* Preserve unchanged controls. For real moves, discard the old screen bits:
+ * sequential layout can already have put a sibling over the source rectangle.
+ * Let the message loop paint after layout, rather than MoveWindow(TRUE)'s
+ * synchronous intermediate frames on old USER implementations. */
 BOOL EnvMoveControl(HWND window, int x, int y, int width, int height)
 {
     RECT old; POINT origin;
@@ -87,7 +89,8 @@ BOOL EnvMoveControl(HWND window, int x, int y, int width, int height)
     GetWindowRect(window, &old); origin.x = old.left; origin.y = old.top;
     ScreenToClient(GetParent(window), &origin);
     if (origin.x == x && origin.y == y && old.right - old.left == width && old.bottom - old.top == height) return FALSE;
-    return MoveWindow(window, x, y, width, height, TRUE);
+    return SetWindowPos(window, NULL, x, y, width, height,
+        SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
 }
 BOOL EnvShowControl(HWND window, BOOL visible)
 {

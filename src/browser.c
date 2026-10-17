@@ -321,6 +321,10 @@ BOOL BrowserNavigate(Browser *browser, const char *requested, LPCITEMIDLIST pidl
     browser->watch = watch;
     browser->native = native;
     browser->layoutValid = FALSE;
+    /* Keep the old file pixels until the replacement rows are complete.
+     * Showing an empty ListView first produces a white frame on slow Win95. */
+    if (native) ShowWindow(browser->files, SW_HIDE);
+    else SendMessageA(browser->files, WM_SETREDRAW, FALSE, 0);
     ListView_DeleteAllItems(browser->files); BrowserFilesFree(browser->entries); browser->entries = entries;
     EnvFree(browser->pidl); browser->pidl = absolute; lstrcpyA(browser->path, path);
     browser->recycleBin = browser->computerFolder = browser->concealed = FALSE;
@@ -333,7 +337,6 @@ BOOL BrowserNavigate(Browser *browser, const char *requested, LPCITEMIDLIST pidl
             browser->computerFolder = BrowserSamePidl(absolute, bin); CoTaskMemFree(bin);
         }
     }
-    ShowWindow(browser->files, native ? SW_HIDE : SW_SHOW);
     if (native) {
         SHFILEINFOA info; ZeroMemory(&info, sizeof(info));
         SHGetFileInfoA((LPCSTR)absolute, 0, &info, sizeof(info), SHGFI_PIDL | SHGFI_DISPLAYNAME);
@@ -622,7 +625,7 @@ static LRESULT CALLBACK BrowserProc(HWND window, UINT message, WPARAM wp, LPARAM
         PaintColorsChanged(&browser->colors);
         SetWindowLongPtrA(window, GWLP_USERDATA, (LONG_PTR)browser);
         browser->addressLabel = BrowserControl(window, "STATIC", "Address", 0, ID_ADDRESS_LABEL);
-        browser->address = BrowserControl(window, "COMBOBOX", "", WS_TABSTOP | WS_VSCROLL | WS_CLIPSIBLINGS | CBS_DROPDOWN | CBS_AUTOHSCROLL | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS, ID_ADDRESS);
+        browser->address = BrowserControl(window, "COMBOBOX", "", WS_TABSTOP | WS_VSCROLL | WS_CLIPSIBLINGS | WS_CLIPCHILDREN | CBS_DROPDOWN | CBS_AUTOHSCROLL | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS, ID_ADDRESS);
         SendMessageA(browser->address, CB_LIMITTEXT, MAX_PATH - 1, 0);
         if (!browser->address || !BrowserAddressCreate(browser)) return -1;
         browser->go = BrowserControl(window, "BUTTON", "Go", WS_TABSTOP | BS_DEFPUSHBUTTON, ID_GO);

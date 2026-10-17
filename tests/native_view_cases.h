@@ -35,6 +35,16 @@ static LRESULT CALLBACK NativeProbeProc(HWND window, UINT message, WPARAM wp, LP
 }
 static BOOL NativeProbeNavigate(HWND window, LPCITEMIDLIST pidl)
 { (void)window; (void)pidl; Check(FALSE, "native message probe must not navigate"); return FALSE; }
+static WNDPROC nativePositionOriginal;
+static UINT nativePositionFlags;
+static int nativePositionCalls;
+static LRESULT CALLBACK NativePositionProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
+{
+    if (message == WM_WINDOWPOSCHANGING) {
+        ++nativePositionCalls; nativePositionFlags = ((WINDOWPOS *)lp)->flags;
+    }
+    return CallWindowProcA(nativePositionOriginal, window, message, wp, lp);
+}
 
 static void NativeViewMessageTests(void)
 {
@@ -56,5 +66,14 @@ static void NativeViewMessageTests(void)
     SendMessageA(list, LVM_GETEDITCONTROL, 0, 0);
     Check(nativeProbeQueries == 1 && !nativeProbeReentered, "a label-edit query reaches Shell32 exactly once without querying itself");
     SetWindowLongPtrA(list, GWLP_WNDPROC, (LONG_PTR)nativeProbeOriginal);
+    nativePositionOriginal = (WNDPROC)SetWindowLongPtrA(NativeViewWindow(view), GWLP_WNDPROC, (LONG_PTR)NativePositionProc);
+    nativePositionCalls = 0; nativePositionFlags = 0; rect.left = 20; rect.right = 360;
+    NativeViewResize(view, &rect);
+    Check(nativePositionCalls == 1 && (nativePositionFlags & (SWP_NOCOPYBITS | SWP_NOZORDER | SWP_NOACTIVATE)) ==
+        (SWP_NOCOPYBITS | SWP_NOZORDER | SWP_NOACTIVATE),
+        "native resize discards old screen bits without changing activation or sibling order");
+    NativeViewResize(view, &rect);
+    Check(nativePositionCalls == 1, "unchanged native geometry does not move or invalidate the view again");
+    SetWindowLongPtrA(NativeViewWindow(view), GWLP_WNDPROC, (LONG_PTR)nativePositionOriginal);
     NativeViewSetNavigator(view, NULL); NativeViewDestroy(view); DestroyWindow(parent); OleUninitialize();
 }

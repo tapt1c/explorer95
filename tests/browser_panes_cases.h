@@ -99,9 +99,57 @@ static BOOL AddressIconPainted(HWND icon)
     }
     ReleaseDC(NULL, dc); return pixels > 2;
 }
+static DWORD ControlPixels(HWND window)
+{
+    RECT rect; POINT origin = {0,0}; HDC dc = GetDC(NULL); DWORD hash = 2166136261u; int x, y;
+    GetClientRect(window, &rect); ClientToScreen(window, &origin);
+    /* Task headers grow when their scrollbar disappears. Compare the stable
+     * text area, excluding the moving collapse arrow at the right edge. */
+    if (rect.right > 128) rect.right = 128;
+    for (y = 2; y < rect.bottom - 2; ++y) for (x = 2; x < rect.right - 2; ++x)
+        hash = (hash ^ GetPixel(dc, origin.x + x, origin.y + y)) * 16777619u;
+    ReleaseDC(NULL, dc); return hash;
+}
+static void BrowserRepaintTests(HWND browser, HWND sidebar)
+{
+    HWND address = GetDlgItem(browser, ID_ADDRESS), edit = FindWindowExA(address, NULL, "EDIT", NULL);
+    HWND icon = GetDlgItem(edit, 475), go = GetDlgItem(browser, ID_GO);
+    HWND header = PaneText(sidebar, "System Tasks"), list; RECT original; DWORD buttonPixels, headerPixels; int mode;
+    GetWindowRect(browser, &original); ShowWindow(browser, SW_RESTORE);
+    MoveWindow(browser, 16, 16, GetSystemMetrics(SM_CXSCREEN) - 32, GetSystemMetrics(SM_CYSCREEN) - 80, TRUE);
+    SetFocus(browser); SetCursorPos(GetSystemMetrics(SM_CXSCREEN) - 2, 2); PumpFor(120);
+    buttonPixels = ControlPixels(go); headerPixels = ControlPixels(header);
+    /* Poison otherwise valid child pixels. A real resize must reconstruct
+     * them; copying old screen bits can instead carry a sibling's arrow/face. */
+    {
+        RECT patch = {5,5,11,11}; HBRUSH marker = CreateSolidBrush(RGB(251,3,239)); HDC dc = GetDC(go);
+        FillRect(dc, &patch, marker); ReleaseDC(go, dc); DeleteObject(marker);
+    }
+    ShowWindow(browser, SW_MAXIMIZE); PumpFor(160);
+    Check(ControlPixels(go) == buttonPixels, "maximizing reconstructs Go instead of copying the address dropdown arrow or stale pixels");
+    Check(ControlPixels(header) == headerPixels && AddressIconPainted(icon),
+        "maximizing preserves task header contents and the current address icon");
+    /* Repainting only native parents must respect the icon's child surface. */
+    RedrawWindow(address, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_NOCHILDREN);
+    RedrawWindow(edit, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_NOCHILDREN);
+    Check(AddressIconPainted(icon), "native ComboBox parent painting cannot erase its folder icon");
+    for (mode = 0; mode < 4; ++mode) {
+        SendMessageA(browser, WM_COMMAND, ID_VIEW_ICONS + mode, 0); PumpFor(160);
+        list = FindWindowExA(FindWindowExA(browser, NULL, "SHELLDLL_DefView", NULL), NULL, WC_LISTVIEWA, NULL);
+        Check(list && PaintedSamples(list) >= 8 && ControlPixels(go) == buttonPixels &&
+            ControlPixels(PaneText(sidebar, "System Tasks")) == headerPixels && AddressIconPainted(icon),
+            "native view mode changes leave icons, task headers, Go and the address icon fully painted");
+    }
+    SendMessageA(browser, WM_COMMAND, ID_VIEW_ICONS, 0); PumpFor(100);
+    SaveScreen("build\\browser-repaint-maximized.bmp");
+    ShowWindow(browser, SW_RESTORE); PumpFor(160);
+    Check(ControlPixels(go) == buttonPixels && AddressIconPainted(icon), "restoring the browser repaints Go and the address icon");
+    MoveWindow(browser, original.left, original.top, original.right - original.left, original.bottom - original.top, TRUE);
+    ShowWindow(browser, SW_MAXIMIZE); PumpFor(100);
+}
 static void BrowserAddressTests(HWND browser, const char *fixture)
 {
-    HWND address = GetDlgItem(browser, ID_ADDRESS), icon = GetDlgItem(address, 475), edit;
+    HWND address = GetDlgItem(browser, ID_ADDRESS), edit = FindWindowExA(address, NULL, "EDIT", NULL), icon = GetDlgItem(edit, 475);
     char path[MAX_PATH], text[MAX_PATH]; const char *name = fixture; int i, count = PaneWindowCount(); DWORD started;
     RECT field, glyph;
     wsprintfA(path, "%s\\sub", fixture); Navigate(browser, path); PumpFor(80);
@@ -184,6 +232,7 @@ static void BrowserPaneTests(HWND browser, const char *fixture, const char *sett
     SendMessageA(browser, WM_COMMAND, ID_COMPUTER, 0); PumpFor(100);
     Check(PaneText(sidebar, "System Tasks") && PaneText(sidebar, "View system information") && PaneText(sidebar, "Change a setting"),
         "My Computer exposes system tasks and other places around the native shell view");
+    BrowserRepaintTests(browser, sidebar);
     {
         HWND header = PaneText(sidebar, "System Tasks"); HDC dc = GetDC(header); COLORREF pixel = GetPixel(dc, 2, 2);
         ReleaseDC(header, dc);
