@@ -4,6 +4,28 @@
 #include "browser_internal.h"
 
 static int Scale(int value, int size) { return value * size / 24; }
+void BrowserDrawSymbol(HDC dc, const RECT *rect, char symbol, COLORREF color)
+{
+    if (browserSymbols) {
+        HGDIOBJ old = SelectObject(dc, browserSymbols); RECT text = *rect;
+        SetBkMode(dc, TRANSPARENT); SetTextColor(dc, color);
+        DrawTextA(dc, &symbol, 1, &text, DT_CENTER | DT_VCENTER | DT_SINGLELINE); SelectObject(dc, old);
+    } else {
+        /* A missing Marlett must not render literal r/5/6 on test hosts. */
+        int x = (rect->left + rect->right) / 2, y = (rect->top + rect->bottom) / 2, i;
+        HPEN pen = CreatePen(PS_SOLID, 1, color); HGDIOBJ old;
+        if (!pen) return;
+        old = SelectObject(dc, pen);
+        if (symbol == 'r') {
+            MoveToEx(dc, x - 3, y - 3, NULL); LineTo(dc, x + 4, y + 4);
+            MoveToEx(dc, x + 3, y - 3, NULL); LineTo(dc, x - 4, y + 4);
+        } else for (i = 0; i < 4; ++i) {
+            int row = symbol == '5' ? y - 2 + i : y + 1 - i;
+            MoveToEx(dc, x - i, row, NULL); LineTo(dc, x + i + 1, row);
+        }
+        SelectObject(dc, old); DeleteObject(pen);
+    }
+}
 static void Box(HDC dc, int size, int left, int top, int right, int bottom, HBRUSH brush)
 {
     RECT rect = {Scale(left, size), Scale(top, size), Scale(right, size), Scale(bottom, size)};
@@ -12,7 +34,7 @@ static void Box(HDC dc, int size, int left, int top, int right, int bottom, HBRU
 int BrowserToolbarAddImages(Browser *browser, int size)
 {
     HDC target = GetDC(browser->window), dc = CreateCompatibleDC(target);
-    HBITMAP bitmap = target ? CreateCompatibleBitmap(target, size * 7, size) : NULL;
+    HBITMAP bitmap = target ? CreateCompatibleBitmap(target, size * 8, size) : NULL;
     HGDIOBJ oldBitmap, oldPen, oldBrush; HICON folder = NULL;
     HPEN greenPen = NULL, bluePen = NULL, handlePen = NULL;
     HBRUSH green = NULL, blue = NULL, glass = NULL, red = NULL, white = GetStockObject(WHITE_BRUSH);
@@ -25,9 +47,9 @@ int BrowserToolbarAddImages(Browser *browser, int size)
     glass = CreateSolidBrush(RGB(205,232,247)); red = CreateSolidBrush(RGB(210,65,50));
     if (!greenPen || !bluePen || !handlePen || !green || !blue || !glass || !red) goto done;
     oldBitmap = SelectObject(dc, bitmap); oldPen = SelectObject(dc, greenPen); oldBrush = SelectObject(dc, green);
-    { RECT all = {0, 0, size * 7, size}; FillRect(dc, &all, (HBRUSH)(COLOR_BTNFACE + 1)); }
+    { RECT all = {0, 0, size * 8, size}; FillRect(dc, &all, (HBRUSH)(COLOR_BTNFACE + 1)); }
     folder = size >= 24 ? EnvLargeSystemIcon(4) : EnvSystemIcon(4);
-    for (i = 0; i < 7; ++i) {
+    for (i = 0; i < 8; ++i) {
         int x; SetWindowOrgEx(dc, -i * size, 0, NULL);
         if (i < 2) {
             SelectObject(dc, greenPen); SelectObject(dc, green);
@@ -55,14 +77,20 @@ int BrowserToolbarAddImages(Browser *browser, int size)
             SelectObject(dc, bluePen);
             Arc(dc, Scale(2,size), Scale(2,size), Scale(22,size), Scale(22,size), Scale(21,size), Scale(12,size), Scale(4,size), Scale(20,size));
             Box(dc, size, 2, 15, 5, 22, blue); Box(dc, size, 3, 19, 10, 22, blue);
-        } else {
+        } else if (i == 6) {
             Box(dc, size, 1, 2, 23, 22, blue); Box(dc, size, 2, 7, 22, 21, white);
             for (x = 0; x < 9; ++x) Box(dc, size, 4 + (x % 3) * 6, 9 + (x / 3) * 4, 8 + (x % 3) * 6, 12 + (x / 3) * 4, x % 3 == 0 ? red : x % 3 == 1 ? green : blue);
+        } else {
+            SelectObject(dc, bluePen); SelectObject(dc, white);
+            Ellipse(dc, Scale(2,size), Scale(2,size), Scale(23,size), Scale(23,size));
+            MoveToEx(dc, Scale(12,size), Scale(5,size), NULL); LineTo(dc, Scale(12,size), Scale(13,size));
+            LineTo(dc, Scale(18,size), Scale(16,size));
+            Box(dc, size, 11, 2, 14, 4, blue); Box(dc, size, 2, 11, 4, 14, blue);
         }
     }
     SetWindowOrgEx(dc, 0, 0, NULL); SelectObject(dc, oldBrush); SelectObject(dc, oldPen); SelectObject(dc, oldBitmap);
     images.hInst = NULL; images.nID = (UINT_PTR)bitmap;
-    index = (int)SendMessageA(browser->toolbar, TB_ADDBITMAP, 7, (LPARAM)&images);
+    index = (int)SendMessageA(browser->toolbar, TB_ADDBITMAP, 8, (LPARAM)&images);
     if (index >= 0) { browser->toolbarImages = bitmap; bitmap = NULL; }
 done:
     if (folder) DestroyIcon(folder);

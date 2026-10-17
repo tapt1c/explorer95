@@ -226,13 +226,13 @@ static void Reflow(Browser *browser)
     /* Measure without a scrollbar first. A stale reduced client width must
      * not keep a scrollbar alive after content shrinks or groups collapse. */
     if (browser->options.pane == BROWSER_PANE_TASKS) s->contentHeight = LayoutTasks(browser, width, FALSE);
-    else if (browser->options.pane == BROWSER_PANE_SEARCH) s->contentHeight = height < 310 ? 310 : height;
+    else if (browser->options.pane == BROWSER_PANE_SEARCH) s->contentHeight = height < 270 ? 270 : height;
     else if (browser->options.pane == BROWSER_PANE_HISTORY) s->contentHeight = height < 180 ? 180 : height;
     else s->contentHeight = height;
     if (s->contentHeight > height) width -= GetSystemMetrics(SM_CXVSCROLL);
     if (browser->options.pane == BROWSER_PANE_TASKS) s->contentHeight = LayoutTasks(browser, width, TRUE);
     else if (browser->options.pane == BROWSER_PANE_SEARCH) {
-        s->contentHeight = height < 310 ? 310 : height;
+        s->contentHeight = height < 270 ? 270 : height;
         BrowserSearchLayout(browser, width, s->contentHeight, TRUE);
     } else if (browser->options.pane == BROWSER_PANE_HISTORY) {
         s->contentHeight = height < 180 ? 180 : height;
@@ -320,7 +320,7 @@ static void DrawRow(Browser *browser, const DRAWITEMSTRUCT *draw)
     text.left += 8; text.right -= 8; text.top += down ? 1 : 0;
     if (header) {
         RECT arrow = text; arrow.left = arrow.right - 12;
-        DrawTextA(draw->hDC, s->collapsed[row->group] ? "v" : "^", -1, &arrow, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        BrowserDrawSymbol(draw->hDC, &arrow, s->collapsed[row->group] ? '6' : '5', GetSysColor(activeHeader ? COLOR_CAPTIONTEXT : COLOR_BTNTEXT));
         text.right -= 16;
     } else if (row->icon >= 0 && row->icon < 10) {
         DrawIconEx(draw->hDC, text.left, 4 + down, s->icons[row->icon], 16, 16, 0, NULL, DI_NORMAL); text.left += 22;

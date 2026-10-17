@@ -65,6 +65,8 @@ typedef struct Browser {
     BrowserOptions options;
     BrowserOptions layoutOptions;
     RECT layoutClient;
+    RECT splitter, toolbarLine, addressLine;
+    int dragWidth, dragOffset;
     HWND layoutToolbar, layoutView;
     BOOL layoutValid, layoutConcealed;
     HMENU viewMenu, favoritesMenu;
@@ -83,9 +85,12 @@ typedef struct Browser {
 
 extern HINSTANCE browserInstance;
 extern HFONT browserFont;
+extern HFONT browserSymbols;
+void BrowserDrawSymbol(HDC dc, const RECT *rect, char symbol, COLORREF color);
 void BrowserError(HWND window, const char *action, DWORD error);
 HWND BrowserControl(HWND window, const char *kind, const char *text, DWORD style, int id);
 LPITEMIDLIST BrowserClonePidl(LPCITEMIDLIST pidl);
+BOOL BrowserSamePidl(LPCITEMIDLIST a, LPCITEMIDLIST b);
 BOOL BrowserNavigate(Browser *browser, const char *path, LPCITEMIDLIST pidl, int historyIndex);
 void BrowserLayout(Browser *browser);
 void BrowserUpdate(Browser *browser);
@@ -114,6 +119,8 @@ void BrowserSidebarDestroy(Browser *browser);
 HWND BrowserSidebarWindow(Browser *browser);
 BOOL BrowserSearchCommand(Browser *browser, int command, int notification);
 BOOL BrowserSearchCreate(Browser *browser, HWND parent);
+BOOL BrowserSearchRegister(void);
+BOOL BrowserSearchTranslate(MSG *message);
 void BrowserSearchLayout(Browser *browser, int width, int height, BOOL show);
 void BrowserSearchTick(Browser *browser);
 void BrowserSearchStop(Browser *browser, BOOL finished);

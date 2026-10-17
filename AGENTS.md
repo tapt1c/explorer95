@@ -632,6 +632,10 @@ explorer95.exe --settings="C:\EX95TEST\Explorer95.ini"
 - `IShellBrowser::BrowseObject` ставит переход в очередь владельца. Нельзя
   уничтожать `IShellView` из собственного вызова BrowseObject. Режим виртуального
   представления задаётся через `FOLDERSETTINGS`, без подмены стиля его ListView.
+  `ICommDlgBrowser::OnDefaultCommand` и подкласс ListView направляют одиночное
+  открытие папки через тот же navigator: старая Shell32 иначе вызывает Explorer.exe.
+  Сохраняйте COM identity и счётчик ссылок обеих interfaces. Редактирование подписи,
+  Alt+Enter и объекты без folder PIDL остаются у Shell32; не читайте её private lParam.
 - Дерево при создании читает только `GetLogicalDriveStrings` и ресурсы значков
   системной DLL. Не вызывайте для корней `GetDriveType`, `GetVolumeInformation`,
   `GetFileAttributes`, FindFirstFile или SHGetFileInfo с путём накопителя.
@@ -652,6 +656,11 @@ explorer95.exe --settings="C:\EX95TEST\Explorer95.ini"
   при Stop, смене панели и закрытии. Лимиты результатов/глубины и пропуски видимы.
   Для новой системы reparse points не обходятся. Результат принадлежит процессу;
   перед переходом из списка копируйте путь, не передавайте внешние указатели.
+  Результаты размещаются в принадлежащем Browser окне `Explorer95.SearchResults`:
+  штатный report ListView с общим системным image list. Close/Escape останавливает
+  обход и скрывает окно, Show results возвращает сохранённый список. Уничтожение
+  Browser освобождает окно и результаты; Open containing folder выделяет объект
+  в исходном Browser. Не возвращайте результаты в узкий список боковой панели.
 - `ExplorerBar` задаёт одну активную панель. Старый `Folders` — только миграционный
   запасной параметр. Tasks использует настоящие команды backend/Shell32; Sharing,
   Publish, Sendmail нельзя показывать без доступного canonical verb. Сведения о
@@ -659,8 +668,9 @@ explorer95.exe --settings="C:\EX95TEST\Explorer95.ini"
 - Скроллбары панелей и списков скрыты, пока содержимое помещается. Tasks сначала
   измеряется на полной ширине, затем при переполнении с учётом SM_CXVSCROLL.
   Ширина текста при измерении совпадает с отрисовкой, включая поля и значок.
-  Search / History задают горизонтальный extent по тексту, очищают его вместе
-  со списком. Не используйте SIF_DISABLENOSCROLL или произвольную ширину 1600.
+  History задаёт горизонтальный extent по тексту, очищает его вместе со списком.
+  Search results использует естественные скроллбары ListView по размерам колонок.
+  Не используйте SIF_DISABLENOSCROLL или произвольную ширину 1600.
   Модель owner-drawn строки публикуется до создания/обновления native control:
   WM_SETTEXT может синхронно вызвать WM_DRAWITEM. Буфер всегда закрашивается.
 - `[ExplorerHistory]` отделён от Back/Forward: до 32 уникальных MRU-целей на профиль.
@@ -670,6 +680,9 @@ explorer95.exe --settings="C:\EX95TEST\Explorer95.ini"
   собственный снимок целей, чтобы изменение MRU другим окном не меняло выбранный адрес.
   Сохраняйте ограниченную секцию одним WritePrivateProfileSectionA; ошибки записи
   сообщаются пользователю без повторяющегося диалога на каждом переходе.
+  Для встроенных namespace сопоставляйте PIDL со стабильной GUID-целью:
+  Win95 может вернуть локализованное имя даже для SHGDN_FORPARSING. Enter в History
+  открывает сохранённую цель; перестановка MRU не должна менять снимок под выделением.
 - Toolbar использует GDI-полосу из `browser_toolbar.c` и стандартные bitmap-наборы
   Common Controls как запасной путь. Bitmap принадлежит Browser и освобождается
   после toolbar. FLAT/LIST, размер кнопки и split arrows — необязательные подсказки;
@@ -682,6 +695,14 @@ explorer95.exe --settings="C:\EX95TEST\Explorer95.ini"
   scrollbar range или скрытые подписи: это перерисовывает соседний IShellView
   на старых USER/Common Controls. Кэш layout сбрасывается при новой папке/view;
   настоящие resize и смена параметров по-прежнему размещают все контролы.
+  После реального resize toolbar требуется RDW_ERASE; WM_ERASEBKGND заполняет
+  переданный DC даже при WindowFromDC == Browser, иначе Win95 оставляет следы.
+  Все левые панели, включая Tasks, используют видимый splitter из фактического
+  layout. Сохраняйте смещение захвата; Escape/потеря capture возвращает ширину,
+  отпускание записывает её. Перед capture ставьте фокус Browser для Escape.
+  Общий BrowserDrawSymbol рисует close/collapse шрифтом Marlett. Проверяйте
+  GetTextFaceA: успешное создание HFONT не исключает подмену шрифта. При отсутствии
+  Marlett рисуйте GDI-символы; не показывайте буквальные r/5/6.
 - `[Explorer]` хранит настройки Проводника, `[ExplorerFavorites]` — до восьми путей.
   Не связывайте их с размером значков Start/Quick Launch. Новые окна читают
   сохранённые параметры, остальные открытые окна не меняются автоматически.

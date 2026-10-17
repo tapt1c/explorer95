@@ -15,6 +15,7 @@
 
 struct NativeView {
     IShellBrowser browser;
+    ICommDlgBrowser dialog;
     ULONG references;
     HWND parent, window, list;
     WNDPROC oldList, oldView;
@@ -32,6 +33,7 @@ struct NativeView {
 
 static EnvironmentHost host;
 static const char property[] = "Explorer95.NativeView";
+static BOOL OpenSelection(NativeView *view);
 
 static BOOL SameGuid(REFIID a, REFIID b)
 {
@@ -81,6 +83,9 @@ static HRESULT STDMETHODCALLTYPE QueryInterface(IShellBrowser *self, REFIID iid,
 {
     if (!result) return E_POINTER;
     *result = NULL;
+    if (SameGuid(iid, &IID_ICommDlgBrowser)) {
+        *result = &((NativeView *)self)->dialog; AddRef(self); return S_OK;
+    }
     if (!SameGuid(iid, &IID_IUnknown) && !SameGuid(iid, &IID_IOleWindow) && !SameGuid(iid, &IID_IShellBrowser))
         return E_NOINTERFACE;
     *result = self; AddRef(self); return S_OK;
@@ -151,6 +156,28 @@ static IShellBrowserVtbl browserVtable = {
     QueryInterface, AddRef, Release, BrowserWindow, ContextHelp, InsertMenus,
     SetMenuHost, RemoveMenus, StatusText, EnableModeless, Accelerator, Browse,
     StateStream, ControlWindow, ControlMessage, ActiveView, ViewActive, ToolbarItems
+};
+
+static NativeView *DialogOwner(ICommDlgBrowser *self)
+{ return CONTAINING_RECORD(self, NativeView, dialog); }
+static HRESULT STDMETHODCALLTYPE DialogQuery(ICommDlgBrowser *self, REFIID iid, void **result)
+{ return QueryInterface(&DialogOwner(self)->browser, iid, result); }
+static ULONG STDMETHODCALLTYPE DialogAddRef(ICommDlgBrowser *self)
+{ return AddRef(&DialogOwner(self)->browser); }
+static ULONG STDMETHODCALLTYPE DialogRelease(ICommDlgBrowser *self)
+{ return Release(&DialogOwner(self)->browser); }
+static HRESULT STDMETHODCALLTYPE DefaultCommand(ICommDlgBrowser *self, IShellView *shellView)
+{ (void)shellView; return OpenSelection(DialogOwner(self)) ? S_OK : S_FALSE; }
+static HRESULT STDMETHODCALLTYPE SelectionChanged(ICommDlgBrowser *self, IShellView *shellView, ULONG change)
+{
+    NativeView *view = DialogOwner(self); (void)shellView;
+    if (view->navigate && change == CDBOSC_SELCHANGE) PostMessageA(view->parent, WM_APP + 32, 0, 0);
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE IncludeObject(ICommDlgBrowser *self, IShellView *shellView, LPCITEMIDLIST pidl)
+{ (void)self; (void)shellView; (void)pidl; return S_OK; }
+static ICommDlgBrowserVtbl dialogVtable = {
+    DialogQuery, DialogAddRef, DialogRelease, DefaultCommand, SelectionChanged, IncludeObject
 };
 
 static void ReadWallpaper(NativeView *view)
@@ -269,26 +296,31 @@ char *NativeViewSelectedPaths(NativeView *view)
     }
     IDataObject_Release(data); return paths;
 }
-static BOOL OpenDesktopSelection(NativeView *view)
+static BOOL OpenSelection(NativeView *view)
 {
     IDataObject *data;
     FORMATETC format;
     STGMEDIUM medium;
     char path[MAX_PATH];
     BOOL handled = FALSE;
+    if ((!view->desktop && !view->navigate) || !view->view || ListView_GetSelectedCount(view->list) != 1) return FALSE;
     if (FAILED(IShellView_GetItemObject(view->view, SVGIO_SELECTION, &IID_IDataObject, (void **)&data))) return FALSE;
     {
         LPITEMIDLIST absolute = FolderSelectionPidl(data);
         if (absolute) {
-            HWND opened = SHGetPathFromIDListA(absolute,path) ? host.openFolder(path) : OpenNativeFolder(absolute);
-            if (!opened) MessageBoxA(view->parent,"This folder could not be opened.","Explorer95",MB_OK | MB_ICONEXCLAMATION);
-            HeapFree(GetProcessHeap(),0,absolute); IDataObject_Release(data); return TRUE;
+            if (view->navigate) handled = view->navigate(view->parent, absolute);
+            else {
+                HWND opened = SHGetPathFromIDListA(absolute,path) ? host.openFolder(path) : OpenNativeFolder(absolute);
+                if (!opened) MessageBoxA(view->parent,"This folder could not be opened.","Explorer95",MB_OK | MB_ICONEXCLAMATION);
+                handled = TRUE;
+            }
+            HeapFree(GetProcessHeap(),0,absolute); IDataObject_Release(data); return handled;
         }
     }
     ZeroMemory(&format, sizeof(format));
     format.cfFormat = CF_HDROP; format.dwAspect = DVASPECT_CONTENT;
     format.lindex = -1; format.tymed = TYMED_HGLOBAL;
-    if (SUCCEEDED(IDataObject_GetData(data, &format, &medium))) {
+    if (view->desktop && SUCCEEDED(IDataObject_GetData(data, &format, &medium))) {
         if (DragQueryFileA((HDROP)medium.hGlobal, 0, path, MAX_PATH)) {
             DWORD attr = GetFileAttributesA(path);
             if (attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY)) host.openFolder(path);
@@ -363,6 +395,18 @@ static LRESULT CALLBACK Subclass(HWND window, UINT message, WPARAM wp, LPARAM lp
     original = window == view->list ? view->oldList : view->oldView;
     RenderTraceEvent(view->desktop ? (window == view->list ? "desktop-list" : "desktop-view") : "folder-view", window, message, wp, lp);
     if (NativeViewMenuMessage(view, message, wp, lp)) return 0;
+    /* Original Win95 views do not consistently delegate default folder verbs
+     * through BrowseObject. Consume real activation before ShellExecute can
+     * open Explorer.exe; navigation itself remains queued outside this view. */
+    if ((view->desktop || view->navigate) && window == view->list && !ListView_GetEditControl(window) &&
+        (message == WM_LBUTTONDBLCLK || (message == WM_KEYDOWN && wp == VK_RETURN && !(GetKeyState(VK_MENU) & 0x8000)))) {
+        BOOL hit = TRUE;
+        if (message == WM_LBUTTONDBLCLK) {
+            LVHITTESTINFO info; ZeroMemory(&info, sizeof(info)); info.pt.x = (short)LOWORD(lp); info.pt.y = (short)HIWORD(lp);
+            hit = ListView_HitTest(window, &info) >= 0;
+        }
+        if (hit && OpenSelection(view)) return 0;
+    }
     if (view->desktop && window == view->window && message == WM_NOTIFY &&
         DesktopIconsBeginDrag(view->icons, (const NMLISTVIEW *)lp)) return 0;
     if (view->desktop && window == view->list) {
@@ -380,8 +424,6 @@ static LRESULT CALLBACK Subclass(HWND window, UINT message, WPARAM wp, LPARAM lp
                 EnvironmentShowDesktopMenu(point); return 0;
             }
         }
-        if ((message == WM_LBUTTONDBLCLK || (message == WM_KEYDOWN && wp == VK_RETURN)) && OpenDesktopSelection(view))
-            return 0;
         if (message == WM_KEYDOWN && wp == VK_F5) { NativeViewRefresh(view); return 0; }
         if (message == WM_KEYDOWN && wp == VK_DELETE && !ListView_GetEditControl(window)) {
             if (!view->deleting && !(lp & (1UL << 30)) && ListView_GetSelectedCount(window)) {
@@ -504,6 +546,7 @@ NativeView *NativeViewCreateEx(HWND parent, LPCITEMIDLIST absolute, BOOL desktop
     RECT rect;
     if (!view) return NULL;
     view->browser.lpVtbl = &browserVtable; view->references = 1;
+    view->dialog.lpVtbl = &dialogVtable;
     view->parent = parent; view->desktop = desktop;
     view->absolute = Combine(NULL, absolute);
     if (!view->absolute || FAILED(SHGetDesktopFolder(&root))) goto fail;

@@ -9,9 +9,11 @@ typedef struct SearchResult { struct SearchResult *next; char path[MAX_PATH]; BO
 typedef struct SearchFrame { struct SearchFrame *parent; HANDLE find; WIN32_FIND_DATAA data; char path[MAX_PATH]; BOOL ready; } SearchFrame;
 struct BrowserSearch {
     HWND parent, nameLabel, name, scopeLabel, scope, recursive, start, stop, results, status;
+    HWND window, resultNote, openFolder, open, show;
+    Browser *browser;
     SearchFrame *frame;
     SearchResult *found;
-    int count, depth, skipped, extent;
+    int count, depth, skipped;
     BOOL active, descend, limited;
     char pattern[MAX_PATH];
 };
@@ -57,6 +59,7 @@ static void SearchStatus(BrowserSearch *search, const char *state)
     wsprintfA(text, "%s: %d match(es).%s\r\n%d folder(s) skipped.", state, search->count,
         search->limited ? " Limit reached." : "", search->skipped);
     SetWindowTextA(search->status, text);
+    SetWindowTextA(search->resultNote, text);
 }
 void BrowserSearchStop(Browser *browser, BOOL finished)
 {
@@ -69,8 +72,7 @@ void BrowserSearchStop(Browser *browser, BOOL finished)
 }
 static void ClearResults(BrowserSearch *search)
 {
-    SendMessageA(search->results, LB_RESETCONTENT, 0, 0);
-    search->extent = 0; SendMessageA(search->results, LB_SETHORIZONTALEXTENT, 0, 0);
+    ListView_DeleteAllItems(search->results);
     while (search->found) { SearchResult *next = search->found->next; EnvFree(search->found); search->found = next; }
     search->count = search->skipped = 0; search->limited = FALSE;
 }
@@ -85,6 +87,7 @@ static void StartSearch(Browser *browser)
         BrowserError(browser->window, "The search folder is unavailable.", attributes == INVALID_FILE_ATTRIBUTES ? GetLastError() : ERROR_DIRECTORY); return;
     }
     BrowserSearchStop(browser, FALSE); ClearResults(search);
+    ShowWindow(search->window, SW_SHOWNORMAL); SetForegroundWindow(search->window);
     if (!query[0] || !lstrcmpA(query, "*.*")) lstrcpyA(search->pattern, "*");
     else {
         int i; BOOL wildcard = FALSE;
@@ -116,21 +119,17 @@ void BrowserSearchTick(Browser *browser)
         if (!EnvJoin(path, frame->path, data.cFileName)) { ++search->skipped; continue; }
         folder = (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
         if (Matches(search->pattern, data.cFileName)) {
-            SearchResult *result = EnvAlloc(sizeof(*result)); LRESULT index; char label[MAX_PATH * 2 + 8];
+            SearchResult *result = EnvAlloc(sizeof(*result)); int index; LVITEMA item; SHFILEINFOA info;
             if (!result) { search->limited = TRUE; break; }
             lstrcpyA(result->path, path); result->folder = folder;
-            wsprintfA(label, "%s  [%s]", data.cFileName, frame->path);
-            index = SendMessageA(search->results, LB_ADDSTRING, 0, (LPARAM)label);
+            ZeroMemory(&info, sizeof(info));
+            SHGetFileInfoA(path, data.dwFileAttributes, &info, sizeof(info), SHGFI_USEFILEATTRIBUTES | SHGFI_SYSICONINDEX | SHGFI_SMALLICON | SHGFI_TYPENAME);
+            ZeroMemory(&item, sizeof(item)); item.mask = LVIF_TEXT | LVIF_IMAGE | LVIF_PARAM;
+            item.iItem = search->count; item.pszText = data.cFileName; item.iImage = info.iIcon; item.lParam = (LPARAM)result;
+            index = ListView_InsertItem(search->results, &item);
             if (index < 0) { EnvFree(result); search->limited = TRUE; break; }
-            SendMessageA(search->results, LB_SETITEMDATA, index, (LPARAM)result);
-            {
-                SIZE size; HDC dc = GetDC(search->results); HGDIOBJ old = SelectObject(dc, browserFont);
-                if (GetTextExtentPoint32A(dc, label, lstrlenA(label), &size) && size.cx + 4 > search->extent) {
-                    search->extent = size.cx + 4;
-                    SendMessageA(search->results, LB_SETHORIZONTALEXTENT, search->extent, 0);
-                }
-                SelectObject(dc, old); ReleaseDC(search->results, dc);
-            }
+            ListView_SetItemText(search->results, index, 1, frame->path);
+            ListView_SetItemText(search->results, index, 2, info.szTypeName);
             result->next = search->found; search->found = result; ++search->count;
             if (search->count == SEARCH_LIMIT) { search->limited = TRUE; break; }
         }
@@ -142,26 +141,24 @@ void BrowserSearchTick(Browser *browser)
     if (!search->frame || search->limited) BrowserSearchStop(browser, TRUE);
     else SearchStatus(search, "Searching");
 }
-BOOL BrowserSearchCommand(Browser *browser, int command, int notification)
+static void OpenResult(BrowserSearch *search, BOOL containing)
 {
-    BrowserSearch *search = browser->search;
-    if (!search) return FALSE;
-    if (command == ID_SEARCH_START) { StartSearch(browser); return TRUE; }
-    if (command == ID_SEARCH_STOP) { BrowserSearchStop(browser, FALSE); return TRUE; }
-    if (command == ID_SEARCH_RESULTS && (notification == LBN_SELCHANGE || notification == LBN_DBLCLK)) {
-        LRESULT index = SendMessageA(search->results, LB_GETCURSEL, 0, 0);
-        SearchResult *result = index < 0 ? NULL : (SearchResult *)SendMessageA(search->results, LB_GETITEMDATA, index, 0);
-        if (result && result != (SearchResult *)(INT_PTR)LB_ERR) {
+    Browser *browser = search->browser; LVITEMA item; SearchResult *result;
+    ZeroMemory(&item, sizeof(item)); item.mask = LVIF_PARAM;
+    item.iItem = ListView_GetNextItem(search->results, -1, LVNI_SELECTED);
+    if (item.iItem < 0 || !ListView_GetItem(search->results, &item)) return;
+    result = (SearchResult *)item.lParam;
+    if (result) {
             char path[MAX_PATH]; lstrcpyA(path, result->path);
-            if (notification == LBN_DBLCLK && !result->folder) EnvironmentLaunch(browser->window, path, NULL, NULL);
+            if (!containing && !result->folder) EnvironmentLaunch(browser->window, path, NULL, NULL);
             else {
-                int length = lstrlenA(path); const char *name; FileEntry *entry; int i;
+                int length = lstrlenA(path); const char *name; FileEntry *entry; int i; BOOL navigated = FALSE;
                 while (length && path[length - 1] != '\\') --length;
                 name = result->path + length;
                 if (length > 3) --length;
                 path[length] = 0;
-                if (result->folder && notification == LBN_DBLCLK) BrowserNavigate(browser, result->path, NULL, -1);
-                else if (BrowserNavigate(browser, path, NULL, -1)) {
+                if (result->folder && !containing) navigated = BrowserNavigate(browser, result->path, NULL, -1);
+                else if ((navigated = BrowserNavigate(browser, path, NULL, -1))) {
                     for (entry = browser->entries; entry; entry = entry->next) if (!lstrcmpiA(entry->name, name)) {
                         for (i = 0; i < ListView_GetItemCount(browser->files); ++i) {
                             LVITEMA item; ZeroMemory(&item, sizeof(item)); item.mask = LVIF_PARAM; item.iItem = i;
@@ -174,18 +171,96 @@ BOOL BrowserSearchCommand(Browser *browser, int command, int notification)
                         break;
                     }
                 }
+                if (navigated) { ShowWindow(search->window, SW_HIDE); SetForegroundWindow(browser->window); }
+            }
+    }
+}
+static LRESULT CALLBACK ResultsProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
+{
+    BrowserSearch *search = (BrowserSearch *)GetWindowLongPtrA(window, GWLP_USERDATA);
+    if (message == WM_CREATE) {
+        LVCOLUMNA column; SHFILEINFOA info; HIMAGELIST images; int i;
+        search = (BrowserSearch *)((CREATESTRUCTA *)lp)->lpCreateParams;
+        SetWindowLongPtrA(window, GWLP_USERDATA, (LONG_PTR)search);
+        search->results = BrowserControl(window, WC_LISTVIEWA, "", WS_BORDER | WS_TABSTOP | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | LVS_SHAREIMAGELISTS, ID_SEARCH_RESULTS);
+        search->resultNote = BrowserControl(window, "STATIC", "", 0, 0);
+        search->open = BrowserControl(window, "BUTTON", "Open", WS_TABSTOP | BS_DEFPUSHBUTTON, ID_SEARCH_OPEN);
+        search->openFolder = BrowserControl(window, "BUTTON", "Open containing folder", WS_TABSTOP, ID_SEARCH_OPEN_FOLDER);
+        if (!search->results || !search->resultNote || !search->open || !search->openFolder) return -1;
+        images = (HIMAGELIST)SHGetFileInfoA("file.txt", FILE_ATTRIBUTE_NORMAL, &info, sizeof(info), SHGFI_USEFILEATTRIBUTES | SHGFI_SYSICONINDEX | SHGFI_SMALLICON);
+        if (images) ListView_SetImageList(search->results, images, LVSIL_SMALL);
+        ZeroMemory(&column, sizeof(column)); column.mask = LVCF_TEXT | LVCF_WIDTH;
+        for (i = 0; i < 3; ++i) {
+            column.pszText = i == 0 ? "Name" : i == 1 ? "In folder" : "Type"; column.cx = i == 0 ? 190 : i == 1 ? 260 : 120;
+            ListView_InsertColumn(search->results, i, &column);
+        }
+        EnableWindow(search->open, FALSE); EnableWindow(search->openFolder, FALSE); return 0;
+    }
+    if (!search) return DefWindowProcA(window, message, wp, lp);
+    switch (message) {
+    case WM_SIZE: {
+        RECT rect; GetClientRect(window, &rect);
+        EnvMoveControl(search->results, 6, 6, rect.right - 12, rect.bottom > 76 ? rect.bottom - 76 : 1);
+        ListView_SetColumnWidth(search->results, 1, rect.right > 430 ? rect.right - 330 : 100);
+        EnvMoveControl(search->resultNote, 8, rect.bottom - 64, rect.right - 16, 28);
+        EnvMoveControl(search->open, 8, rect.bottom - 30, 80, 24);
+        EnvMoveControl(search->openFolder, 96, rect.bottom - 30, 160, 24); return 0;
+    }
+    case WM_GETMINMAXINFO: ((MINMAXINFO *)lp)->ptMinTrackSize.x = 380; ((MINMAXINFO *)lp)->ptMinTrackSize.y = 240; return 0;
+    case WM_SETFOCUS: SetFocus(search->results); return 0;
+    case WM_NOTIFY: {
+        NMHDR *header = (NMHDR *)lp;
+        if (header->idFrom == ID_SEARCH_RESULTS) {
+            if (header->code == NM_DBLCLK) OpenResult(search, FALSE);
+            if (header->code == LVN_ITEMCHANGED) {
+                BOOL selected = ListView_GetSelectedCount(search->results) > 0;
+                EnableWindow(search->open, selected); EnableWindow(search->openFolder, selected);
             }
         }
-        return TRUE;
+        return 0;
     }
+    case WM_COMMAND:
+        if (LOWORD(wp) == ID_SEARCH_OPEN || LOWORD(wp) == ID_SEARCH_OPEN_FOLDER) OpenResult(search, LOWORD(wp) == ID_SEARCH_OPEN_FOLDER);
+        return 0;
+    case WM_CLOSE: BrowserSearchStop(search->browser, FALSE); ShowWindow(window, SW_HIDE); return 0;
+    case WM_SYSCOLORCHANGE: PaintNotifySystemColors(window, TRUE); return 0;
+    }
+    return DefWindowProcA(window, message, wp, lp);
+}
+BOOL BrowserSearchRegister(void)
+{
+    WNDCLASSA cls; ZeroMemory(&cls, sizeof(cls)); cls.hInstance = browserInstance; cls.hCursor = LoadCursorA(NULL, IDC_ARROW);
+    cls.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1); cls.lpfnWndProc = ResultsProc; cls.lpszClassName = BROWSER_SEARCH_CLASS;
+    return RegisterClassA(&cls) != 0;
+}
+BOOL BrowserSearchTranslate(MSG *message)
+{
+    HWND root = message->hwnd;
+    while (root && (GetWindowLongA(root, GWL_STYLE) & WS_CHILD)) root = GetParent(root);
+    if (message->message == WM_KEYDOWN) {
+        if (message->wParam == VK_ESCAPE) { SendMessageA(root, WM_CLOSE, 0, 0); return TRUE; }
+        if (message->wParam == VK_RETURN && GetDlgCtrlID(message->hwnd) == ID_SEARCH_RESULTS) {
+            SendMessageA(root, WM_COMMAND, ID_SEARCH_OPEN, 0); return TRUE;
+        }
+        return IsDialogMessageA(root, message);
+    }
+    return FALSE;
+}
+BOOL BrowserSearchCommand(Browser *browser, int command, int notification)
+{
+    BrowserSearch *search = browser->search; (void)notification;
+    if (!search) return FALSE;
+    if (command == ID_SEARCH_START) { StartSearch(browser); return TRUE; }
+    if (command == ID_SEARCH_STOP) { BrowserSearchStop(browser, FALSE); return TRUE; }
+    if (command == ID_SEARCH_SHOW_RESULTS) { ShowWindow(search->window, SW_SHOWNORMAL); SetForegroundWindow(search->window); return TRUE; }
     return FALSE;
 }
 BOOL BrowserSearchCreate(Browser *browser, HWND parent)
 {
-    BrowserSearch *search;
+    BrowserSearch *search; RECT area; int width, height;
     if (browser->search) return TRUE;
     search = EnvAlloc(sizeof(*search)); if (!search) return FALSE;
-    browser->search = search; search->parent = parent;
+    browser->search = search; search->parent = parent; search->browser = browser;
     search->nameLabel = BrowserControl(parent, "STATIC", "All or part of the file name:", 0, 0);
     search->name = BrowserControl(parent, "EDIT", "", WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL, ID_SEARCH_NAME);
     SendMessageA(search->name, EM_LIMITTEXT, 110, 0);
@@ -197,18 +272,24 @@ BOOL BrowserSearchCreate(Browser *browser, HWND parent)
     SendMessageA(search->recursive, BM_SETCHECK, BST_CHECKED, 0);
     search->start = BrowserControl(parent, "BUTTON", "Search", WS_TABSTOP, ID_SEARCH_START);
     search->stop = BrowserControl(parent, "BUTTON", "Stop", WS_TABSTOP, ID_SEARCH_STOP); EnableWindow(search->stop, FALSE);
-    search->status = BrowserControl(parent, "STATIC", "Select a result to show its folder.\r\nDouble-click to open it.", 0, ID_SEARCH_STATUS);
-    search->results = BrowserControl(parent, "LISTBOX", "", WS_BORDER | WS_TABSTOP | WS_VSCROLL | WS_HSCROLL | LBS_NOTIFY | LBS_NOINTEGRALHEIGHT, ID_SEARCH_RESULTS);
+    search->status = BrowserControl(parent, "STATIC", "Results open in a separate window.\r\nDouble-click a result to open it.", 0, ID_SEARCH_STATUS);
+    search->show = BrowserControl(parent, "BUTTON", "Show results", WS_TABSTOP, ID_SEARCH_SHOW_RESULTS);
+    SystemParametersInfoA(SPI_GETWORKAREA, 0, &area, 0);
+    width = area.right - area.left; if (width > 580) width = 580;
+    height = area.bottom - area.top; if (height > 380) height = 380;
+    search->window = CreateWindowExA(WS_EX_CONTROLPARENT, BROWSER_SEARCH_CLASS, "Search Results", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+        area.left + (area.right - area.left - width) / 2, area.top + (area.bottom - area.top - height) / 2, width, height,
+        browser->window, NULL, browserInstance, search);
     if (!search->nameLabel || !search->name || !search->scopeLabel || !search->scope || !search->recursive ||
-        !search->start || !search->stop || !search->status || !search->results) { BrowserSearchDestroy(browser); return FALSE; }
+        !search->start || !search->stop || !search->status || !search->show || !search->window) { BrowserSearchDestroy(browser); return FALSE; }
     return TRUE;
 }
 void BrowserSearchLayout(Browser *browser, int width, int height, BOOL show)
 {
-    BrowserSearch *s = browser->search; HWND controls[10]; int i, listHeight;
+    BrowserSearch *s = browser->search; HWND controls[9]; int i; (void)height;
     if (!s) return;
     controls[0] = s->nameLabel; controls[1] = s->name; controls[2] = s->scopeLabel; controls[3] = s->scope;
-    controls[4] = s->recursive; controls[5] = s->start; controls[6] = s->stop; controls[7] = s->status; controls[8] = s->results;
+    controls[4] = s->recursive; controls[5] = s->start; controls[6] = s->stop; controls[7] = s->status; controls[8] = s->show;
     for (i = 0; i < 9; ++i) EnvShowControl(controls[i], show);
     if (!show) { BrowserSearchStop(browser, FALSE); return; }
     EnvMoveControl(s->nameLabel, 8, 8, width - 16, 34); EnvMoveControl(s->name, 8, 43, width - 16, 23);
@@ -216,8 +297,7 @@ void BrowserSearchLayout(Browser *browser, int width, int height, BOOL show)
     EnvMoveControl(s->recursive, 8, 122, width - 16, 23);
     EnvMoveControl(s->start, 8, 151, (width - 24) / 2, 25); EnvMoveControl(s->stop, (width + 8) / 2, 151, (width - 24) / 2, 25);
     EnvMoveControl(s->status, 8, 183, width - 16, 48);
-    listHeight = height - 241; if (listHeight < 32) listHeight = 32;
-    EnvMoveControl(s->results, 8, 235, width - 16, listHeight);
+    EnvMoveControl(s->show, 8, 235, width - 16, 26);
 }
 void BrowserSearchDestroy(Browser *browser)
 {
@@ -225,7 +305,8 @@ void BrowserSearchDestroy(Browser *browser)
     if (!browser->search) return;
     BrowserSearchStop(browser, FALSE); ClearResults(s);
     controls[0] = s->nameLabel; controls[1] = s->name; controls[2] = s->scopeLabel; controls[3] = s->scope;
-    controls[4] = s->recursive; controls[5] = s->start; controls[6] = s->stop; controls[7] = s->status; controls[8] = s->results;
+    if (s->window) DestroyWindow(s->window);
+    controls[4] = s->recursive; controls[5] = s->start; controls[6] = s->stop; controls[7] = s->status; controls[8] = s->show;
     for (i = 0; i < 9; ++i) if (controls[i]) DestroyWindow(controls[i]);
     EnvFree(s); browser->search = NULL;
 }

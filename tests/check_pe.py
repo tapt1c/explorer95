@@ -28,7 +28,7 @@ ALLOWED = {
     # Classic GDI drawing and DIB transfer APIs, available in Windows 95;
     # shutdown fade does not import AlphaBlend, GradientFill or layered-window APIs.
     "gdi32.dll": {"CreatePatternBrush", "PatBlt", "GetDeviceCaps", "GetClipBox", "SaveDC", "RestoreDC", "ExcludeClipRect", "Arc", "CreatePen", "Ellipse", "CreateSolidBrush", "GetDIBits", "SetDIBits", "LineTo", "MoveToEx", "GetStockObject", "SelectObject", "SetBkMode", "SetTextColor", "BitBlt",
-                  "StretchBlt", "CreateCompatibleBitmap", "CreateBitmap", "SetBkColor", "SetWindowOrgEx", "CreateFontIndirectA", "GetTextExtentPoint32A", "GetTextMetricsA", "CreateCompatibleDC", "DeleteDC", "DeleteObject", "GetObjectA"},
+                  "StretchBlt", "CreateCompatibleBitmap", "CreateBitmap", "SetBkColor", "SetWindowOrgEx", "CreateFontIndirectA", "GetTextFaceA", "GetTextExtentPoint32A", "GetTextMetricsA", "CreateCompatibleDC", "DeleteDC", "DeleteObject", "GetObjectA"},
     "kernel32.dll": set("""
         GetDiskFreeSpaceA GetVolumeInformationA WideCharToMultiByte WritePrivateProfileSectionA
         CreateMutexA ReleaseMutex CreateToolhelp32Snapshot Process32First Process32Next GetSystemTimeAsFileTime GetTempFileNameA MoveFileA
@@ -50,7 +50,7 @@ ALLOWED = {
         DragAcceptFiles DragQueryFileA DragFinish
     """.split()),
     "user32.dll": set("""
-        CharUpperBuffA SetScrollInfo
+        CharUpperBuffA SetScrollInfo IsRectEmpty SetRectEmpty OffsetRect
         AdjustWindowRectEx EnableWindow CheckMenuItem ClientToScreen CloseClipboard DeleteMenu EmptyClipboard EnableMenuItem
         GetClipboardData GetMenu GetMenuDefaultItem GetMenuItemID IsClipboardFormatAvailable OpenClipboard RegisterClipboardFormatA SetClipboardData
         AppendMenuA CreateMenu CreatePopupMenu CreateWindowExA DefWindowProcA

@@ -76,13 +76,34 @@ int BrowserHistoryRead(BrowserVisit *result)
     CopyMemory(result, visits, sizeof(*result) * visitCount);
     return visitCount;
 }
+static BOOL KnownNamespace(Browser *browser, char *target)
+{
+    static const int folders[] = {CSIDL_DRIVES, CSIDL_BITBUCKET, CSIDL_CONTROLS, CSIDL_PRINTERS, CSIDL_NETWORK};
+    static const char *names[] = {
+        "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}", "::{645FF040-5081-101B-9F08-00AA002F954E}",
+        "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}\\::{21EC2020-3AEA-1069-A2DD-08002B30309D}",
+        "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}\\::{2227A280-3AEA-1069-A2DE-08002B30309D}",
+        "::{208D2C60-3AEA-1069-A2D7-08002B30309D}"
+    };
+    int i;
+    /* Win95's parsing name may be a localized display name. Persist stable
+     * namespace identifiers for built-in places instead of that caption. */
+    for (i = 0; i < (int)(sizeof(folders) / sizeof(folders[0])); ++i) {
+        LPITEMIDLIST pidl;
+        if (SUCCEEDED(SHGetSpecialFolderLocation(browser->window, folders[i], &pidl))) {
+            BOOL same = BrowserSamePidl(browser->pidl, pidl); CoTaskMemFree(pidl);
+            if (same) { lstrcpyA(target, names[i]); return TRUE; }
+        }
+    }
+    return FALSE;
+}
 void BrowserHistoryRecord(Browser *browser)
 {
     BrowserVisit next; int i;
     ZeroMemory(&next, sizeof(next));
     if (!BrowserHistoryEnabled()) return;
     if (browser->path[0]) lstrcpyA(next.target, browser->path);
-    else if (browser->pidl) {
+    else if (browser->pidl && !KnownNamespace(browser, next.target)) {
         IShellFolder *desktop; STRRET name;
         if (FAILED(SHGetDesktopFolder(&desktop))) return;
         ZeroMemory(&name, sizeof(name));

@@ -4,6 +4,7 @@
 
 HINSTANCE browserInstance;
 HFONT browserFont;
+HFONT browserSymbols;
 static const char optionsClass[] = "Explorer95.FolderOptions";
 static const char *viewNames[] = {"Icons", "Small Icons", "List", "Details", "Tiles", "Thumbnails"};
 static const int extraCommands[] = {ID_COPY, ID_CUT, ID_PASTE, ID_DELETE, ID_FILE_PROPERTIES, ID_BROWSER_OPTIONS};
@@ -30,7 +31,7 @@ LPITEMIDLIST BrowserClonePidl(LPCITEMIDLIST pidl)
     while (scan->mkid.cb) { bytes += scan->mkid.cb; scan = (LPCITEMIDLIST)((const BYTE *)scan + scan->mkid.cb); }
     copy = EnvAlloc(bytes); if (copy) CopyMemory(copy, pidl, bytes); return copy;
 }
-static BOOL SamePidl(LPCITEMIDLIST a, LPCITEMIDLIST b)
+BOOL BrowserSamePidl(LPCITEMIDLIST a, LPCITEMIDLIST b)
 {
     if (!a || !b) return a == b;
     for (;;) {
@@ -87,6 +88,7 @@ void BrowserUpdate(Browser *browser)
     if (browser->toolbar) {
         SendMessageA(browser->toolbar, TB_CHECKBUTTON, ID_FOLDERS, MAKELONG(browser->options.pane == BROWSER_PANE_FOLDERS, 0));
         SendMessageA(browser->toolbar, TB_CHECKBUTTON, ID_SEARCH, MAKELONG(browser->options.pane == BROWSER_PANE_SEARCH, 0));
+        SendMessageA(browser->toolbar, TB_CHECKBUTTON, ID_HISTORY, MAKELONG(browser->options.pane == BROWSER_PANE_HISTORY, 0));
     }
     CheckMenuItem(menu, ID_FOLDERS, MF_BYCOMMAND | (browser->options.pane == BROWSER_PANE_FOLDERS ? MF_CHECKED : MF_UNCHECKED));
     CheckMenuItem(menu, ID_SEARCH, MF_BYCOMMAND | (browser->options.pane == BROWSER_PANE_SEARCH ? MF_CHECKED : MF_UNCHECKED));
@@ -121,7 +123,7 @@ static void ToolbarButton(Browser *browser, int command, const char *label, int 
     string = SendMessageA(browser->toolbar, TB_ADDSTRINGA, 0, (LPARAM)text);
     ZeroMemory(&button, sizeof(button)); button.iBitmap = image; button.idCommand = command;
     button.fsState = TBSTATE_ENABLED; button.fsStyle = style | ((style & TBSTYLE_SEP) ? 0 : TBSTYLE_AUTOSIZE);
-    button.iString = browser->options.labels && (command == ID_BACK || command == ID_SEARCH || command == ID_FOLDERS ||
+    button.iString = browser->options.labels && (command == ID_BACK || command == ID_SEARCH || command == ID_FOLDERS || command == ID_HISTORY ||
          command == ID_EMPTY_RECYCLE || (command >= ID_COPY && command <= ID_BROWSER_OPTIONS)) ? string : -1;
     SendMessageA(browser->toolbar, TB_ADDBUTTONSA, 1, (LPARAM)&button);
 }
@@ -153,6 +155,7 @@ void BrowserBuildToolbar(Browser *browser)
     ToolbarButton(browser, 0, "", 8, TBSTYLE_SEP);
     ToolbarButton(browser, ID_SEARCH, "Search", navigation >= 0 ? navigation + 3 : stock + STD_FIND, TBSTYLE_CHECK);
     ToolbarButton(browser, ID_FOLDERS, "Folders", navigation >= 0 ? navigation + 4 : history >= 0 ? history + HIST_VIEWTREE : stock + STD_FILEOPEN, TBSTYLE_CHECK);
+    ToolbarButton(browser, ID_HISTORY, "History", navigation >= 0 ? navigation + 7 : stock + STD_PROPERTIES, TBSTYLE_CHECK);
     ToolbarButton(browser, ID_REFRESH, "", navigation >= 0 ? navigation + 5 : stock + STD_REDOW, TBSTYLE_BUTTON | TBSTYLE_AUTOSIZE);
     ToolbarButton(browser, 0, "", 8, TBSTYLE_SEP);
     ToolbarButton(browser, ID_VIEWS, "", navigation >= 0 ? navigation + 6 : views >= 0 ? views + VIEW_LARGEICONS : stock + STD_PRINTPRE, TBSTYLE_BUTTON | dropdown);
@@ -188,6 +191,7 @@ void BrowserLayout(Browser *browser)
         browser->layoutToolbar == browser->toolbar && browser->layoutView == NativeViewWindow(browser->native) &&
         browser->layoutConcealed == browser->concealed && SameLayoutOptions(&browser->options, &browser->layoutOptions)) return;
     browser->layouting = TRUE;
+    SetRectEmpty(&browser->toolbarLine); SetRectEmpty(&browser->addressLine); SetRectEmpty(&browser->splitter);
     EnvShowControl(browser->toolbar, browser->options.toolbar);
     if (browser->options.toolbar && browser->toolbar) {
         GetWindowRect(browser->toolbar, &previous);
@@ -206,7 +210,8 @@ void BrowserLayout(Browser *browser)
         /* Wrapped separators can make TB_AUTOSIZE reserve empty trailing rows.
          * Fit the actual Win95 button rectangles instead. */
         for (i = 0; i < count; ++i) if (SendMessageA(browser->toolbar, TB_GETITEMRECT, i, (LPARAM)&tool) && tool.bottom > extent) extent = tool.bottom;
-        EnvMoveControl(browser->toolbar, 0, 0, width, extent + 3); top = extent + 6;
+        EnvMoveControl(browser->toolbar, 0, 0, width, extent + 3); top = extent + 7;
+        SetRect(&browser->toolbarLine, 0, top - 3, width, top - 1);
     }
     EnvShowControl(browser->address, browser->options.address);
     EnvShowControl(browser->addressLabel, browser->options.address);
@@ -214,7 +219,8 @@ void BrowserLayout(Browser *browser)
     if (browser->options.address) {
         EnvMoveControl(browser->addressLabel, 5, top + 5, 49, 20);
         EnvMoveControl(browser->address, 56, top + 2, width > 120 ? width - 112 : 8, 220);
-        EnvMoveControl(browser->go, width - 51, top + 1, 47, 25); top += 30;
+        EnvMoveControl(browser->go, width - 51, top + 1, 47, 25); top += 32;
+        SetRect(&browser->addressLine, 0, top - 3, width, top - 1);
     }
     EnvShowControl(browser->status, browser->options.status);
     if (browser->options.status) { bottom -= 22; EnvMoveControl(browser->status, 0, bottom, width, 22); }
@@ -223,14 +229,15 @@ void BrowserLayout(Browser *browser)
     EnvShowControl(browser->treeClose, browser->options.pane >= BROWSER_PANE_FOLDERS);
     if (browser->tree) EnvShowControl(browser->tree, browser->options.pane == BROWSER_PANE_FOLDERS);
     if (browser->options.pane != BROWSER_PANE_NONE) {
-        sidebar = browser->options.treeWidth; if (sidebar > width - 180) sidebar = width - 180; if (sidebar < 100) sidebar = 100;
+        sidebar = browser->options.treeWidth; if (sidebar > width - 186) sidebar = width - 186; if (sidebar < 100) sidebar = 100;
         { char label[32]; const char *wanted = browser->options.pane == BROWSER_PANE_SEARCH ? "Search" : browser->options.pane == BROWSER_PANE_HISTORY ? "History" : "Folders";
           GetWindowTextA(browser->treeLabel, label, sizeof(label)); if (lstrcmpA(label, wanted)) SetWindowTextA(browser->treeLabel, wanted); }
         EnvMoveControl(browser->treeLabel, 3, top + 3, sidebar - 28, 22);
         EnvMoveControl(browser->treeClose, sidebar - 23, top + 2, 22, 21);
         if (browser->options.pane == BROWSER_PANE_FOLDERS) EnvMoveControl(browser->tree, 2, top + 27, sidebar - 3, bottom - top > 30 ? bottom - top - 28 : 1);
         BrowserSidebarLayout(browser, 0, top, sidebar, bottom - top);
-        sidebar += 4;
+        SetRect(&browser->splitter, sidebar, top, sidebar + 6, bottom);
+        sidebar += 6;
     }
     else BrowserSidebarLayout(browser, 0, top, 0, bottom - top);
     height = bottom - top; if (height < 1) height = 1;
@@ -245,7 +252,7 @@ void BrowserLayout(Browser *browser)
         EnvMoveControl(browser->concealedText, sidebar + 14, top + 20, width - sidebar - 28, 74);
         EnvMoveControl(browser->reveal, sidebar + 14, top + 104, 160, 28);
     }
-    if (toolbarSized) InvalidateRect(browser->toolbar, NULL, FALSE);
+    if (toolbarSized) RedrawWindow(browser->toolbar, NULL, NULL, RDW_INVALIDATE | RDW_ERASE);
     InvalidateRect(browser->window, NULL, FALSE);
     browser->layoutClient = rect; browser->layoutOptions = browser->options;
     browser->layoutToolbar = browser->toolbar; browser->layoutView = NativeViewWindow(browser->native);
@@ -264,6 +271,8 @@ BOOL BrowserNavigate(Browser *browser, const char *requested, LPCITEMIDLIST pidl
 {
     char path[MAX_PATH], title[MAX_PATH + 32]; LPITEMIDLIST absolute = NULL, recorded = NULL; NativeView *native = NULL;
     FileEntry *entries = NULL; HANDLE watch = NULL; int total = 0, i; BOOL same, wasBin = browser->recycleBin; DWORD length;
+    HWND previousView = browser->native ? NativeViewWindow(browser->native) : browser->files;
+    HWND focus = GetFocus(); BOOL restoreFocus = focus == previousView || (focus && IsChild(previousView, focus));
     if (browser->closing) return FALSE;
     path[0] = 0;
     if (pidl && pidl->mkid.cb) SHGetPathFromIDListA(pidl, path);
@@ -287,7 +296,7 @@ BOOL BrowserNavigate(Browser *browser, const char *requested, LPCITEMIDLIST pidl
         if (!native) { EnvFree(absolute); BrowserError(browser->window, "Cannot open this system folder.", ERROR_NOT_SUPPORTED); return FALSE; }
         NativeViewSetNavigator(native, NavigateNative);
     } else return FALSE;
-    same = !lstrcmpiA(browser->path, path) && SamePidl(browser->pidl, absolute);
+    same = !lstrcmpiA(browser->path, path) && BrowserSamePidl(browser->pidl, absolute);
     if (historyIndex < 0 && !same && absolute) {
         recorded = BrowserClonePidl(absolute);
         if (!recorded) { NativeViewDestroy(native); EnvFree(absolute); return FALSE; }
@@ -317,10 +326,10 @@ BOOL BrowserNavigate(Browser *browser, const char *requested, LPCITEMIDLIST pidl
     if (absolute) {
         LPITEMIDLIST bin = NULL;
         if (SUCCEEDED(SHGetSpecialFolderLocation(browser->window, CSIDL_BITBUCKET, &bin))) {
-            browser->recycleBin = SamePidl(absolute, bin); CoTaskMemFree(bin);
+            browser->recycleBin = BrowserSamePidl(absolute, bin); CoTaskMemFree(bin);
         }
         if (SUCCEEDED(SHGetSpecialFolderLocation(browser->window, CSIDL_DRIVES, &bin))) {
-            browser->computerFolder = SamePidl(absolute, bin); CoTaskMemFree(bin);
+            browser->computerFolder = BrowserSamePidl(absolute, bin); CoTaskMemFree(bin);
         }
     }
     ShowWindow(browser->files, native ? SW_HIDE : SW_SHOW);
@@ -337,7 +346,9 @@ BOOL BrowserNavigate(Browser *browser, const char *requested, LPCITEMIDLIST pidl
     if (!same) BrowserHistoryRecord(browser);
     BrowserSidebarLocationChanged(browser);
     if (wasBin != browser->recycleBin) BrowserBuildToolbar(browser);
-    BrowserTreeSync(browser); BrowserLayout(browser); BrowserUpdate(browser); return TRUE;
+    BrowserTreeSync(browser); BrowserLayout(browser); BrowserUpdate(browser);
+    if (restoreFocus) SetFocus(browser->native ? NativeViewList(browser->native) : browser->files);
+    return TRUE;
 }
 void BrowserRefresh(Browser *browser)
 {
@@ -585,6 +596,14 @@ static void Command(Browser *browser, int command)
     else if (command == ID_ABOUT) MessageBoxA(browser->window, "Explorer95\r\nClassic XP-style browsing with native Windows 95 controls and icons.", "About Explorer95", MB_OK | MB_ICONINFORMATION);
     else BrowserFilesCommand(browser, command);
 }
+static void PaintFrame(Browser *browser, HDC dc)
+{
+    RECT client, line;
+    GetClientRect(browser->window, &client); FillRect(dc, &client, (HBRUSH)(COLOR_BTNFACE + 1));
+    if (!IsRectEmpty(&browser->toolbarLine)) { line = browser->toolbarLine; DrawEdge(dc, &line, EDGE_ETCHED, BF_TOP); }
+    if (!IsRectEmpty(&browser->addressLine)) { line = browser->addressLine; DrawEdge(dc, &line, EDGE_ETCHED, BF_TOP); }
+    if (!IsRectEmpty(&browser->splitter)) { line = browser->splitter; line.left += 2; DrawEdge(dc, &line, EDGE_ETCHED, BF_LEFT); }
+}
 static LRESULT CALLBACK BrowserProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
 {
     Browser *browser = (Browser *)GetWindowLongPtrA(window, GWLP_USERDATA);
@@ -603,7 +622,7 @@ static LRESULT CALLBACK BrowserProc(HWND window, UINT message, WPARAM wp, LPARAM
         SendMessageA(browser->address, CB_LIMITTEXT, MAX_PATH - 1, 0);
         browser->go = BrowserControl(window, "BUTTON", "Go", WS_TABSTOP | BS_DEFPUSHBUTTON, ID_GO);
         browser->treeLabel = BrowserControl(window, "STATIC", "Folders", 0, ID_FOLDERS_LABEL);
-        browser->treeClose = BrowserControl(window, "BUTTON", "x", WS_TABSTOP, ID_FOLDERS_CLOSE);
+        browser->treeClose = BrowserControl(window, "BUTTON", "Close", WS_TABSTOP | BS_OWNERDRAW, ID_FOLDERS_CLOSE);
         browser->concealedText = BrowserControl(window, "STATIC", "The contents of this drive are hidden in this window.\r\nThis does not change file permissions or attributes.", 0, 0);
         browser->reveal = BrowserControl(window, "BUTTON", "Show the contents", WS_TABSTOP, ID_CONTENTS_TOGGLE);
         browser->files = BrowserControl(window, WC_LISTVIEWA, "", WS_BORDER | WS_TABSTOP | LVS_ICON | LVS_AUTOARRANGE | LVS_SHOWSELALWAYS | LVS_EDITLABELS | LVS_SHAREIMAGELISTS, ID_FILES);
@@ -654,15 +673,27 @@ static LRESULT CALLBACK BrowserProc(HWND window, UINT message, WPARAM wp, LPARAM
             }
             if (header->code == TTN_NEEDTEXTA) {
                 NMTTDISPINFOA *tip = (NMTTDISPINFOA *)lp; int i;
-                static const int ids[] = {ID_BACK, ID_FORWARD, ID_UP, ID_SEARCH, ID_FOLDERS, ID_REFRESH, ID_VIEWS};
-                static const char *names[] = {"Back (right-click for history)", "Forward (right-click for history)", "Up", "Search", "Folders", "Refresh", "Views"};
-                for (i = 0; i < 7; ++i) if ((int)header->idFrom == ids[i]) tip->lpszText = (LPSTR)names[i];
+                static const int ids[] = {ID_BACK, ID_FORWARD, ID_UP, ID_SEARCH, ID_FOLDERS, ID_REFRESH, ID_VIEWS, ID_HISTORY};
+                static const char *names[] = {"Back (right-click for history)", "Forward (right-click for history)", "Up", "Search", "Folders", "Refresh", "Views", "History (Ctrl+H)"};
+                for (i = 0; i < 8; ++i) if ((int)header->idFrom == ids[i]) tip->lpszText = (LPSTR)names[i];
                 for (i = 0; i < BROWSER_EXTRA_TOOLS; ++i) if ((int)header->idFrom == extraCommands[i]) tip->lpszText = (LPSTR)extraNames[i];
             }
             return BrowserFilesNotify(browser, header);
         } return 0;
     case WM_MEASUREITEM: if (((MEASUREITEMSTRUCT *)lp)->CtlType == ODT_LISTVIEW) { ((MEASUREITEMSTRUCT *)lp)->itemHeight = 54; return TRUE; } break;
-    case WM_DRAWITEM: if (browser && ((DRAWITEMSTRUCT *)lp)->CtlType == ODT_LISTVIEW) {
+    case WM_DRAWITEM:
+        if (browser && ((DRAWITEMSTRUCT *)lp)->CtlID == ID_FOLDERS_CLOSE) {
+            DRAWITEMSTRUCT *draw = (DRAWITEMSTRUCT *)lp; RECT glyph = draw->rcItem;
+            HDC dc = PaintBufferBegin(&browser->tiles, draw->hDC, &draw->rcItem); HGDIOBJ old;
+            BOOL pressed = !!(draw->itemState & ODS_SELECTED);
+            FillRect(dc, &glyph, (HBRUSH)(COLOR_BTNFACE + 1)); DrawEdge(dc, &glyph, pressed ? EDGE_SUNKEN : EDGE_RAISED, BF_RECT);
+            if (pressed) OffsetRect(&glyph, 1, 1);
+            old = SelectObject(dc, browserFont);
+            BrowserDrawSymbol(dc, &glyph, 'r', GetSysColor(COLOR_BTNTEXT));
+            if (draw->itemState & ODS_FOCUS) { InflateRect(&glyph, -3, -3); DrawFocusRect(dc, &glyph); }
+            SelectObject(dc, old); PaintBufferEnd(&browser->tiles, draw->hDC, &draw->rcItem); return TRUE;
+        }
+        if (browser && ((DRAWITEMSTRUCT *)lp)->CtlType == ODT_LISTVIEW) {
         DRAWITEMSTRUCT draw = *(DRAWITEMSTRUCT *)lp; HDC target = draw.hDC;
         draw.hDC = PaintBufferBegin(&browser->tiles, target, &draw.rcItem); BrowserFilesDraw(browser, &draw);
         PaintBufferEnd(&browser->tiles, target, &draw.rcItem); return TRUE; } break;
@@ -686,20 +717,42 @@ static LRESULT CALLBACK BrowserProc(HWND window, UINT message, WPARAM wp, LPARAM
         }
         if (browser && (HWND)wp == browser->files) { BrowserFilesContext(browser, lp); return 0; } break;
     case WM_LBUTTONDOWN:
-        if (browser && browser->options.pane != BROWSER_PANE_NONE && LOWORD(lp) >= browser->options.treeWidth - 2 && LOWORD(lp) <= browser->options.treeWidth + 5) { browser->dragging = TRUE; SetCapture(window); return 0; } break;
+        if (browser) { POINT point = {(short)LOWORD(lp), (short)HIWORD(lp)};
+            if (PtInRect(&browser->splitter, point)) {
+                browser->dragWidth = browser->options.treeWidth; browser->dragOffset = point.x - browser->splitter.left;
+                browser->dragging = TRUE; SetFocus(window); SetCapture(window); return 0;
+            }
+        } break;
     case WM_MOUSEMOVE:
-        if (browser && browser->dragging) { int width = (short)LOWORD(lp); if (width < 120) width = 120; if (width > 400) width = 400; browser->options.treeWidth = width; BrowserLayout(browser); return 0; } break;
+        if (browser && browser->dragging) {
+            RECT client; int width = (short)LOWORD(lp) - browser->dragOffset;
+            GetClientRect(window, &client); if (width > client.right - 186) width = client.right - 186;
+            if (width < 120) width = 120;
+            if (width > 400) width = 400;
+            browser->options.treeWidth = width; BrowserLayout(browser); return 0;
+        } break;
     case WM_LBUTTONUP:
         if (browser && browser->dragging) { browser->dragging = FALSE; ReleaseCapture(); BrowserSaveOptions(&browser->options); return 0; } break;
+    case WM_SETCURSOR:
+        if (browser && LOWORD(lp) == HTCLIENT) {
+            POINT point; GetCursorPos(&point); ScreenToClient(window, &point);
+            if (browser->dragging || PtInRect(&browser->splitter, point)) { SetCursor(LoadCursorA(NULL, IDC_SIZEWE)); return TRUE; }
+        } break;
+    case WM_CANCELMODE: case WM_CAPTURECHANGED:
+        if (browser && browser->dragging) {
+            browser->dragging = FALSE; browser->options.treeWidth = browser->dragWidth;
+            if (GetCapture() == window) ReleaseCapture();
+            BrowserLayout(browser);
+        } break;
     case WM_PAINT:
         if (browser) { PAINTSTRUCT paint; RECT rect; HDC target = BeginPaint(window, &paint), dc;
             GetClientRect(window, &rect); dc = PaintBufferBegin(&browser->background, target, &rect);
-            FillRect(dc, &rect, (HBRUSH)(COLOR_BTNFACE + 1)); PaintBufferEnd(&browser->background, target, &rect); EndPaint(window, &paint); return 0; } break;
+            PaintFrame(browser, dc); PaintBufferEnd(&browser->background, target, &rect); EndPaint(window, &paint); return 0; } break;
     case WM_ERASEBKGND:
         if (browser) {
             /* Flat toolbars ask the parent to erase into their own/memory DC.
              * Supply the classic face there; the frame itself stays buffered. */
-            if (WindowFromDC((HDC)wp) != window) { RECT rect; GetClientRect(window, &rect); FillRect((HDC)wp, &rect, (HBRUSH)(COLOR_BTNFACE + 1)); }
+            PaintFrame(browser, (HDC)wp);
             return TRUE;
         } break;
     case WM_DESTROY:
@@ -786,7 +839,7 @@ static BOOL CALLBACK CloseBrowser(HWND window, LPARAM unused)
     GetWindowThreadProcessId(window, &process); if (process == GetCurrentProcessId()) DestroyWindow(window);
     return TRUE;
 }
-void BrowserShutdown(void) { EnumWindows(CloseBrowser, 0); }
+void BrowserShutdown(void) { EnumWindows(CloseBrowser, 0); if (browserSymbols) { DeleteObject(browserSymbols); browserSymbols = NULL; } }
 
 static void CheckControl(HWND window, const char *label, int id, BOOL checked, int x, int y, int width)
 {
@@ -863,19 +916,27 @@ void BrowserOpenOptions(Browser *browser)
 }
 BOOL BrowserRegister(HINSTANCE instance, HFONT font)
 {
-    WNDCLASSA cls; browserInstance = instance; browserFont = font;
+    WNDCLASSA cls; LOGFONTA symbols; browserInstance = instance; browserFont = font;
+    ZeroMemory(&symbols, sizeof(symbols)); symbols.lfHeight = -14; symbols.lfCharSet = SYMBOL_CHARSET;
+    lstrcpyA(symbols.lfFaceName, "Marlett"); browserSymbols = CreateFontIndirectA(&symbols);
+    if (browserSymbols) {
+        char face[LF_FACESIZE]; HDC dc = GetDC(NULL); HGDIOBJ old = SelectObject(dc, browserSymbols);
+        face[0] = 0; GetTextFaceA(dc, sizeof(face), face); SelectObject(dc, old); ReleaseDC(NULL, dc);
+        if (lstrcmpiA(face, "Marlett")) { DeleteObject(browserSymbols); browserSymbols = NULL; }
+    }
     ZeroMemory(&cls, sizeof(cls)); cls.hInstance = instance; cls.hCursor = LoadCursorA(NULL, IDC_ARROW);
     cls.hIcon = LoadIconA(NULL, IDI_APPLICATION); cls.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1); cls.lpfnWndProc = BrowserProc;
     cls.lpszClassName = BROWSER_CLASS; if (!RegisterClassA(&cls)) return FALSE;
     cls.lpszClassName = BROWSER_NAMESPACE_CLASS; if (!RegisterClassA(&cls)) return FALSE;
     cls.lpszClassName = optionsClass; cls.lpfnWndProc = OptionsProc;
-    return RegisterClassA(&cls) != 0 && BrowserSidebarRegister();
+    return RegisterClassA(&cls) != 0 && BrowserSidebarRegister() && BrowserSearchRegister();
 }
 BOOL BrowserTranslate(MSG *message)
 {
     HWND root = message->hwnd; Browser *browser; BOOL address;
     while (root && (GetWindowLongA(root, GWL_STYLE) & WS_CHILD)) root = GetParent(root);
     { char kind[64]; GetClassNameA(root, kind, sizeof(kind));
+      if (!lstrcmpA(kind, BROWSER_SEARCH_CLASS)) return BrowserSearchTranslate(message);
       if (!lstrcmpA(kind, optionsClass)) {
           if (message->message == WM_KEYDOWN && (message->wParam == VK_ESCAPE || message->wParam == VK_RETURN)) { SendMessageA(root, WM_COMMAND, message->wParam == VK_ESCAPE ? IDCANCEL : IDOK, 0); return TRUE; }
           return IsDialogMessageA(root, message);
@@ -897,6 +958,7 @@ BOOL BrowserTranslate(MSG *message)
     if (message->message == WM_KEYDOWN) {
         int command = message->wParam == VK_F5 ? ID_REFRESH : message->wParam == VK_F3 ? ID_SEARCH : 0;
         HWND sidebar = BrowserSidebarWindow(browser);
+        if (browser->dragging && message->wParam == VK_ESCAPE) { SendMessageA(root, WM_CANCELMODE, 0, 0); return TRUE; }
         BOOL inSidebar = sidebar && (message->hwnd == sidebar || IsChild(sidebar, message->hwnd));
         if (GetKeyState(VK_CONTROL) & 0x8000) {
             if (message->wParam == 'E') command = ID_SEARCH;
@@ -907,8 +969,8 @@ BOOL BrowserTranslate(MSG *message)
             if (message->wParam == VK_RETURN && (GetDlgCtrlID(message->hwnd) == ID_SEARCH_NAME || GetDlgCtrlID(message->hwnd) == ID_SEARCH_SCOPE)) {
                 BrowserSearchCommand(browser, ID_SEARCH_START, BN_CLICKED); return TRUE;
             }
-            if (message->wParam == VK_RETURN && GetDlgCtrlID(message->hwnd) == ID_SEARCH_RESULTS) {
-                BrowserSearchCommand(browser, ID_SEARCH_RESULTS, LBN_DBLCLK); return TRUE;
+            if (message->wParam == VK_RETURN && GetDlgCtrlID(message->hwnd) == ID_HISTORY_LIST) {
+                SendMessageA(GetParent(message->hwnd), WM_COMMAND, MAKELONG(ID_HISTORY_LIST, LBN_DBLCLK), (LPARAM)message->hwnd); return TRUE;
             }
             return IsDialogMessageA(sidebar, message);
         }
