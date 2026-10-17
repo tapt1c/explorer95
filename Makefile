@@ -20,7 +20,7 @@ OBJECTS = $(SOURCES:%.c=build/obj32/%.o)
 OBJECTS64 = $(SOURCES:%.c=build/obj64/%.o)
 TEST_OBJECTS = $(TEST_SOURCES:%.c=build/obj32/%.o)
 TEST_OBJECTS64 = $(TEST_SOURCES:%.c=build/obj64/%.o)
-TEST_LIBS = -lcomctl32 -luuid -lole32 -ladvapi32 -lgdi32 -luser32 -lkernel32
+TEST_LIBS = -lcomctl32 -lshell32 -luuid -lole32 -ladvapi32 -lgdi32 -luser32 -lkernel32
 
 .PHONY: all clean check check-build layout smoke ui64-smoke FORCE
 all: build/explorer95.exe

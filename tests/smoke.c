@@ -15,6 +15,7 @@
 
 static PROCESS_INFORMATION process;
 static HWND child;
+static void PumpFor(DWORD duration);
 typedef enum TestGroup { GROUP_FULL, GROUP_CORE, GROUP_MENU, GROUP_BROWSER } TestGroup;
 
 void *memset(void *destination, int value, size_t count)
@@ -74,10 +75,38 @@ static DWORD WaitForGuiProcess(HANDLE target, DWORD timeout)
     }
 }
 
+static void SaveFailureScreen(void)
+{
+    int width = GetSystemMetrics(SM_CXSCREEN), height = GetSystemMetrics(SM_CYSCREEN);
+    DWORD bytes = (DWORD)width * height * 4, written; BYTE *pixels;
+    HDC screen = GetDC(NULL), memory = CreateCompatibleDC(screen);
+    HBITMAP bitmap = CreateCompatibleBitmap(screen, width, height); HGDIOBJ old; BITMAPINFO info;
+    BITMAPFILEHEADER header; HANDLE file;
+    if (!screen || !memory || !bitmap) goto done;
+    old = SelectObject(memory, bitmap); BitBlt(memory, 0, 0, width, height, screen, 0, 0, SRCCOPY); SelectObject(memory, old);
+    pixels = HeapAlloc(GetProcessHeap(), 0, bytes); if (!pixels) goto done;
+    ZeroMemory(&info, sizeof(info)); info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = width; info.bmiHeader.biHeight = -height; info.bmiHeader.biPlanes = 1; info.bmiHeader.biBitCount = 32;
+    if (GetDIBits(screen, bitmap, 0, height, pixels, &info, DIB_RGB_COLORS)) {
+        ZeroMemory(&header, sizeof(header)); header.bfType = 0x4d42;
+        header.bfOffBits = sizeof(header) + sizeof(BITMAPINFOHEADER); header.bfSize = header.bfOffBits + bytes;
+        file = CreateFileA("build\\smoke-failure.bmp", GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (file != INVALID_HANDLE_VALUE) {
+            WriteFile(file, &header, sizeof(header), &written, NULL); WriteFile(file, &info.bmiHeader, sizeof(BITMAPINFOHEADER), &written, NULL);
+            WriteFile(file, pixels, bytes, &written, NULL); CloseHandle(file);
+        }
+    }
+    HeapFree(GetProcessHeap(), 0, pixels);
+done:
+    if (bitmap) DeleteObject(bitmap);
+    if (memory) DeleteDC(memory);
+    if (screen) ReleaseDC(NULL, screen);
+}
 static void Check(BOOL okay, const char *description)
 {
     Log(okay ? "PASS: " : "FAIL: "); Log(description); Log("\r\n");
     if (!okay) {
+        if (process.hProcess) SaveFailureScreen();
         if (child) PostMessageA(child, WM_CLOSE, 0, 0);
         if (process.hProcess) {
             HWND bar = FindWindowA("Explorer95.Taskbar", NULL);
@@ -468,21 +497,44 @@ static void BrowserTests(HWND browser, const char *fixture, const char *settings
             "changing browser view preserves the complete directory contents");
         if (i == 4) Check((GetWindowLongA(list, GWL_STYLE) & LVS_OWNERDRAWFIXED) != 0, "Tiles uses a Win95-compatible owner-drawn list rather than a newer control mode");
         if (i == 5) {
-            HDC dc; int x, y, background = 0, painted = 0; COLORREF windowColor = GetSysColor(COLOR_WINDOW);
+            HDC dc; RECT area; int x, y, background = 0, painted = 0; COLORREF windowColor = GetSysColor(COLOR_WINDOW);
             /* Pixel reads require an unobscured window. A native file-operation
-             * dialog can return activation to the earlier Start owner in Wine. */
+             * dialog can return activation to the earlier Start owner in Wine.
+             * Extra fixture windows advance CW_USEDEFAULT placement: fit the
+             * browser to the work area before sampling its list pixels. */
+            SystemParametersInfoA(SPI_GETWORKAREA, 0, &area, 0); ShowWindow(browser, SW_RESTORE);
+            MoveWindow(browser, area.left + 4, area.top + 4, area.right - area.left - 8, area.bottom - area.top - 8, TRUE);
             SendMessageA(FindWindowA("Explorer95.Start", NULL), WM_ACTIVATE, WA_INACTIVE, (LPARAM)browser);
             SetForegroundWindow(browser); BringWindowToTop(browser);
             RedrawWindow(browser, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
             started = GetTickCount();
             do {
-                Sleep(50); background = painted = 0; dc = GetDC(list);
+                /* Focus/IME messages can synchronously call this GUI thread.
+                 * Sleeping here can leave the other process midway through
+                 * hiding Start, so GetPixel samples its stale backing pixels. */
+                PumpFor(50); background = painted = 0; dc = GetDC(list);
                 for (y = 18; y < 82; y += 8) for (x = 22; x < 102; x += 8) {
                     COLORREF pixel = GetPixel(dc, x, y);
                     if (pixel == windowColor) ++background; else if (pixel != CLR_INVALID) ++painted;
                 }
                 ReleaseDC(list, dc);
             } while ((background <= 30 || !painted) && GetTickCount() - started < 3000);
+            if (background <= 30 || !painted) {
+                char note[200], kind[64]; RECT bounds; GetWindowRect(list, &bounds); GetClassNameA(GetForegroundWindow(), kind, sizeof(kind));
+                wsprintfA(note, "Thumbnail samples: background=%d painted=%d list=(%ld,%ld,%ld,%ld) foreground=%s\r\n",
+                    background, painted, bounds.left, bounds.top, bounds.right, bounds.bottom, kind); Log(note);
+                dc = GetDC(list); wsprintfA(note, "Thumbnail colors: expected=%08lx actual=%08lx selected=%ld\r\n", windowColor,
+                    GetPixel(dc, 22, 18), (LONG)SendMessageA(list, LVM_GETSELECTEDCOUNT, 0, 0)); ReleaseDC(list, dc); Log(note);
+                {
+                    HWND start = FindWindowA("Explorer95.Start", NULL), hit; POINT point = {bounds.left + 22, bounds.top + 18}; DWORD pid;
+                    hit = WindowFromPoint(point); GetClassNameA(hit, kind, sizeof(kind)); GetWindowThreadProcessId(hit, &pid);
+                    wsprintfA(note, "Thumbnail hit=%s pid=%lu self=%lu app=%lu start-visible=%d start-style=%08lx\r\n", kind, pid,
+                        GetCurrentProcessId(), process.dwProcessId, IsWindowVisible(start), GetWindowLongA(start, GWL_STYLE)); Log(note);
+                    point.x = bounds.left + 124; point.y = bounds.top + 110; hit = WindowFromPoint(point);
+                    GetClassNameA(hit, kind, sizeof(kind)); GetWindowThreadProcessId(hit, &pid);
+                    wsprintfA(note, "Black patch hit=%s pid=%lu\r\n", kind, pid); Log(note);
+                }
+            }
             Check(background > 30 && painted > 0, "thumbnail icons paint over a transparent background rather than a black rectangle");
         }
     }
@@ -744,6 +796,8 @@ static void PumpFor(DWORD duration)
         Sleep(10);
     } while (GetTickCount() - started < duration);
 }
+#include "quick_launch_cases.h"
+#include "desktop_delete_cases.h"
 static void WinKeyTests(HWND bar, HWND menu)
 {
     HWND fixture; int key;
@@ -1327,6 +1381,7 @@ void start(void)
     while (!FindWindowExA(desktop, NULL, NULL, NULL) && GetTickCount() - started < 10000) Sleep(50);
     Check(FindWindowExA(desktop, NULL, NULL, NULL) != NULL, "desktop hosts the installed native shell view");
     if (group != GROUP_BROWSER) WinKeyTests(bar, FindWindowA("Explorer95.Start", NULL));
+    if (group != GROUP_BROWSER) QuickLaunchTests(bar, settings);
     if (group != GROUP_MENU) DesktopRefreshTests(desktop);
     if (group == GROUP_MENU) {
         menu = FindWindowA("Explorer95.Start", NULL);
@@ -1346,6 +1401,7 @@ void start(void)
     GetWindowTextA(browser, actual, sizeof(actual));
     Check(!lstrcmpA(title, actual), "address navigation updates window title");
     Check(SendMessageA(files, LVM_GETITEMCOUNT, 0, 0) == 3, "folder enumeration includes two folders and a file");
+    DesktopDeleteTests(desktop, browser, fixture);
 
     /* Home selects the first sorted item; Enter must open that folder. */
     PostMessageA(files, WM_KEYDOWN, VK_HOME, 0);
@@ -1439,6 +1495,8 @@ shutdown:
     Check(CreateProcessA(NULL, command, NULL, NULL, FALSE, 0, NULL, NULL, &startup, &process), "restart with saved profile");
     bar = WaitFor("Explorer95.Taskbar", NULL);
     Check(bar != NULL, "shell restarts successfully");
+    Check(GetPrivateProfileIntA("Taskbar", "QuickLaunchSize", 0, settings) == 150 && QuickExtent(bar) == 150,
+        "custom Quick Launch extent survives shell restart and later settings edits");
     Check(GetPrivateProfileIntA("Start", "RecentCount", -1, settings) == 2, "recent count survives restart");
     SendMessageA(bar, WM_COMMAND, 600, 0);
     { HWND properties = WaitFor("Explorer95.Properties", NULL), customize;

@@ -91,6 +91,11 @@ void BrowserUpdate(Browser *browser)
     EnableMenuItem(menu, ID_VIEW_TILES, MF_BYCOMMAND | (browser->native ? MF_GRAYED : MF_ENABLED));
     EnableMenuItem(menu, ID_VIEW_THUMBNAILS, MF_BYCOMMAND | (browser->native ? MF_GRAYED : MF_ENABLED));
     EnableMenuItem(menu, ID_NEWFOLDER, MF_BYCOMMAND | (browser->path[0] ? MF_ENABLED : MF_GRAYED));
+    {
+        BOOL canEmpty = browser->recycleBin && browser->native && !browser->busy && ListView_GetItemCount(NativeViewList(browser->native)) > 0;
+        EnableMenuItem(menu, ID_EMPTY_RECYCLE, MF_BYCOMMAND | (canEmpty ? MF_ENABLED : MF_GRAYED));
+        if (browser->toolbar) SendMessageA(browser->toolbar, TB_ENABLEBUTTON, ID_EMPTY_RECYCLE, MAKELONG(canEmpty, 0));
+    }
     EnableMenuItem(menu, ID_FAVORITE_ADD, MF_BYCOMMAND | (browser->path[0] ? MF_ENABLED : MF_GRAYED));
     if (browser->status) {
         char status[64], previous[64]; int count = browser->native ? ListView_GetItemCount(NativeViewList(browser->native)) : ListView_GetItemCount(browser->files);
@@ -131,6 +136,7 @@ void BrowserBuildToolbar(Browser *browser)
     ToolbarButton(browser, ID_SEARCH, "Search", stock + STD_FIND, TBSTYLE_BUTTON);
     ToolbarButton(browser, ID_FOLDERS, "Folders", history >= 0 ? history + HIST_VIEWTREE : stock + STD_FILEOPEN, TBSTYLE_CHECK);
     ToolbarButton(browser, ID_VIEWS, "Views", views >= 0 ? views + VIEW_LARGEICONS : stock + STD_PRINTPRE, TBSTYLE_BUTTON);
+    if (browser->recycleBin) ToolbarButton(browser, ID_EMPTY_RECYCLE, "Empty Recycle Bin", stock + STD_DELETE, TBSTYLE_BUTTON);
     if (browser->options.extraTools) ToolbarButton(browser, 0, "", 8, TBSTYLE_SEP);
     for (i = 0; i < BROWSER_EXTRA_TOOLS; ++i) if (browser->options.extraTools & (1U << i))
         ToolbarButton(browser, extraCommands[i], extraNames[i], stock + extraImages[i], TBSTYLE_BUTTON);
@@ -197,7 +203,7 @@ static BOOL NavigateNative(HWND window, LPCITEMIDLIST pidl)
 BOOL BrowserNavigate(Browser *browser, const char *requested, LPCITEMIDLIST pidl, int historyIndex)
 {
     char path[MAX_PATH], title[MAX_PATH + 32]; LPITEMIDLIST absolute = NULL, recorded = NULL; NativeView *native = NULL;
-    FileEntry *entries = NULL; HANDLE watch = NULL; int total = 0, i; BOOL same; DWORD length;
+    FileEntry *entries = NULL; HANDLE watch = NULL; int total = 0, i; BOOL same, wasBin = browser->recycleBin; DWORD length;
     if (browser->closing) return FALSE;
     path[0] = 0;
     if (pidl && pidl->mkid.cb) SHGetPathFromIDListA(pidl, path);
@@ -246,6 +252,13 @@ BOOL BrowserNavigate(Browser *browser, const char *requested, LPCITEMIDLIST pidl
     browser->native = native;
     ListView_DeleteAllItems(browser->files); BrowserFilesFree(browser->entries); browser->entries = entries;
     EnvFree(browser->pidl); browser->pidl = absolute; lstrcpyA(browser->path, path);
+    browser->recycleBin = FALSE;
+    if (absolute) {
+        LPITEMIDLIST bin = NULL;
+        if (SUCCEEDED(SHGetSpecialFolderLocation(browser->window, CSIDL_BITBUCKET, &bin))) {
+            browser->recycleBin = SamePidl(absolute, bin); CoTaskMemFree(bin);
+        }
+    }
     ShowWindow(browser->files, native ? SW_HIDE : SW_SHOW);
     if (native) {
         SHFILEINFOA info; ZeroMemory(&info, sizeof(info));
@@ -257,6 +270,7 @@ BOOL BrowserNavigate(Browser *browser, const char *requested, LPCITEMIDLIST pidl
     SendMessageA(browser->address, CB_RESETCONTENT, 0, 0);
     for (i = browser->historyCount - 1; i >= 0; --i) if (browser->history[i].path[0]) SendMessageA(browser->address, CB_ADDSTRING, 0, (LPARAM)browser->history[i].path);
     SetWindowTextA(browser->address, path[0] ? path : title);
+    if (wasBin != browser->recycleBin) BrowserBuildToolbar(browser);
     BrowserTreeSync(browser); BrowserLayout(browser); BrowserUpdate(browser); return TRUE;
 }
 void BrowserRefresh(Browser *browser)
@@ -335,6 +349,7 @@ static void AddressGo(Browser *browser)
     lstrcpyA(input, expanded);
     if (!lstrcmpiA(input, "My Computer")) { Special(browser, CSIDL_DRIVES); return; }
     if (!lstrcmpiA(input, "Desktop")) { Special(browser, CSIDL_DESKTOP); return; }
+    if (!lstrcmpiA(input, "Recycle Bin")) { Special(browser, CSIDL_BITBUCKET); return; }
     if (input[0] == '\\' && input[1] != '\\' && browser->path[1] == ':') {
         if (lstrlenA(input) + 2 >= MAX_PATH) return;
         path[0] = browser->path[0]; path[1] = ':'; lstrcpyA(path + 2, input); BrowserNavigate(browser, path, NULL, -1); return;
@@ -391,6 +406,7 @@ static void BuildMenu(Browser *browser)
     HMENU menu = CreateMenu(), file = CreatePopupMenu(), edit = CreatePopupMenu(), view = CreatePopupMenu(), tools = CreatePopupMenu(), help = CreatePopupMenu(), sort = CreatePopupMenu();
     int i;
     AppendMenuA(file, MF_STRING, ID_NEWFOLDER, "New &Folder"); AppendMenuA(file, MF_STRING, ID_FILE_PROPERTIES, "&Properties\tAlt+Enter");
+    AppendMenuA(file, MF_STRING, ID_EMPTY_RECYCLE, "&Empty Recycle Bin");
     AppendMenuA(file, MF_SEPARATOR, 0, NULL); AppendMenuA(file, MF_STRING, ID_BROWSER_CLOSE, "&Close");
     AppendMenuA(edit, MF_STRING, ID_CUT, "Cu&t\tCtrl+X"); AppendMenuA(edit, MF_STRING, ID_COPY, "&Copy\tCtrl+C");
     AppendMenuA(edit, MF_STRING, ID_PASTE, "&Paste\tCtrl+V"); AppendMenuA(edit, MF_STRING, ID_DELETE, "&Delete\tDel");
@@ -421,6 +437,16 @@ static void Command(Browser *browser, int command)
         int index = browser->historyIndex + (command == ID_BACK ? -1 : 1);
         if (index >= 0 && index < browser->historyCount) BrowserNavigate(browser, browser->history[index].path[0] ? browser->history[index].path : NULL, browser->history[index].pidl, index);
     } else if (command == ID_REFRESH) BrowserRefresh(browser);
+    else if (command == ID_EMPTY_RECYCLE) {
+        HRESULT result;
+        if (!browser->recycleBin || !browser->native || browser->busy || !ListView_GetItemCount(NativeViewList(browser->native))) return;
+        browser->busy = TRUE; BrowserUpdate(browser);
+        result = NativeEmptyRecycleBin(browser->window);
+        browser->busy = FALSE;
+        if (FAILED(result) && result != E_ABORT && result != HRESULT_FROM_WIN32(ERROR_CANCELLED))
+            MessageBoxA(browser->window, "Windows could not empty the Recycle Bin. You can also use its system context menu.", "Explorer95", MB_OK | MB_ICONEXCLAMATION);
+        BrowserRefresh(browser);
+    }
     else if (command == ID_SEARCH) {
         EnvironmentFind(browser->window, browser->path[0] ? browser->path : NULL);
     } else if (command == ID_FOLDERS || command == ID_FOLDERS_CLOSE) {

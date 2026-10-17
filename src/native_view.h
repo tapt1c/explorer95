@@ -17,6 +17,7 @@ HWND OpenNativeFolder(LPCITEMIDLIST absolute);
 HWND NativeViewList(NativeView *view);
 void NativeViewSetNavigator(NativeView *view, BOOL (*navigate)(HWND, LPCITEMIDLIST));
 BOOL NativeViewInvoke(NativeView *view, const char *verb, BOOL background);
+HRESULT NativeEmptyRecycleBin(HWND owner);
 void NativeViewSetHost(const EnvironmentHost *host);
 void DesktopBackgroundMenu(NativeView *view, POINT point, HWND owner);
 BOOL NativeViewMenuMessage(NativeView *view, UINT message, WPARAM wp, LPARAM lp);

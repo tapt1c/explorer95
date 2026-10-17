@@ -58,6 +58,7 @@ static BOOL WriteOptions(const char *ini, const ShellOptions *o)
     SAVE("Taskbar", "Edge", edge); SAVE("Taskbar", "Rows", rows); SAVE("Taskbar", "TaskWidth", taskWidth);
     SAVE("Taskbar", "Locked", locked); SAVE("Taskbar", "AutoHide", autoHide); SAVE("Taskbar", "AlwaysOnTop", topmost);
     SAVE("Taskbar", "Clock", clock); SAVE("Taskbar", "QuickLaunch", quick); SAVE("Taskbar", "LargeIcons", largeIcons);
+    SAVE("Taskbar", "QuickLaunchSize", quickSize);
     SAVE("Taskbar", "GroupTasks", group); SAVE("Taskbar", "HideInactive", hideInactive); SAVE("Taskbar", "InactiveSeconds", traySeconds);
     SAVE("Start", "VisibleItems", startItems); SAVE("Start", "FolderMenus", startMenus); SAVE("Start", "LargeIcons", largeStartIcons);
     SAVE("Start", "RecentCount", recentCount); SAVE("Start", "Classic", classicStart); SAVE("Start", "HoverMenus", hoverMenus);
@@ -113,6 +114,12 @@ static void Checkbox(HWND w, int p, const char *text, int id, BOOL checked, int 
     SendMessageA(box, BM_SETCHECK, checked ? BST_CHECKED : BST_UNCHECKED, 0);
 }
 static BOOL Checked(HWND w, int id) { return SendDlgItemMessageA(w, id, BM_GETCHECK, 0, 0) == BST_CHECKED; }
+void PropertiesQuickLayoutChanged(void)
+{
+    if (!env.properties) return;
+    InvalidateRect(GetDlgItem(env.properties, ID_PREVIEW_TASKBAR), NULL, FALSE);
+    InvalidateRect(GetDlgItem(env.properties, ID_PREVIEW_DESKTOP), NULL, FALSE);
+}
 void PropertiesDesktopLayoutChanged(void)
 {
     BOOL wasLoading = loading;
@@ -147,10 +154,17 @@ static void PreviewTaskbar(HDC dc, const RECT *bounds, BOOL sampleTasks)
     begin = bounds->left + startWidth + 10; end = bounds->right - 8;
     if (quick) {
         HICON icon = EnvSystemIcon(35);
+        int extent = env.options.quickSize ? env.options.quickSize : slot + 12;
+        if (extent < slot + 12) extent = slot + 12;
+        if (extent > bounds->right - begin - 168) extent = bounds->right - begin - 168;
         SetRect(&part, begin - 4, bounds->top + 4, begin - 2, bounds->bottom - 3); DrawEdge(dc, &part, EDGE_ETCHED, BF_LEFT);
-        if (icon) { DrawIconEx(dc, begin + (slot - iconSize) / 2, bounds->top + (bounds->bottom - bounds->top - iconSize) / 2, icon, iconSize, iconSize, 0, NULL, DI_NORMAL); DestroyIcon(icon); }
-        begin += slot + 10;
-        SetRect(&part, begin - 4, bounds->top + 4, begin - 2, bounds->bottom - 3); DrawEdge(dc, &part, EDGE_ETCHED, BF_LEFT);
+        SetRect(&part, begin, bounds->top + (bounds->bottom - bounds->top - slot) / 2, begin + slot, bounds->top + (bounds->bottom - bounds->top + slot) / 2);
+        EnvPaintQuickButton(dc, &part, icon, iconSize, FALSE, FALSE, FALSE);
+        if (icon) DestroyIcon(icon);
+        begin += extent;
+        SetRect(&part, begin - 9, bounds->top + 4, begin - 1, bounds->bottom - 3);
+        EnvPaintQuickGrip(dc, &part, FALSE, Checked(env.properties, ID_LOCK));
+        begin += 3;
     }
     if (Checked(env.properties, ID_CLOCK)) {
         SetRect(&part, bounds->right - 71, bounds->top + 3, bounds->right - 3, bounds->bottom - 3);

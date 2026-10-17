@@ -60,7 +60,7 @@ typedef struct Browser {
     HICON icon;
     TreeNode *nodes;
     HTREEITEM computer;
-    BOOL treeSync, dragging, closing, layouting, busy, changingColors;
+    BOOL treeSync, dragging, closing, layouting, busy, changingColors, recycleBin;
     HANDLE watch;
     int sort; BOOL descending;
     PaintBuffer background, tiles;

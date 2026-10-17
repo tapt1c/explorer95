@@ -21,7 +21,7 @@ struct NativeView {
     IShellView *view;
     IContextMenu2 *context;
     LPITEMIDLIST absolute;
-    BOOL desktop;
+    BOOL desktop, deleting;
     BOOL (*navigate)(HWND, LPCITEMIDLIST);
     HBITMAP wallpaper;
     BOOL tiled, backgroundDirty, sized;
@@ -250,6 +250,51 @@ BOOL NativeViewMenuMessage(NativeView *view, UINT message, WPARAM wp, LPARAM lp)
     return SUCCEEDED(IContextMenu2_HandleMenuMsg(view->context, message, wp, lp));
 }
 
+static void DeleteDesktopSelection(NativeView *view)
+{
+    IDataObject *data = NULL; FORMATETC format; STGMEDIUM medium;
+    char *paths = NULL, *next; UINT count = 0, i, bytes = 1; BOOL valid = FALSE;
+    /* The original shell view is not required to expose its selection as
+     * IContextMenu. Use its standard filesystem data object when available. */
+    if (SUCCEEDED(IShellView_GetItemObject(view->view, SVGIO_SELECTION, &IID_IDataObject, (void **)&data))) {
+        ZeroMemory(&format, sizeof(format)); format.cfFormat = CF_HDROP;
+        format.dwAspect = DVASPECT_CONTENT; format.lindex = -1; format.tymed = TYMED_HGLOBAL;
+        if (SUCCEEDED(IDataObject_GetData(data, &format, &medium))) {
+            count = DragQueryFileA((HDROP)medium.hGlobal, 0xffffffff, NULL, 0);
+            valid = count && count <= 4096 && count == ListView_GetSelectedCount(view->list);
+            for (i = 0; valid && i < count; ++i) {
+                UINT length = DragQueryFileA((HDROP)medium.hGlobal, i, NULL, 0);
+                if (!length || length >= MAX_PATH) valid = FALSE;
+                else bytes += length + 1;
+            }
+            if (valid) paths = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, bytes);
+            if (valid && !paths) {
+                ReleaseStgMedium(&medium); IDataObject_Release(data);
+                MessageBoxA(view->parent, "Not enough memory to prepare the selected files for deletion.", "Explorer95", MB_OK | MB_ICONEXCLAMATION); return;
+            }
+            next = paths;
+            for (i = 0; valid && i < count; ++i) {
+                UINT length = DragQueryFileA((HDROP)medium.hGlobal, i, NULL, 0);
+                if (!length || length >= MAX_PATH || length + 2 > bytes - (UINT)(next - paths) ||
+                    DragQueryFileA((HDROP)medium.hGlobal, i, next, length + 1) != length) valid = FALSE;
+                else next += length + 1;
+            }
+            ReleaseStgMedium(&medium);
+        }
+        IDataObject_Release(data);
+    }
+    if (valid && paths) {
+        SHFILEOPSTRUCTA operation; int result;
+        ZeroMemory(&operation, sizeof(operation)); operation.hwnd = view->parent;
+        operation.wFunc = FO_DELETE; operation.pFrom = paths;
+        operation.fFlags = (GetKeyState(VK_SHIFT) & 0x8000) ? 0 : FOF_ALLOWUNDO;
+        result = SHFileOperationA(&operation);
+        /* Cancel must not fall through to a second deletion attempt. */
+        if (!result && !operation.fAnyOperationsAborted) NativeViewRefresh(view);
+    } else NativeViewInvoke(view, "delete", FALSE);
+    if (paths) HeapFree(GetProcessHeap(), 0, paths);
+}
+
 static LRESULT CALLBACK Subclass(HWND window, UINT message, WPARAM wp, LPARAM lp)
 {
     NativeView *view = (NativeView *)GetPropA(window, property);
@@ -278,6 +323,15 @@ static LRESULT CALLBACK Subclass(HWND window, UINT message, WPARAM wp, LPARAM lp
         if ((message == WM_LBUTTONDBLCLK || (message == WM_KEYDOWN && wp == VK_RETURN)) && OpenDesktopSelection(view))
             return 0;
         if (message == WM_KEYDOWN && wp == VK_F5) { NativeViewRefresh(view); return 0; }
+        if (message == WM_KEYDOWN && wp == VK_DELETE && !ListView_GetEditControl(window)) {
+            if (!view->deleting && !(lp & (1UL << 30)) && ListView_GetSelectedCount(window)) {
+                SendMessageA(window, WM_CANCELMODE, 0, 0);
+                view->deleting = TRUE;
+                DeleteDesktopSelection(view);
+                view->deleting = FALSE; DesktopIconsAfterShellAction(view->icons);
+            }
+            return 0;
+        }
     }
     if (view->navigate && (message == WM_LBUTTONUP || message == WM_KEYUP || message == WM_NOTIFY))
         PostMessageA(view->parent, WM_APP + 32, 0, 0);
@@ -515,6 +569,46 @@ BOOL NativeViewInvoke(NativeView *view, const char *verb, BOOL background)
     ZeroMemory(&action, sizeof(action)); action.cbSize = sizeof(action); action.hwnd = view->parent;
     action.lpVerb = verb; action.nShow = SW_SHOWNORMAL; result = IContextMenu_InvokeCommand(context, &action);
     DestroyMenu(menu); IContextMenu_Release(context); return SUCCEEDED(result);
+}
+HRESULT NativeEmptyRecycleBin(HWND owner)
+{
+    typedef HRESULT (WINAPI *EmptyBin)(HWND, LPCSTR, DWORD);
+    EmptyBin empty = (EmptyBin)(void *)GetProcAddress(GetModuleHandleA("shell32.dll"), "SHEmptyRecycleBinA");
+    IShellFolder *desktop = NULL; IContextMenu *context = NULL; LPITEMIDLIST bin = NULL;
+    HMENU menu = NULL; CMINVOKECOMMANDINFO action; HRESULT result;
+    /* This export is newer than the Win95 baseline. Do not import it or
+     * suppress its standard confirmation/progress UI. Cancel is final. */
+    if (empty) return empty(owner, NULL, 0);
+    result = SHGetSpecialFolderLocation(owner, CSIDL_BITBUCKET, &bin);
+    if (SUCCEEDED(result)) result = SHGetDesktopFolder(&desktop);
+    if (SUCCEEDED(result)) {
+        LPCITEMIDLIST selected = bin;
+        result = IShellFolder_GetUIObjectOf(desktop, owner, 1, &selected, &IID_IContextMenu, NULL, (void **)&context);
+    }
+    if (SUCCEEDED(result)) {
+        menu = CreatePopupMenu();
+        result = menu ? IContextMenu_QueryContextMenu(context, menu, 0, 1, 0x6fff, CMF_NORMAL) : E_OUTOFMEMORY;
+        if (SUCCEEDED(result)) {
+            int i;
+            ZeroMemory(&action, sizeof(action)); action.cbSize = sizeof(action);
+            action.hwnd = owner; action.lpVerb = "empty"; action.nShow = SW_SHOWNORMAL;
+            /* Original shell extensions may only accept an integer verb.
+             * Identify it by its canonical name, never a localized caption. */
+            for (i = 0; i < GetMenuItemCount(menu); ++i) {
+                UINT id = GetMenuItemID(menu, i); char verb[80]; verb[0] = 0;
+                if (id && id < 0x7000 && SUCCEEDED(IContextMenu_GetCommandString(context, id - 1, GCS_VERBA, NULL, verb, sizeof(verb))) &&
+                    (!lstrcmpiA(verb, "empty") || !lstrcmpiA(verb, "emptyrecyclebin"))) {
+                    action.lpVerb = MAKEINTRESOURCEA(id - 1); break;
+                }
+            }
+            result = IContextMenu_InvokeCommand(context, &action);
+        }
+    }
+    if (menu) DestroyMenu(menu);
+    if (context) IContextMenu_Release(context);
+    if (desktop) IShellFolder_Release(desktop);
+    if (bin) CoTaskMemFree(bin);
+    return result;
 }
 HWND OpenNativeFolder(LPCITEMIDLIST absolute) { return BrowserOpenNamespace(absolute); }
 void NativeViewSetHost(const EnvironmentHost *callbacks) { host = *callbacks; }

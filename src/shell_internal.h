@@ -43,6 +43,8 @@
 #define ID_SHOWDESKTOP 609
 #define ID_QUICKFOLDER 610
 #define ID_CLEARRECENT 611
+#define ID_QUICKGRIP 612
+#define ID_QUICKMORE 613
 #define ID_EDGE 620
 #define ID_ROWS 621
 #define ID_WIDTH 622
@@ -79,7 +81,7 @@
 #define START_OPTION_COUNT 13
 
 typedef struct ShellOptions {
-    int edge, rows, taskWidth, recentCount;
+    int edge, rows, taskWidth, recentCount, quickSize;
     BOOL locked, autoHide, topmost, clock, quick, largeIcons, largeStartIcons, group, hideInactive;
     BOOL classicStart, hoverMenus, allowDrop, highlightNew, desktopIcons, autoArrange, classicShutdown;
     BOOL lockDesktopIcons, snapDesktopIcons;
@@ -148,6 +150,8 @@ int EnvStartButtonWidth(void);
 int EnvStartLabelWidth(const char *label);
 void EnvPaintStartButton(HDC dc, const RECT *bounds, const char *label, BOOL down, BOOL focus);
 void EnvPaintTaskButton(HDC dc, const RECT *bounds, const char *label, HICON icon, BOOL down, BOOL focus);
+void EnvPaintQuickButton(HDC dc, const RECT *bounds, HICON icon, int size, BOOL down, BOOL hot, BOOL focus);
+void EnvPaintQuickGrip(HDC dc, const RECT *bounds, BOOL vertical, BOOL locked);
 
 BOOL TrayCreate(void);
 int TrayWidth(void);
@@ -158,6 +162,7 @@ void TrayDestroy(void);
 void PropertiesOpen(void);
 void PropertiesSelectPage(int page);
 void PropertiesDesktopLayoutChanged(void);
+void PropertiesQuickLayoutChanged(void);
 BOOL PropertiesTranslate(MSG *message);
 void ShutdownShow(void);
 void ShutdownClose(void);
