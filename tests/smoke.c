@@ -1550,12 +1550,25 @@ void start(void)
     started = GetTickCount();
     while (!FindWindowExA(desktop, NULL, NULL, NULL) && GetTickCount() - started < 10000) Sleep(50);
     Check(FindWindowExA(desktop, NULL, NULL, NULL) != NULL, "desktop hosts the installed native shell view");
+    if (group != GROUP_MENU) {
+        HWND initial = WaitFor(BROWSER_CLASS, NULL);
+        /* The queued --open request can finish after the desktop appears.
+         * Its new window must not steal focus midway through Win-key input. */
+        started = GetTickCount();
+        while (initial && (!IsWindowVisible(initial) || GetForegroundWindow() != initial ||
+               SendMessageA(GetDlgItem(initial, ID_FILES), LVM_GETITEMCOUNT, 0, 0) != 3) &&
+               GetTickCount() - started < 5000) PumpFor(20);
+        Check(initial && IsWindowVisible(initial) && GetForegroundWindow() == initial &&
+              SendMessageA(GetDlgItem(initial, ID_FILES), LVM_GETITEMCOUNT, 0, 0) == 3,
+              "cold startup opens and activates the command-line folder after creating one shell");
+        PostMessageA(initial, WM_CLOSE, 0, 0); started = GetTickCount();
+        while (IsWindow(initial) && GetTickCount() - started < 3000) PumpFor(20);
+        Check(!IsWindow(initial), "startup folder closes before keyboard focus tests begin");
+    }
     if (group != GROUP_BROWSER) WinKeyTests(bar, FindWindowA("Explorer95.Start", NULL));
     if (group != GROUP_BROWSER) QuickLaunchTests(bar, settings);
     if (group != GROUP_MENU) {
-        HWND initial = WaitFor(BROWSER_CLASS,NULL);
-        Check(initial && SendMessageA(GetDlgItem(initial,ID_FILES),LVM_GETITEMCOUNT,0,0) == 3,"cold startup opens the command-line folder after creating one shell");
-        SendMessageA(initial,WM_CLOSE,0,0); FolderForwardTests(executable,settings,fixture,bar); DesktopRefreshTests(desktop);
+        FolderForwardTests(executable,settings,fixture,bar); DesktopRefreshTests(desktop);
         FolderSettingsTests(bar);
     }
     if (group == GROUP_MENU) {
