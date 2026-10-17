@@ -232,7 +232,7 @@ static void BrowserPaneTests(HWND browser, const char *fixture, const char *sett
             Check(!lstrcmpiA(value, targets[place]), "successful History navigation moves the actual namespace target to the front");
         }
     }
-    SaveScreen("build\\browser-history.bmp");
+    PumpFor(100); SaveScreen("build\\browser-history.bmp");
     SendMessageA(browser, WM_COMMAND, ID_BROWSER_OPTIONS, 0); options = WaitFor("Explorer95.FolderOptions", NULL);
     SendDlgItemMessageA(options, 497, BM_SETCHECK, BST_UNCHECKED, 0); SendMessageA(options, WM_COMMAND, IDOK, 0);
     Navigate(browser, fixture); wsprintfA(path, "%s\\empty", fixture); Navigate(browser, path);
