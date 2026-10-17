@@ -107,7 +107,7 @@ static UINT PidlLength(const BYTE *data, SIZE_T size, UINT offset)
     }
     return 0;
 }
-LPITEMIDLIST FolderSelectionPidl(IDataObject *data)
+static LPITEMIDLIST SelectionPidl(IDataObject *data, BOOL foldersOnly)
 {
     FORMATETC format; STGMEDIUM medium; LPITEMIDLIST absolute = NULL; IShellFolder *desktop;
     ZeroMemory(&medium,sizeof(medium));
@@ -133,10 +133,12 @@ LPITEMIDLIST FolderSelectionPidl(IDataObject *data)
         SFGAOF attributes = SFGAO_FOLDER;
         BOOL folder = FALSE;
         if (SUCCEEDED(SHGetDesktopFolder(&desktop))) {
-            folder = SUCCEEDED(IShellFolder_GetAttributesOf(desktop,1,(LPCITEMIDLIST *)&absolute,&attributes)) && (attributes & SFGAO_FOLDER);
+            folder = SUCCEEDED(IShellFolder_GetAttributesOf(desktop,1,(LPCITEMIDLIST *)&absolute,&attributes)) && (!foldersOnly || (attributes & SFGAO_FOLDER));
             IShellFolder_Release(desktop);
         }
         if (!folder) { HeapFree(GetProcessHeap(),0,absolute); absolute = NULL; }
     }
     return absolute;
 }
+LPITEMIDLIST FolderSelectionPidl(IDataObject *data) { return SelectionPidl(data, TRUE); }
+LPITEMIDLIST FolderSelectionFirstPidl(IDataObject *data) { return SelectionPidl(data, FALSE); }

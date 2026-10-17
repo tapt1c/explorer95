@@ -82,7 +82,7 @@ static DWORD WaitForGuiProcess(HANDLE target, DWORD timeout)
     }
 }
 
-static void SaveFailureScreen(void)
+static void SaveScreen(const char *path)
 {
     int width = GetSystemMetrics(SM_CXSCREEN), height = GetSystemMetrics(SM_CYSCREEN);
     DWORD bytes = (DWORD)width * height * 4, written; BYTE *pixels;
@@ -97,7 +97,7 @@ static void SaveFailureScreen(void)
     if (GetDIBits(screen, bitmap, 0, height, pixels, &info, DIB_RGB_COLORS)) {
         ZeroMemory(&header, sizeof(header)); header.bfType = 0x4d42;
         header.bfOffBits = sizeof(header) + sizeof(BITMAPINFOHEADER); header.bfSize = header.bfOffBits + bytes;
-        file = CreateFileA("build\\smoke-failure.bmp", GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+        file = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
         if (file != INVALID_HANDLE_VALUE) {
             WriteFile(file, &header, sizeof(header), &written, NULL); WriteFile(file, &info.bmiHeader, sizeof(BITMAPINFOHEADER), &written, NULL);
             WriteFile(file, pixels, bytes, &written, NULL); CloseHandle(file);
@@ -113,7 +113,7 @@ static void Check(BOOL okay, const char *description)
 {
     Log(okay ? "PASS: " : "FAIL: "); Log(description); Log("\r\n");
     if (!okay) {
-        if (process.hProcess) SaveFailureScreen();
+        if (process.hProcess) SaveScreen("build\\smoke-failure.bmp");
         if (child) PostMessageA(child, WM_CLOSE, 0, 0);
         if (process.hProcess) {
             HWND bar = FindWindowA("Explorer95.Taskbar", NULL);
@@ -863,6 +863,7 @@ static void PumpFor(DWORD duration)
 }
 #include "quick_launch_cases.h"
 #include "desktop_delete_cases.h"
+#include "browser_panes_cases.h"
 static void WinKeyEvent(UINT key, BOOL up)
 {
     keybd_event((BYTE)key, (BYTE)(key == VK_RWIN ? 0x5c : 0x5b),
@@ -1603,6 +1604,7 @@ void start(void)
     Check(!IsWindowVisible(menu), "Start button toggles the menu closed");
 
     BrowserColorTests(browser);
+    BrowserPaneTests(browser, fixture, settings);
     BrowserTests(browser, fixture, settingsDir, settings);
     DesktopStackTests(bar, desktop, browser);
     NativeFolderTests(menu);

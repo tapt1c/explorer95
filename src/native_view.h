@@ -17,6 +17,14 @@ HWND OpenNativeFolder(LPCITEMIDLIST absolute);
 HWND NativeViewList(NativeView *view);
 void NativeViewSetNavigator(NativeView *view, BOOL (*navigate)(HWND, LPCITEMIDLIST));
 BOOL NativeViewInvoke(NativeView *view, const char *verb, BOOL background);
+typedef struct NativeSelection {
+    int count;
+    SFGAOF capabilities;
+    char path[MAX_PATH], name[MAX_PATH], type[80];
+} NativeSelection;
+BOOL NativeViewSelection(NativeView *view, NativeSelection *selection);
+char *NativeViewSelectedPaths(NativeView *view);
+IContextMenu *NativeViewSelectionContext(NativeView *view);
 HRESULT NativeEmptyRecycleBin(HWND owner);
 void NativeViewSetHost(const EnvironmentHost *host);
 void DesktopBackgroundMenu(NativeView *view, POINT point, HWND owner);

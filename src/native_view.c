@@ -218,6 +218,57 @@ static void PaintBackground(NativeView *view, HDC target, HWND window)
 
 /* Route filesystem and virtual folders through our browser. Shell IDList Array
  * carries My Computer/Recycle Bin without relying on a filesystem path. */
+BOOL NativeViewSelection(NativeView *view, NativeSelection *selection)
+{
+    IDataObject *data; LPITEMIDLIST pidl; SHFILEINFOA info; IShellFolder *desktop;
+    ZeroMemory(selection, sizeof(*selection));
+    if (!view || !view->view) return FALSE;
+    selection->count = ListView_GetSelectedCount(view->list);
+    if (!selection->count || FAILED(IShellView_GetItemObject(view->view, SVGIO_SELECTION, &IID_IDataObject, (void **)&data))) return FALSE;
+    pidl = FolderSelectionFirstPidl(data); IDataObject_Release(data);
+    if (!pidl) return FALSE;
+    SHGetPathFromIDListA(pidl, selection->path);
+    ZeroMemory(&info, sizeof(info));
+    SHGetFileInfoA((LPCSTR)pidl, 0, &info, sizeof(info), SHGFI_PIDL | SHGFI_DISPLAYNAME | SHGFI_TYPENAME);
+    lstrcpynA(selection->name, info.szDisplayName, MAX_PATH); lstrcpynA(selection->type, info.szTypeName, sizeof(selection->type));
+    if (SUCCEEDED(SHGetDesktopFolder(&desktop))) {
+        selection->capabilities = SFGAO_FOLDER | SFGAO_FILESYSTEM | SFGAO_CANMOVE | SFGAO_CANCOPY | SFGAO_CANDELETE | SFGAO_CANRENAME | SFGAO_HASPROPSHEET;
+        if (FAILED(IShellFolder_GetAttributesOf(desktop, 1, (LPCITEMIDLIST *)&pidl, &selection->capabilities))) selection->capabilities = 0;
+        IShellFolder_Release(desktop);
+    }
+    HeapFree(GetProcessHeap(), 0, pidl); return TRUE;
+}
+IContextMenu *NativeViewSelectionContext(NativeView *view)
+{
+    IContextMenu *context = NULL;
+    if (view) IShellView_GetItemObject(view->view, SVGIO_SELECTION, &IID_IContextMenu, (void **)&context);
+    return context;
+}
+char *NativeViewSelectedPaths(NativeView *view)
+{
+    IDataObject *data; FORMATETC format; STGMEDIUM medium; char *paths = NULL;
+    if (!view || FAILED(IShellView_GetItemObject(view->view, SVGIO_SELECTION, &IID_IDataObject, (void **)&data))) return NULL;
+    ZeroMemory(&format, sizeof(format)); ZeroMemory(&medium, sizeof(medium));
+    format.cfFormat = CF_HDROP; format.dwAspect = DVASPECT_CONTENT; format.lindex = -1; format.tymed = TYMED_HGLOBAL;
+    if (SUCCEEDED(IDataObject_GetData(data, &format, &medium))) {
+        if (medium.tymed == TYMED_HGLOBAL) {
+            UINT i, count = DragQueryFileA((HDROP)medium.hGlobal, 0xffffffff, NULL, 0);
+            if (count && count <= 4096) {
+                char *next;
+                paths = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (SIZE_T)count * MAX_PATH + 1); next = paths;
+                for (i = 0; paths && i < count; ++i) {
+                    UINT length = DragQueryFileA((HDROP)medium.hGlobal, i, NULL, 0);
+                    if (!length || length >= MAX_PATH || DragQueryFileA((HDROP)medium.hGlobal, i, next, MAX_PATH) != length) {
+                        HeapFree(GetProcessHeap(), 0, paths); paths = NULL; break;
+                    }
+                    next += length + 1;
+                }
+            }
+        }
+        ReleaseStgMedium(&medium);
+    }
+    IDataObject_Release(data); return paths;
+}
 static BOOL OpenDesktopSelection(NativeView *view)
 {
     IDataObject *data;

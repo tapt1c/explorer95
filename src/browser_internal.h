@@ -18,12 +18,14 @@
 #define ID_OPTION_VIEW 494
 #define ID_OPTION_FOLDERS 495
 #define ID_OPTION_STATUS 496
+#define ID_OPTION_HISTORY 497
 #define ID_FAVORITE_ADD 510
 #define ID_FAVORITE_REMOVE 511
 #define ID_FAVORITE 520
 #define WM_BROWSER_REFRESH (WM_APP + 30)
 #define WM_BROWSER_NAVIGATE (WM_APP + 31)
 #define WM_BROWSER_STATE (WM_APP + 32)
+#define ID_CONTENTS_TOGGLE 6200
 
 typedef struct FileEntry {
     struct FileEntry *next;
@@ -33,10 +35,14 @@ typedef struct FileEntry {
     char name[MAX_PATH], type[80];
 } FileEntry;
 typedef struct BrowserPlace { char path[MAX_PATH]; LPITEMIDLIST pidl; } BrowserPlace;
+enum BrowserPane { BROWSER_PANE_NONE, BROWSER_PANE_TASKS, BROWSER_PANE_FOLDERS, BROWSER_PANE_SEARCH, BROWSER_PANE_HISTORY };
+typedef struct BrowserVisit { char target[MAX_PATH], label[MAX_PATH]; } BrowserVisit;
+typedef struct BrowserSidebar BrowserSidebar;
+typedef struct BrowserSearch BrowserSearch;
 typedef struct BrowserOptions {
-    int view, treeWidth;
+    int view, treeWidth, pane;
     UINT extraTools;
-    BOOL folders, toolbar, address, status, labels, largeTools, hidden, extensions;
+    BOOL toolbar, address, status, labels, largeTools, hidden, extensions;
 } BrowserOptions;
 typedef struct TreeNode {
     struct TreeNode *next;
@@ -53,6 +59,8 @@ typedef struct Browser {
     char path[MAX_PATH];
     LPITEMIDLIST pidl, pending;
     NativeView *native;
+    BrowserSidebar *sidebar;
+    BrowserSearch *search;
     IContextMenu2 *context;
     BrowserOptions options;
     HMENU viewMenu, favoritesMenu;
@@ -60,7 +68,8 @@ typedef struct Browser {
     HICON icon;
     TreeNode *nodes;
     HTREEITEM computer;
-    BOOL treeSync, dragging, closing, layouting, busy, changingColors, recycleBin;
+    BOOL treeSync, dragging, closing, layouting, busy, changingColors, recycleBin, computerFolder, concealed;
+    HWND concealedText, reveal;
     HANDLE watch;
     int sort; BOOL descending;
     PaintBuffer background, tiles;
@@ -81,6 +90,30 @@ void BrowserOpenOptions(Browser *browser);
 void BrowserViewsPopup(Browser *browser);
 BOOL BrowserIsWindow(HWND window);
 void BrowserRefresh(Browser *browser);
+BOOL BrowserNavigateTarget(Browser *browser, const char *target);
+void BrowserSetPane(Browser *browser, int pane);
+void BrowserSpecial(Browser *browser, int folder);
+BOOL BrowserHistoryEnabled(void);
+BOOL BrowserHistorySetEnabled(BOOL enabled);
+BOOL BrowserHistoryClear(void);
+void BrowserHistoryRecord(Browser *browser);
+int BrowserHistoryRead(BrowserVisit *visits);
+DWORD BrowserHistoryGeneration(void);
+BOOL BrowserSidebarRegister(void);
+void BrowserSidebarCreate(Browser *browser);
+void BrowserSidebarLayout(Browser *browser, int x, int y, int width, int height);
+void BrowserSidebarUpdate(Browser *browser);
+void BrowserSidebarLocationChanged(Browser *browser);
+void BrowserSidebarDestroy(Browser *browser);
+HWND BrowserSidebarWindow(Browser *browser);
+BOOL BrowserSearchCommand(Browser *browser, int command, int notification);
+void BrowserSearchCreate(Browser *browser, HWND parent);
+void BrowserSearchLayout(Browser *browser, int width, int height, BOOL show);
+void BrowserSearchTick(Browser *browser);
+void BrowserSearchStop(Browser *browser, BOOL finished);
+void BrowserSearchDestroy(Browser *browser);
+void BrowserFilesTransfer(Browser *browser, BOOL move);
+BOOL BrowserFilesInvokeVerb(Browser *browser, const char *verb, BOOL current, BOOL invoke);
 
 BOOL BrowserFilesRead(Browser *browser, const char *path, FileEntry **result, int *count);
 void BrowserFilesFree(FileEntry *entry);

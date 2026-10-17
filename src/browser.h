@@ -18,6 +18,10 @@
 #define ID_SEARCH 412
 #define ID_FOLDERS 413
 #define ID_VIEWS 414
+#define ID_HISTORY 416
+#define ID_TASKS 417
+#define ID_COPY_TO 418
+#define ID_MOVE_TO 419
 #define ID_COPY 420
 #define ID_CUT 421
 #define ID_PASTE 422
@@ -45,6 +49,18 @@
 #define ID_SORT_SIZE 462
 #define ID_SORT_DATE 463
 #define ID_SORT_REVERSE 464
+#define ID_BACK_HISTORY 550
+#define ID_FORWARD_HISTORY 551
+#define ID_BROWSER_SIDEBAR 552
+#define ID_SEARCH_NAME 560
+#define ID_SEARCH_SCOPE 561
+#define ID_SEARCH_RECURSIVE 562
+#define ID_SEARCH_START 563
+#define ID_SEARCH_STOP 564
+#define ID_SEARCH_RESULTS 565
+#define ID_SEARCH_STATUS 566
+#define ID_HISTORY_LIST 570
+#define ID_HISTORY_CLEAR 571
 
 BOOL BrowserRegister(HINSTANCE instance, HFONT font);
 HWND BrowserOpen(const char *path);

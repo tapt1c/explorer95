@@ -172,6 +172,7 @@ void BrowserFilesShow(Browser *browser)
 }
 void BrowserFilesOpen(Browser *browser)
 {
+    if (browser->concealed) return;
     int index = -1, count = ListView_GetSelectedCount(browser->files);
     while ((index = ListView_GetNextItem(browser->files, index, LVNI_SELECTED)) >= 0) {
         FileEntry *entry = Selected(browser, index); char path[MAX_PATH];
@@ -352,6 +353,54 @@ cleanup:
     if (desktop) IShellFolder_Release(desktop);
     return context;
 }
+BOOL BrowserFilesInvokeVerb(Browser *browser, const char *verb, BOOL current, BOOL invoke)
+{
+    IContextMenu *context = NULL; HMENU menu; HRESULT result; BOOL found = FALSE; UINT id;
+    if (current && browser->path[0]) {
+        IShellFolder *desktop; LPITEMIDLIST pidl = NULL; WCHAR wide[MAX_PATH];
+        if (SUCCEEDED(SHGetDesktopFolder(&desktop))) {
+            if (MultiByteToWideChar(CP_ACP, 0, browser->path, -1, wide, MAX_PATH) &&
+                SUCCEEDED(IShellFolder_ParseDisplayName(desktop, browser->window, NULL, wide, NULL, &pidl, NULL)) && pidl)
+                IShellFolder_GetUIObjectOf(desktop, browser->window, 1, (LPCITEMIDLIST *)&pidl, &IID_IContextMenu, NULL, (void **)&context);
+            if (pidl) CoTaskMemFree(pidl);
+            IShellFolder_Release(desktop);
+        }
+    } else if (!current) context = browser->native ? NativeViewSelectionContext(browser->native) : SelectionContext(browser);
+    if (!context) return FALSE;
+    menu = CreatePopupMenu(); result = IContextMenu_QueryContextMenu(context, menu, 0, 1, 0x6fff, CMF_NORMAL);
+    if (SUCCEEDED(result)) for (id = 0; id < HRESULT_CODE(result) && id < 4096; ++id) {
+        char name[80]; name[0] = 0;
+        if (SUCCEEDED(IContextMenu_GetCommandString(context, id, GCS_VERBA, NULL, name, sizeof(name))) && !lstrcmpiA(name, verb)) {
+            found = TRUE;
+            if (invoke) {
+                CMINVOKECOMMANDINFO action; ZeroMemory(&action, sizeof(action)); action.cbSize = sizeof(action);
+                action.hwnd = browser->window; action.lpVerb = MAKEINTRESOURCEA(id); action.nShow = SW_SHOWNORMAL;
+                found = SUCCEEDED(IContextMenu_InvokeCommand(context, &action));
+            }
+            break;
+        }
+    }
+    DestroyMenu(menu); IContextMenu_Release(context); return found;
+}
+void BrowserFilesTransfer(Browser *browser, BOOL move)
+{
+    BROWSEINFOA browse; LPITEMIDLIST folder; char name[MAX_PATH], destination[MAX_PATH], *paths;
+    if (browser->concealed) return;
+    paths = browser->native ? NativeViewSelectedPaths(browser->native) : SelectedPaths(browser);
+    if (!paths) return;
+    ZeroMemory(&browse, sizeof(browse)); browse.hwndOwner = browser->window; browse.pszDisplayName = name;
+    browse.lpszTitle = move ? "Select the destination folder for Move." : "Select the destination folder for Copy.";
+    browse.ulFlags = BIF_RETURNONLYFSDIRS;
+    folder = SHBrowseForFolderA(&browse);
+    if (folder) {
+        if (SHGetPathFromIDListA(folder, destination)) {
+            PerformFileOperation(browser, move ? FO_MOVE : FO_COPY, paths, destination, FALSE);
+            if (browser->native) BrowserRefresh(browser);
+        }
+        CoTaskMemFree(folder);
+    }
+    EnvFree(paths); BrowserUpdate(browser);
+}
 void BrowserFilesContext(Browser *browser, LPARAM coordinates)
 {
     POINT point; HMENU menu = CreatePopupMenu(); IContextMenu *context = NULL; UINT command;
@@ -386,6 +435,7 @@ void BrowserFilesContext(Browser *browser, LPARAM coordinates)
 void BrowserFilesCommand(Browser *browser, int command)
 {
     char *paths;
+    if (browser->concealed) return;
     if (browser->native) {
         const char *verb = command == ID_COPY ? "copy" : command == ID_CUT ? "cut" : command == ID_PASTE ? "paste" :
             command == ID_DELETE ? "delete" : command == ID_FILE_PROPERTIES ? "properties" : command == ID_RENAME ? "rename" : NULL;

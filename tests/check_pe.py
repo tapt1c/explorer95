@@ -30,6 +30,7 @@ ALLOWED = {
     "gdi32.dll": {"CreatePatternBrush", "PatBlt", "GetDeviceCaps", "GetClipBox", "SaveDC", "RestoreDC", "ExcludeClipRect", "Arc", "CreatePen", "Ellipse", "CreateSolidBrush", "GetDIBits", "SetDIBits", "LineTo", "MoveToEx", "GetStockObject", "SelectObject", "SetBkMode", "SetTextColor", "BitBlt",
                   "StretchBlt", "CreateCompatibleBitmap", "CreateBitmap", "SetBkColor", "SetWindowOrgEx", "CreateFontIndirectA", "GetTextExtentPoint32A", "GetTextMetricsA", "CreateCompatibleDC", "DeleteDC", "DeleteObject", "GetObjectA"},
     "kernel32.dll": set("""
+        GetDiskFreeSpaceA GetVolumeInformationA WideCharToMultiByte
         CreateMutexA ReleaseMutex CreateToolhelp32Snapshot Process32First Process32Next GetSystemTimeAsFileTime GetTempFileNameA MoveFileA
         CompareFileTime FileTimeToLocalFileTime FileTimeToSystemTime GetDateFormatA
         GetFileSize ReadFile WriteFile GlobalAlloc GlobalFree GlobalLock GlobalSize GlobalUnlock
@@ -43,11 +44,13 @@ ALLOWED = {
     """.split()),
     "ole32.dll": {"CoTaskMemAlloc", "OleInitialize", "OleUninitialize", "CoCreateInstance", "CoTaskMemFree", "ReleaseStgMedium"},
     "shell32.dll": set("""
+        SHBrowseForFolderA
         SHChangeNotify SHAddToRecentDocs SHFileOperationA ShellExecuteExA ExtractIconExA SHGetFileInfoA SHGetMalloc SHGetPathFromIDListA
         SHGetSpecialFolderLocation ShellExecuteA SHAppBarMessage SHGetDesktopFolder
         DragAcceptFiles DragQueryFileA DragFinish
     """.split()),
     "user32.dll": set("""
+        CharUpperBuffA SetScrollInfo
         AdjustWindowRectEx EnableWindow CheckMenuItem ClientToScreen CloseClipboard DeleteMenu EmptyClipboard EnableMenuItem
         GetClipboardData GetMenu GetMenuDefaultItem GetMenuItemID IsClipboardFormatAvailable OpenClipboard RegisterClipboardFormatA SetClipboardData
         AppendMenuA CreateMenu CreatePopupMenu CreateWindowExA DefWindowProcA
