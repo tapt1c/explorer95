@@ -84,6 +84,7 @@ Explorer95 — любительская нативная оболочка для
 | `tests/shell_features_cases.h` | Проверки доступности пунктов Start на отдельных временных корнях реестра; входят в core/menu/full. |
 | `tests/quick_launch_cases.h` | Реальное изменение размера Quick Launch, блокировка, Escape, переполнение и запуск скрытой команды; menu/full. |
 | `tests/desktop_delete_cases.h` | Системный Delete на рабочем столе, отмена и очистка корзины только с собственным тестовым файлом; browser/full. |
+| `tests/native_view_cases.h` | Внутрипроцессный хост настоящего NativeView и canary над ListView: проверка повторного входа LVM_GETEDITCONTROL; core/full. |
 | `Makefile` | Сборка целевого x86 EXE, ресурсов и тестовых x86/x64-вариантов. |
 | `.github/workflows/build.yml`, `.github/workflows/test-ui.yml` | Выбор проверок, сборка/PE, нативная геометрия и переиспользуемый Wine 10 job. |
 | `.github/workflows/release.yml` | Публикация prerelease по тегу `v*`: EXE, ZIP и SHA256. |
@@ -636,6 +637,12 @@ explorer95.exe --settings="C:\EX95TEST\Explorer95.ini"
   открытие папки через тот же navigator: старая Shell32 иначе вызывает Explorer.exe.
   Сохраняйте COM identity и счётчик ссылок обеих interfaces. Редактирование подписи,
   Alt+Enter и объекты без folder PIDL остаются у Shell32; не читайте её private lParam.
+  В подклассе сначала фильтруйте тип сообщения открытия, только затем вызывайте
+  ListView_GetEditControl: SendMessage(LVM_GETEDITCONTROL) синхронно входит в тот же
+  подкласс. Обратный порядок переполняет стек Win95 при запуске. Canary теста
+  считает реальные вложенные запросы, не полагаясь на ограничение рекурсии Wine.
+  Smoke линкует native_view/render_trace; callbacks окружения в тестовом хосте
+  запрещают запуск программ, открытие папок и изменение настоящего рабочего стола.
 - Дерево при создании читает только `GetLogicalDriveStrings` и ресурсы значков
   системной DLL. Не вызывайте для корней `GetDriveType`, `GetVolumeInformation`,
   `GetFileAttributes`, FindFirstFile или SHGetFileInfo с путём накопителя.

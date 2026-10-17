@@ -15,7 +15,7 @@ WINE = wine
 # Default remains the entire regression suite; a typo must never skip tests.
 TEST_GROUP = full
 SOURCES = src/browser.c src/browser_files.c src/browser_tree.c src/browser_toolbar.c src/browser_sidebar.c src/browser_search.c src/browser_history.c src/program_history.c src/paint.c src/explorer95.c src/environment.c src/native_view.c src/start_menu.c src/start_layout.c src/start_settings.c src/tray.c src/settings.c src/shell_config.c src/shutdown.c src/render_trace.c src/desktop_icons.c src/shell_features.c src/folder_open.c src/folder_handler.c
-TEST_SOURCES = tests/smoke.c src/program_history.c src/paint.c src/shell_config.c src/start_layout.c src/desktop_icons.c src/shell_features.c src/folder_open.c src/folder_handler.c
+TEST_SOURCES = tests/smoke.c src/program_history.c src/paint.c src/shell_config.c src/start_layout.c src/desktop_icons.c src/shell_features.c src/folder_open.c src/folder_handler.c src/native_view.c src/render_trace.c
 OBJECTS = $(SOURCES:%.c=build/obj32/%.o)
 OBJECTS64 = $(SOURCES:%.c=build/obj64/%.o)
 TEST_OBJECTS = $(TEST_SOURCES:%.c=build/obj32/%.o)

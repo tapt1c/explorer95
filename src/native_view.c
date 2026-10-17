@@ -397,9 +397,11 @@ static LRESULT CALLBACK Subclass(HWND window, UINT message, WPARAM wp, LPARAM lp
     if (NativeViewMenuMessage(view, message, wp, lp)) return 0;
     /* Original Win95 views do not consistently delegate default folder verbs
      * through BrowseObject. Consume real activation before ShellExecute can
-     * open Explorer.exe; navigation itself remains queued outside this view. */
-    if ((view->desktop || view->navigate) && window == view->list && !ListView_GetEditControl(window) &&
-        (message == WM_LBUTTONDBLCLK || (message == WM_KEYDOWN && wp == VK_RETURN && !(GetKeyState(VK_MENU) & 0x8000)))) {
+     * open Explorer.exe; navigation itself remains queued outside this view.
+     * Filter input first: querying LVM_GETEDITCONTROL reenters this subclass. */
+    if ((view->desktop || view->navigate) && window == view->list &&
+        (message == WM_LBUTTONDBLCLK || (message == WM_KEYDOWN && wp == VK_RETURN && !(GetKeyState(VK_MENU) & 0x8000))) &&
+        !ListView_GetEditControl(window)) {
         BOOL hit = TRUE;
         if (message == WM_LBUTTONDBLCLK) {
             LVHITTESTINFO info; ZeroMemory(&info, sizeof(info)); info.pt.x = (short)LOWORD(lp); info.pt.y = (short)HIWORD(lp);

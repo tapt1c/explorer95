@@ -128,6 +128,7 @@ static void Check(BOOL okay, const char *description)
 #include "shell_features_cases.h"
 #include "folder_handler_cases.h"
 #include "folder_selection_cases.h"
+#include "native_view_cases.h"
 
 static HWND WaitFor(const char *kind, const char *title)
 {
@@ -1528,7 +1529,7 @@ void start(void)
     Check(CreateDirectoryA(settingsDir, NULL), "create isolated settings directory");
     wsprintfA(settings, "%s\\settings.ini", settingsDir);
     if (group != GROUP_BROWSER) { LayoutTests(); HistoryTests(settingsDir, module, settings); ShellFeatureTests(); }
-    if (group == GROUP_FULL || group == GROUP_CORE) { PaintTests(); ConfigTests(settingsDir); DesktopIconTests(settingsDir); FolderHandlerTests(module,settings); FolderSelectionTests(); }
+    if (group == GROUP_FULL || group == GROUP_CORE) { PaintTests(); ConfigTests(settingsDir); DesktopIconTests(settingsDir); FolderHandlerTests(module,settings); FolderSelectionTests(); NativeViewMessageTests(); }
     if (group == GROUP_CORE) goto cleanup;
     wsprintfA(command, "\"%s\" --settings=\"%s\"", executable, settings);
     if (group != GROUP_MENU) wsprintfA(command,"\"%s\" --settings=\"%s\" --open=\"%s\"",executable,settings,fixture);
