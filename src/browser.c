@@ -222,6 +222,7 @@ void BrowserLayout(Browser *browser)
         EnvMoveControl(browser->go, width - 51, top + 1, 47, 25); top += 32;
         SetRect(&browser->addressLine, 0, top - 3, width, top - 1);
     }
+    BrowserAddressLayout(browser);
     EnvShowControl(browser->status, browser->options.status);
     if (browser->options.status) { bottom -= 22; EnvMoveControl(browser->status, 0, bottom, width, 22); }
     if (browser->options.pane == BROWSER_PANE_FOLDERS && !browser->tree) BrowserTreeCreate(browser);
@@ -339,10 +340,7 @@ BOOL BrowserNavigate(Browser *browser, const char *requested, LPCITEMIDLIST pidl
         lstrcpynA(title, info.szDisplayName[0] ? info.szDisplayName : "Desktop", sizeof(title));
         SetWindowTextA(browser->status, "System folder");
     } else { BrowserFilesShow(browser); wsprintfA(title, "%s - Explorer95", path); }
-    SetWindowTextA(browser->window, title); SetWindowTextA(browser->address, path[0] ? path : title);
-    SendMessageA(browser->address, CB_RESETCONTENT, 0, 0);
-    for (i = browser->historyCount - 1; i >= 0; --i) if (browser->history[i].path[0]) SendMessageA(browser->address, CB_ADDSTRING, 0, (LPARAM)browser->history[i].path);
-    SetWindowTextA(browser->address, path[0] ? path : title);
+    SetWindowTextA(browser->window, title); BrowserAddressUpdate(browser);
     if (!same) BrowserHistoryRecord(browser);
     BrowserSidebarLocationChanged(browser);
     if (wasBin != browser->recycleBin) BrowserBuildToolbar(browser);
@@ -421,6 +419,10 @@ static void AddressGo(Browser *browser)
     char input[MAX_PATH], path[MAX_PATH], expanded[MAX_PATH]; DWORD length;
     GetWindowTextA(browser->address, input, MAX_PATH);
     if (!input[0]) return;
+    if (!browser->path[0]) {
+        char title[MAX_PATH]; GetWindowTextA(browser->window, title, sizeof(title));
+        if (!lstrcmpiA(input, title)) return;
+    }
     length = ExpandEnvironmentStringsA(input, expanded, MAX_PATH);
     if (!length || length > MAX_PATH) { BrowserError(browser->window, "The path is too long.", ERROR_FILENAME_EXCED_RANGE); return; }
     lstrcpyA(input, expanded);
@@ -608,7 +610,9 @@ static LRESULT CALLBACK BrowserProc(HWND window, UINT message, WPARAM wp, LPARAM
 {
     Browser *browser = (Browser *)GetWindowLongPtrA(window, GWLP_USERDATA);
     RenderTraceEvent("browser", window, message, wp, lp);
-    if (browser && browser->context && (message == WM_INITMENUPOPUP || message == WM_DRAWITEM || message == WM_MEASUREITEM))
+    if (browser && browser->context && (message == WM_INITMENUPOPUP ||
+        (message == WM_DRAWITEM && ((DRAWITEMSTRUCT *)lp)->CtlType == ODT_MENU) ||
+        (message == WM_MEASUREITEM && ((MEASUREITEMSTRUCT *)lp)->CtlType == ODT_MENU)))
         if (SUCCEEDED(IContextMenu2_HandleMenuMsg(browser->context, message, wp, lp))) return 0;
     switch (message) {
     case WM_CREATE: {
@@ -618,8 +622,9 @@ static LRESULT CALLBACK BrowserProc(HWND window, UINT message, WPARAM wp, LPARAM
         PaintColorsChanged(&browser->colors);
         SetWindowLongPtrA(window, GWLP_USERDATA, (LONG_PTR)browser);
         browser->addressLabel = BrowserControl(window, "STATIC", "Address", 0, ID_ADDRESS_LABEL);
-        browser->address = BrowserControl(window, "COMBOBOX", "", WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWN | CBS_AUTOHSCROLL, ID_ADDRESS);
+        browser->address = BrowserControl(window, "COMBOBOX", "", WS_TABSTOP | WS_VSCROLL | WS_CLIPSIBLINGS | CBS_DROPDOWN | CBS_AUTOHSCROLL | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS, ID_ADDRESS);
         SendMessageA(browser->address, CB_LIMITTEXT, MAX_PATH - 1, 0);
+        if (!browser->address || !BrowserAddressCreate(browser)) return -1;
         browser->go = BrowserControl(window, "BUTTON", "Go", WS_TABSTOP | BS_DEFPUSHBUTTON, ID_GO);
         browser->treeLabel = BrowserControl(window, "STATIC", "Folders", 0, ID_FOLDERS_LABEL);
         browser->treeClose = BrowserControl(window, "BUTTON", "Close", WS_TABSTOP | BS_OWNERDRAW, ID_FOLDERS_CLOSE);
@@ -647,7 +652,7 @@ static LRESULT CALLBACK BrowserProc(HWND window, UINT message, WPARAM wp, LPARAM
     case WM_INITMENUPOPUP: if (browser) { BrowserUpdate(browser); if ((HMENU)wp == browser->favoritesMenu) FavoritesMenu(browser); } return 0;
     case WM_COMMAND:
         if (!browser) break;
-        if (LOWORD(wp) == ID_ADDRESS) { if (HIWORD(wp) == CBN_SELENDOK) PostMessageA(window, WM_COMMAND, ID_GO, 0); }
+        if (LOWORD(wp) == ID_ADDRESS) BrowserAddressCommand(browser, HIWORD(wp));
         else Command(browser, LOWORD(wp));
         return 0;
     case WM_TIMER:
@@ -662,6 +667,7 @@ static LRESULT CALLBACK BrowserProc(HWND window, UINT message, WPARAM wp, LPARAM
     case WM_BROWSER_NAVIGATE:
         if (browser && browser->pending) { LPITEMIDLIST pidl = browser->pending; browser->pending = NULL; BrowserNavigate(browser, NULL, pidl, -1); EnvFree(pidl); } return 0;
     case WM_BROWSER_STATE: if (browser) BrowserUpdate(browser); return 0;
+    case WM_BROWSER_ADDRESS: if (browser) BrowserAddressOpen(browser); return 0;
     case WM_BROWSER_REFRESH: if (browser) BrowserRefresh(browser); return 0;
     case WM_NOTIFY:
         if (browser) {
@@ -680,8 +686,11 @@ static LRESULT CALLBACK BrowserProc(HWND window, UINT message, WPARAM wp, LPARAM
             }
             return BrowserFilesNotify(browser, header);
         } return 0;
-    case WM_MEASUREITEM: if (((MEASUREITEMSTRUCT *)lp)->CtlType == ODT_LISTVIEW) { ((MEASUREITEMSTRUCT *)lp)->itemHeight = 54; return TRUE; } break;
+    case WM_MEASUREITEM:
+        if (browser && ((MEASUREITEMSTRUCT *)lp)->CtlID == ID_ADDRESS) { ((MEASUREITEMSTRUCT *)lp)->itemHeight = BrowserAddressHeight(browser); return TRUE; }
+        if (((MEASUREITEMSTRUCT *)lp)->CtlType == ODT_LISTVIEW) { ((MEASUREITEMSTRUCT *)lp)->itemHeight = 54; return TRUE; } break;
     case WM_DRAWITEM:
+        if (browser && BrowserAddressDraw(browser, (DRAWITEMSTRUCT *)lp)) return TRUE;
         if (browser && ((DRAWITEMSTRUCT *)lp)->CtlID == ID_FOLDERS_CLOSE) {
             DRAWITEMSTRUCT *draw = (DRAWITEMSTRUCT *)lp; RECT glyph = draw->rcItem;
             HDC dc = PaintBufferBegin(&browser->tiles, draw->hDC, &draw->rcItem); HGDIOBJ old;
@@ -758,7 +767,7 @@ static LRESULT CALLBACK BrowserProc(HWND window, UINT message, WPARAM wp, LPARAM
     case WM_DESTROY:
         if (browser) {
             int i; browser->closing = TRUE; KillTimer(window, 10);
-            BrowserSearchDestroy(browser); BrowserSidebarDestroy(browser);
+            BrowserAddressDestroy(browser); BrowserSearchDestroy(browser); BrowserSidebarDestroy(browser);
             if (browser->toolbar) DestroyWindow(browser->toolbar);
             if (browser->toolbarImages) DeleteObject(browser->toolbarImages);
             if (browser->watch) FindCloseChangeNotification(browser->watch);
@@ -974,7 +983,10 @@ BOOL BrowserTranslate(MSG *message)
             }
             return IsDialogMessageA(sidebar, message);
         }
-        if (address && message->wParam == VK_RETURN) command = ID_GO;
+        if (address && message->wParam == VK_RETURN) {
+            if (SendMessageA(browser->address, CB_GETDROPPEDSTATE, 0, 0)) return FALSE;
+            command = ID_GO;
+        }
         if (!address && !ListView_GetEditControl(browser->native ? NativeViewList(browser->native) : browser->files)) {
             if (message->wParam == VK_RETURN && message->hwnd == browser->files) { BrowserFilesOpen(browser); return TRUE; }
             if (message->wParam == VK_BACK) command = ID_UP;

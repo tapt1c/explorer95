@@ -89,6 +89,75 @@ static void NativePaneNavigation(HWND browser)
     }
     SendMessageA(browser, WM_COMMAND, ID_COMPUTER, 0); PumpFor(80);
 }
+static BOOL AddressIconPainted(HWND icon)
+{
+    RECT rect; HDC dc = GetDC(NULL); int x, y, pixels = 0;
+    GetWindowRect(icon, &rect);
+    for (y = rect.top + 2; y < rect.bottom - 1; y += 2) for (x = rect.left + 2; x < rect.right - 1; x += 2) {
+        COLORREF color = GetPixel(dc, x, y);
+        if (color != CLR_INVALID && color != GetSysColor(COLOR_WINDOW) && color != RGB(0,0,0)) ++pixels;
+    }
+    ReleaseDC(NULL, dc); return pixels > 2;
+}
+static void BrowserAddressTests(HWND browser, const char *fixture)
+{
+    HWND address = GetDlgItem(browser, ID_ADDRESS), icon = GetDlgItem(address, 475), edit;
+    char path[MAX_PATH], text[MAX_PATH]; const char *name = fixture; int i, count = PaneWindowCount(); DWORD started;
+    RECT field, glyph;
+    wsprintfA(path, "%s\\sub", fixture); Navigate(browser, path); PumpFor(80);
+    edit = FindWindowExA(address, NULL, "EDIT", NULL); GetWindowRect(address, &field); GetWindowRect(icon, &glyph);
+    Check((GetWindowLongA(address, GWL_STYLE) & (CBS_OWNERDRAWFIXED | CBS_HASSTRINGS)) == (CBS_OWNERDRAWFIXED | CBS_HASSTRINGS) &&
+        icon && IsWindowVisible(icon) && glyph.left > field.left && glyph.right < field.right &&
+        LOWORD(SendMessageA(edit, EM_GETMARGINS, 0, 0)) >= 20,
+        "editable Win95 address field reserves space for the current folder icon");
+    Check(AddressIconPainted(icon), "current folder icon is painted inside the editable address field");
+    {
+        RECT format; TEXTMETRICA metrics; POINT origin = {0,0}; HDC dc = GetDC(edit); int difference;
+        HGDIOBJ old = SelectObject(dc, (HFONT)SendMessageA(edit, WM_GETFONT, 0, 0));
+        SendMessageA(edit, EM_GETRECT, 0, (LPARAM)&format); ClientToScreen(edit, &origin); GetTextMetricsA(dc, &metrics);
+        SelectObject(dc, old); ReleaseDC(edit, dc);
+        difference = (glyph.top + glyph.bottom) / 2 - (origin.y + format.top + metrics.tmHeight / 2);
+        Check(difference >= -1 && difference <= 1, "address icon and native edit text share the same vertical center");
+    }
+    SendMessageA(address, CB_SHOWDROPDOWN, TRUE, 0); PumpFor(80);
+    Check(SendMessageA(address, CB_GETDROPPEDSTATE, 0, 0) &&
+        SendMessageA(address, CB_FINDSTRINGEXACT, (WPARAM)-1, (LPARAM)"Desktop") >= 0 &&
+        SendMessageA(address, CB_FINDSTRINGEXACT, (WPARAM)-1, (LPARAM)"My Computer") >= 0 &&
+        SendMessageA(address, CB_FINDSTRINGEXACT, (WPARAM)-1, (LPARAM)"Control Panel") >= 0 &&
+        SendMessageA(address, CB_FINDSTRINGEXACT, (WPARAM)-1, (LPARAM)"sub") >= 0,
+        "address dropdown contains system places and the current folder hierarchy");
+    SendMessageA(address, CB_SETTOPINDEX, 0, 0); PumpFor(60); SaveScreen("build\\browser-address-dropdown.bmp");
+    Check(AddressIconPainted(icon), "current folder icon stays visible while the native address dropdown is open");
+    for (i = 0; fixture[i]; ++i) if (fixture[i] == '\\') name = fixture + i + 1;
+    i = (int)SendMessageA(address, CB_FINDSTRINGEXACT, (WPARAM)-1, (LPARAM)name);
+    Check(i >= 0, "current folder's parent appears with its display name in the hierarchy");
+    SendMessageA(address, CB_SETCURSEL, i, 0); PostMessageA(address, WM_KEYDOWN, VK_RETURN, 0);
+    started = GetTickCount();
+    do { PumpFor(20); SendMessageA(address, WM_GETTEXT, MAX_PATH, (LPARAM)text); }
+    while (lstrcmpiA(text, fixture) && GetTickCount() - started < 3000);
+    Check(!lstrcmpiA(text, fixture) && PaneWindowCount() == count,
+        "Enter in the address dropdown navigates by the stored destination rather than parsing its display label");
+    SendMessageA(address, CB_SHOWDROPDOWN, TRUE, 0); PumpFor(40);
+    i = (int)SendMessageA(address, CB_FINDSTRINGEXACT, (WPARAM)-1, (LPARAM)"Control Panel");
+    SendMessageA(address, CB_SETCURSEL, i, 0); PostMessageA(address, WM_KEYDOWN, VK_RETURN, 0);
+    started = GetTickCount();
+    do { PumpFor(20); SendMessageA(address, WM_GETTEXT, MAX_PATH, (LPARAM)text); }
+    while (lstrcmpA(text, "Control Panel") && GetTickCount() - started < 3000);
+    Check(!lstrcmpA(text, "Control Panel") && FindWindowExA(browser, NULL, "SHELLDLL_DefView", NULL) && PaneWindowCount() == count,
+        "address dropdown opens a virtual system folder in the same Explorer95 window");
+    SetWindowTextA(address, "typed-but-not-opened"); SendMessageA(address, CB_SHOWDROPDOWN, TRUE, 0); PumpFor(40);
+    i = (int)SendMessageA(address, CB_FINDSTRINGEXACT, (WPARAM)-1, (LPARAM)"My Computer");
+    SendMessageA(address, CB_SETCURSEL, i, 0); PostMessageA(address, WM_KEYDOWN, VK_ESCAPE, 0); PumpFor(80);
+    SendMessageA(address, WM_GETTEXT, MAX_PATH, (LPARAM)text);
+    Check(!lstrcmpA(text, "typed-but-not-opened") && !SendMessageA(address, CB_GETDROPPEDSTATE, 0, 0),
+        "Escape closes the address dropdown without navigating or losing typed text");
+    Navigate(browser, fixture); SendMessageA(browser, WM_COMMAND, ID_SHOW_ADDRESS, 0); PumpFor(40);
+    Check(!IsWindowVisible(address) && !IsWindowVisible(icon), "hiding Address Bar also hides its folder icon");
+    SendMessageA(browser, WM_COMMAND, ID_SHOW_ADDRESS, 0); Navigate(browser, "sub");
+    SendMessageA(address, WM_GETTEXT, MAX_PATH, (LPARAM)text);
+    Check(!lstrcmpiA(text, path) && IsWindowVisible(icon), "address editing still accepts relative paths after dropdown navigation");
+    Navigate(browser, fixture);
+}
 static void BrowserPaneTests(HWND browser, const char *fixture, const char *settings)
 {
     HWND sidebar, list, options, toolbar, results; RECT original; char path[MAX_PATH], value[MAX_PATH + 32], root[MAX_PATH]; HANDLE file; DWORD started;
@@ -183,7 +252,8 @@ static void BrowserPaneTests(HWND browser, const char *fixture, const char *sett
     Check(PaneText(sidebar, "Copy this file") && PaneText(sidebar, "Delete this file"), "file selection exposes file actions rather than folder creation");
     PostMessageA(browser, WM_COMMAND, ID_COPY_TO, 0); options = WaitFor("#32770", NULL);
     Check(options != NULL, "Copy To opens the installed Windows destination-folder dialog");
-    SendMessageA(options, WM_COMMAND, IDCANCEL, 0); PumpFor(60);
+    SendMessageA(options, WM_COMMAND, IDCANCEL, 0); started = GetTickCount();
+    while (IsWindow(options) && GetTickCount() - started < 3000) PumpFor(20);
     Check(!IsWindow(options) && Exists(path), "cancelling Copy To preserves the selected source file");
     SendMessageA(browser, WM_COMMAND, ID_SEARCH, 0); PumpFor(40);
     SendMessageA(PaneControl(browser, ID_SEARCH_RECURSIVE), BM_SETCHECK, BST_UNCHECKED, 0);
@@ -248,5 +318,6 @@ static void BrowserPaneTests(HWND browser, const char *fixture, const char *sett
     SendDlgItemMessageA(options, 497, BM_SETCHECK, BST_CHECKED, 0); SendMessageA(options, WM_COMMAND, IDOK, 0);
     Navigate(browser, path); Navigate(browser, fixture); SendMessageA(browser, WM_COMMAND, ID_FOLDERS_CLOSE, 0);
     Check(GetPrivateProfileIntA("ExplorerHistory", "Count", 0, settings) >= 1, "history recording can be enabled again");
+    BrowserAddressTests(browser, fixture);
     ShowWindow(browser, SW_RESTORE); MoveWindow(browser, original.left, original.top, original.right - original.left, original.bottom - original.top, TRUE);
 }

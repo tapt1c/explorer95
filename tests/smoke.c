@@ -629,6 +629,7 @@ static void BrowserTests(HWND browser, const char *fixture, const char *settings
         "custom toolbar contains only the six approved optional commands and persists them");
     Check(GetPrivateProfileIntA("Explorer", "TextLabels", -1, settings) == 0 && GetPrivateProfileIntA("Explorer", "LargeToolbarIcons", -1, settings) == 0,
         "toolbar label and icon-size preferences are saved separately from Start");
+    PumpFor(60); SaveScreen("build\\browser-toolbar-small.bmp");
     SendMessageA(browser, WM_COMMAND, ID_BROWSER_OPTIONS, 0); options = WaitFor("Explorer95.FolderOptions", NULL);
     SendDlgItemMessageA(options, 480, BM_SETCHECK, BST_UNCHECKED, 0); SendMessageA(options, WM_COMMAND, IDCANCEL, 0);
     Check(GetPrivateProfileIntA("Explorer", "ToolbarButtons", 0, settings) == 63, "Cancel discards toolbar customization edits");

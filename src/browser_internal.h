@@ -10,6 +10,7 @@
 #define ID_FOLDERS_LABEL 472
 #define ID_ADDRESS_LABEL 473
 #define ID_OPTIONS_APPLY 474
+#define ID_ADDRESS_ICON 475
 #define ID_OPTION_TOOL 480
 #define ID_OPTION_LABELS 490
 #define ID_OPTION_LARGE 491
@@ -25,6 +26,7 @@
 #define WM_BROWSER_REFRESH (WM_APP + 30)
 #define WM_BROWSER_NAVIGATE (WM_APP + 31)
 #define WM_BROWSER_STATE (WM_APP + 32)
+#define WM_BROWSER_ADDRESS (WM_APP + 33)
 #define ID_CONTENTS_TOGGLE 6200
 
 typedef struct FileEntry {
@@ -39,6 +41,7 @@ enum BrowserPane { BROWSER_PANE_NONE, BROWSER_PANE_TASKS, BROWSER_PANE_FOLDERS, 
 typedef struct BrowserVisit { char target[MAX_PATH], label[MAX_PATH]; } BrowserVisit;
 typedef struct BrowserSidebar BrowserSidebar;
 typedef struct BrowserSearch BrowserSearch;
+typedef struct BrowserAddress BrowserAddress;
 typedef struct BrowserOptions {
     int view, treeWidth, pane;
     UINT extraTools;
@@ -61,6 +64,7 @@ typedef struct Browser {
     NativeView *native;
     BrowserSidebar *sidebar;
     BrowserSearch *search;
+    BrowserAddress *location;
     IContextMenu2 *context;
     BrowserOptions options;
     BrowserOptions layoutOptions;
@@ -101,6 +105,14 @@ void BrowserOpenOptions(Browser *browser);
 void BrowserViewsPopup(Browser *browser);
 BOOL BrowserIsWindow(HWND window);
 void BrowserRefresh(Browser *browser);
+BOOL BrowserAddressCreate(Browser *browser);
+void BrowserAddressUpdate(Browser *browser);
+void BrowserAddressLayout(Browser *browser);
+UINT BrowserAddressHeight(Browser *browser);
+BOOL BrowserAddressDraw(Browser *browser, const DRAWITEMSTRUCT *draw);
+void BrowserAddressCommand(Browser *browser, int code);
+void BrowserAddressOpen(Browser *browser);
+void BrowserAddressDestroy(Browser *browser);
 BOOL BrowserNavigateTarget(Browser *browser, const char *target);
 void BrowserSetPane(Browser *browser, int pane);
 void BrowserSpecial(Browser *browser, int folder);
