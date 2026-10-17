@@ -3,7 +3,9 @@ static void DragQuickGrip(HWND grip, int delta, BOOL cancel)
     RECT rect; BOOL vertical; POINT point;
     GetWindowRect(grip, &rect); vertical = rect.right - rect.left > rect.bottom - rect.top;
     point.x = (rect.left + rect.right) / 2; point.y = (rect.top + rect.bottom) / 2;
-    SetCursorPos(point.x, point.y); mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0); PumpFor(40);
+    SetCursorPos(point.x, point.y); PumpFor(80);
+    Check(WindowFromPoint(point) == grip, "Quick Launch drag starts over its current grip");
+    mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0); PumpFor(40);
     SetCursorPos(point.x + (vertical ? 0 : delta), point.y + (vertical ? delta : 0)); PumpFor(80);
     if (cancel) { keybd_event(VK_ESCAPE, 0, 0, 0); keybd_event(VK_ESCAPE, 0, KEYEVENTF_KEYUP, 0); PumpFor(80); }
     mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0); PumpFor(80);

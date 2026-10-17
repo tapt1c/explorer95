@@ -43,8 +43,10 @@ static BOOL CALLBACK DisableOwnWindow(HWND window, LPARAM unused)
 void ShutdownFocus(void)
 {
     if (!choice) return;
-    SetWindowPos(shade, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     SetWindowPos(choice, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+    /* Raising an owner alone can leave unrelated topmost windows between it
+     * and its owned dialog. Keep the snapshot immediately below the choice. */
+    SetWindowPos(shade, choice, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     SetForegroundWindow(GetLastActivePopup(choice));
 }
 static void PowerSupport(void)
@@ -286,8 +288,10 @@ void ShutdownShow(void)
     StartHide(); previousFocus = GetForegroundWindow();
     screenWidth = GetSystemMetrics(SM_CXSCREEN); screenHeight = GetSystemMetrics(SM_CYSCREEN); step = 0; shiftMode = FALSE;
     CaptureScreen(); PowerSupport();
+    /* The snapshot and its dialog form their own stack, independently of
+     * the taskbar's Start/tooltip popup group. ShutdownClose owns their lifetime. */
     shade = CreateWindowExA(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, "Explorer95.ShutdownShade", "", WS_POPUP,
-        0, 0, screenWidth, screenHeight, env.bar, NULL, env.host.instance, NULL);
+        0, 0, screenWidth, screenHeight, NULL, NULL, env.host.instance, NULL);
     classic = env.options.classicShutdown;
     width = screenWidth > 326 ? 314 : screenWidth - 12; height = screenHeight > 212 ? 200 : screenHeight - 12;
     style = WS_POPUP | WS_SYSMENU | WS_CLIPCHILDREN | (classic ? WS_CAPTION : WS_BORDER);

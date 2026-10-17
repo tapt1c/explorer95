@@ -416,8 +416,8 @@ int StartMaximumRecentOptions(int pins, const ShellOptions *options)
 void StartPosition(void)
 {
     StartMeasure(startPinCount, env.options.recentCount, &geometry);
-    SetWindowPos(env.start, HWND_TOPMOST, geometry.window.left, geometry.window.top,
-        geometry.window.right - geometry.window.left, geometry.window.bottom - geometry.window.top, SWP_NOACTIVATE);
+    SetWindowPos(env.start, NULL, geometry.window.left, geometry.window.top,
+        geometry.window.right - geometry.window.left, geometry.window.bottom - geometry.window.top, SWP_NOACTIVATE | SWP_NOZORDER);
 }
 void StartToggle(void)
 {
@@ -426,7 +426,11 @@ void StartToggle(void)
     if (IsWindowVisible(env.start)) StartHide();
     else {
         UpdateRecent(); StartPosition();
-        ShowWindow(env.start, SW_SHOW); SetForegroundWindow(env.start);
+        /* Finish showing/reordering before activation callbacks can hide
+         * Start. An activating show can complete after a nested hide. */
+        SetWindowPos(env.start, HWND_TOPMOST, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW | SWP_NOACTIVATE);
+        SetForegroundWindow(env.start);
         SetFocus(GetDlgItem(env.start, startPinCount ? ID_PINNED : ID_PROGRAMS));
         SendMessageA(env.startButton, BM_SETSTATE, TRUE, 0);
         InvalidateRect(env.startButton, NULL, FALSE);

@@ -799,6 +799,13 @@ static LRESULT CALLBACK DesktopProc(HWND window, UINT message, WPARAM wp, LPARAM
         PAINTSTRUCT paint; HDC dc = BeginPaint(window, &paint); NativeViewPaintDesktop(env.desktopView, dc, window); EndPaint(window, &paint); return 0;
     }
     if (message == WM_ERASEBKGND) return TRUE;
+    if (message == WM_ACTIVATE) {
+        LRESULT result = DefWindowProcA(window, message, wp, lp);
+        /* Native view activation can finish after the pre-position guard.
+         * Reassert the bottom position when activation leaves the desktop too. */
+        SetWindowPos(window, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        return result;
+    }
     if (message == WM_CONTEXTMENU && env.desktopView) {
         POINT point; GetCursorPos(&point); EnvironmentShowDesktopMenu(point); return 0;
     }
@@ -994,7 +1001,9 @@ HWND EnvironmentCreate(const EnvironmentHost *callbacks)
         !EnvRegister("Explorer95.Taskbar", BarProc, (HBRUSH)(COLOR_BTNFACE + 1), 0) || !EnvRegister("Explorer95.QuickGrip", QuickGripProc, NULL, 0) || !PropertiesRegister()) return NULL;
     env.desktop = CreateWindowExA(WS_EX_TOOLWINDOW, "Explorer95.Desktop", "Explorer95 Desktop", WS_POPUP | WS_CLIPCHILDREN,
         0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN), NULL, NULL, env.host.instance, NULL);
-    env.bar = CreateWindowExA(WS_EX_TOOLWINDOW, "Explorer95.Taskbar", "Explorer95", WS_POPUP | WS_CLIPCHILDREN,
+    /* Establish the owner's band before creating its topmost Start/tooltip
+     * popups; promoting an owner afterwards can leave it below those popups. */
+    env.bar = CreateWindowExA(WS_EX_TOOLWINDOW | (env.options.topmost ? WS_EX_TOPMOST : 0), "Explorer95.Taskbar", "Explorer95", WS_POPUP | WS_CLIPCHILDREN,
         0, 0, 640, 30, NULL, NULL, env.host.instance, NULL);
     if (!env.desktop || !env.bar) return NULL;
     env.startButton = EnvControl(env.bar, "BUTTON", "Start", BS_OWNERDRAW, ID_START);

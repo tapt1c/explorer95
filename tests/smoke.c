@@ -361,10 +361,19 @@ static void DesktopStackTests(HWND bar, HWND desktop, HWND browser)
     Check(WindowPrecedes(browser, desktop), "desktop activation preserves the browser above the wallpaper");
     SetCursorPos(1, 1); PostMessageA(desktop, WM_CONTEXTMENU, (WPARAM)desktop, MAKELPARAM(1,1));
     menu = WaitFor("#32768", NULL);
+    started = GetTickCount();
+    while (menu && (GetForegroundWindow() != bar || !WindowPrecedes(browser, desktop)) &&
+           GetTickCount() - started < 3000) PumpFor(20);
+    if (GetForegroundWindow() != bar || !WindowPrecedes(browser, desktop)) {
+        char kind[80], note[200]; GetClassNameA(GetForegroundWindow(), kind, sizeof(kind));
+        wsprintfA(note, "Desktop menu foreground=%s precedes=%d iconic=%d popup-owner=%08lx bar=%08lx\r\n",
+            kind, WindowPrecedes(browser, desktop), IsIconic(browser),
+            (DWORD)(UINT_PTR)GetWindow(menu, GW_OWNER), (DWORD)(UINT_PTR)bar); Log(note);
+    }
     Check(menu && GetForegroundWindow() == bar && WindowPrecedes(browser, desktop),
           "desktop context menu uses the taskbar as foreground owner without raising the wallpaper window");
     PostMessageA(bar, WM_CANCELMODE, 0, 0); started = GetTickCount();
-    while (IsWindow(menu) && IsWindowVisible(menu) && GetTickCount() - started < 3000) Sleep(20);
+    while (IsWindow(menu) && IsWindowVisible(menu) && GetTickCount() - started < 3000) PumpFor(20);
     Check(!IsWindow(menu) || !IsWindowVisible(menu), "desktop menu cancels through its actual owner");
     SetForegroundWindow(browser);
 }
@@ -798,6 +807,26 @@ static void PumpFor(DWORD duration)
 }
 #include "quick_launch_cases.h"
 #include "desktop_delete_cases.h"
+static void WinKeyEvent(UINT key, BOOL up)
+{
+    keybd_event((BYTE)key, (BYTE)(key == VK_RWIN ? 0x5c : 0x5b),
+        KEYEVENTF_EXTENDEDKEY | (up ? KEYEVENTF_KEYUP : 0), 0);
+}
+static BOOL WaitStartVisible(HWND menu, BOOL visible)
+{
+    DWORD started = GetTickCount();
+    /* Visibility changes before cross-process activation finishes. Injecting
+     * the next press during that transition lets Wine's FocusIn reset a held
+     * key. Require the foreground owner and a settled state before continuing. */
+    do {
+        if (!!IsWindowVisible(menu) == visible && (!visible || GetForegroundWindow() == menu)) {
+            PumpFor(100);
+            if (!!IsWindowVisible(menu) == visible && (!visible || GetForegroundWindow() == menu)) return TRUE;
+        }
+        PumpFor(20);
+    } while (GetTickCount() - started < 3000);
+    return FALSE;
+}
 static void WinKeyTests(HWND bar, HWND menu)
 {
     HWND fixture; int key;
@@ -806,29 +835,29 @@ static void WinKeyTests(HWND bar, HWND menu)
     Check(fixture != NULL && !IsWindowVisible(menu), "Win key tests start with an external foreground window and closed Start");
     SetForegroundWindow(fixture); PumpFor(100);
     for (key = VK_LWIN; key <= VK_RWIN; ++key) {
-        keybd_event((BYTE)key, 0, 0, 0); PumpFor(90);
+        WinKeyEvent(key, FALSE); PumpFor(90);
         Check(!IsWindowVisible(menu), "holding Win does not open Start before release");
-        keybd_event((BYTE)key, 0, KEYEVENTF_KEYUP, 0); PumpFor(160);
-        Check(IsWindowVisible(menu), "either Win key opens Explorer95 Start from another process");
-        keybd_event((BYTE)key, 0, 0, 0); PumpFor(70);
-        keybd_event((BYTE)key, 0, 0, 0); PumpFor(50);
-        keybd_event((BYTE)key, 0, KEYEVENTF_KEYUP, 0); PumpFor(160);
-        Check(!IsWindowVisible(menu), "second Win press closes Start once, including repeated key-down");
+        WinKeyEvent(key, TRUE); PumpFor(160);
+        Check(WaitStartVisible(menu, TRUE), "either Win key opens Explorer95 Start from another process");
+        WinKeyEvent(key, FALSE); PumpFor(70);
+        WinKeyEvent(key, FALSE); PumpFor(50);
+        WinKeyEvent(key, TRUE); PumpFor(160);
+        Check(WaitStartVisible(menu, FALSE), "second Win press closes Start once, including repeated key-down");
     }
     SetForegroundWindow(fixture); PumpFor(60);
-    keybd_event(VK_LWIN, 0, 0, 0); PumpFor(60);
+    WinKeyEvent(VK_LWIN, FALSE); PumpFor(60);
     keybd_event('D', 0, 0, 0); PumpFor(60); keybd_event('D', 0, KEYEVENTF_KEYUP, 0);
-    keybd_event(VK_LWIN, 0, KEYEVENTF_KEYUP, 0); PumpFor(160);
+    WinKeyEvent(VK_LWIN, TRUE); PumpFor(160);
     Check(!IsWindowVisible(menu) && IsIconic(fixture), "Win+D shows desktop without also opening Start on Win release");
     SendMessageA(bar, WM_COMMAND, 609, 0); PumpFor(80);
     SetForegroundWindow(fixture); PumpFor(60);
-    keybd_event(VK_LWIN, 0, 0, 0); PumpFor(60);
+    WinKeyEvent(VK_LWIN, FALSE); PumpFor(60);
     keybd_event('A', 0, 0, 0); keybd_event('A', 0, KEYEVENTF_KEYUP, 0); PumpFor(80);
-    keybd_event(VK_LWIN, 0, KEYEVENTF_KEYUP, 0); PumpFor(160);
+    WinKeyEvent(VK_LWIN, TRUE); PumpFor(160);
     Check(!IsWindowVisible(menu), "a brief unregistered Win chord does not open Start");
     keybd_event(VK_CONTROL, 0, 0, 0); keybd_event(VK_ESCAPE, 0, 0, 0);
     keybd_event(VK_ESCAPE, 0, KEYEVENTF_KEYUP, 0); keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0); PumpFor(160);
-    Check(IsWindowVisible(menu), "Ctrl+Esc still opens Start");
+    Check(WaitStartVisible(menu, TRUE), "Ctrl+Esc still opens Start");
     SendMessageA(bar, WM_COMMAND, 100, 0);
     DestroyWindow(fixture);
 }
@@ -954,7 +983,7 @@ static BOOL PreviewStartMatches(HWND preview, HWND start, int x, int y)
             COLORREF expected = GetPixel(live, px, py), actual = GetPixel(sample, x + px, y + py);
             if (expected == CLR_INVALID || expected != actual) { equal = FALSE; break; }
         }
-        if (!equal) Sleep(20);
+        if (!equal) PumpFor(20);
     } while (!equal && GetTickCount() - started < 1000);
     ReleaseDC(start, live); ReleaseDC(preview, sample); return equal;
 }
@@ -1044,10 +1073,10 @@ static void StartBehaviorTests(HWND properties, HWND bar, HWND menu, const char 
         Check(!popup || !IsWindowVisible(popup), "Start toggles the classic popup closed without EndMenu");
         Check(!(SendDlgItemMessageA(bar, 100, BM_GETSTATE, 0, 0) & BST_PUSHED), "closing the classic popup releases the Start button");
     }
-    keybd_event(VK_LWIN, 0, 0, 0); PumpFor(60); keybd_event(VK_LWIN, 0, KEYEVENTF_KEYUP, 0);
+    WinKeyEvent(VK_LWIN, FALSE); PumpFor(60); WinKeyEvent(VK_LWIN, TRUE);
     popup = WaitFor("#32768", NULL);
     Check(popup != NULL, "Win opens classic Start after cancelling menu tracking");
-    keybd_event(VK_LWIN, 0, 0, 0); PumpFor(60); keybd_event(VK_LWIN, 0, KEYEVENTF_KEYUP, 0); PumpFor(160);
+    WinKeyEvent(VK_LWIN, FALSE); PumpFor(60); WinKeyEvent(VK_LWIN, TRUE); PumpFor(160);
     Check(!IsWindowVisible(popup), "Win closes a classic Start popup inside its native menu loop");
     SendDlgItemMessageA(properties, 1002, CB_SETCURSEL, 0, 0); SendMessageA(properties, WM_COMMAND, 0x3021, 0);
     Check(GetPrivateProfileIntA("Start", "Classic", -1, settings) == 0, "two-column Start style can be restored");
@@ -1369,6 +1398,8 @@ void start(void)
     bar = WaitFor("Explorer95.Taskbar", NULL);
     desktop = WaitFor("Explorer95.Desktop", NULL);
     Check(bar && desktop, "taskbar and full desktop created");
+    Check((GetWindowLongA(bar, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0,
+          "taskbar starts in its configured topmost band before creating owned popups");
     if (group != GROUP_BROWSER) {
         GetPrivateProfileStringA("Recent", "Program0", "", actual, sizeof(actual), settings);
         Check(!lstrcmpiA(actual, module), "existing history drops document shortcuts and compacts the remaining programs");

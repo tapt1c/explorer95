@@ -17,7 +17,7 @@ jobs:
       - name: Install the validated Wine 10 development runtime
         run: |
           apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y make python3 git ca-certificates passwd gcc-mingw-w64-x86-64 wine wine64 xvfb xauth ccache
+          DEBIAN_FRONTEND=noninteractive apt-get install -y make python3 git ca-certificates passwd gcc-mingw-w64-x86-64 wine wine64 xvfb xauth openbox ccache
           useradd --create-home --uid 1001 ex95test
           wine --version
       - uses: actions/checkout@v4
@@ -38,7 +38,7 @@ jobs:
           mkdir -p "$WINEPREFIX" "$CCACHE_DIR"
           chown -R ex95test:ex95test "$GITHUB_WORKSPACE" "$WINEPREFIX" "$CCACHE_DIR"
           set +e
-          runuser -u ex95test -- xvfb-run -a make -j2 ui64-smoke TEST_GROUP="$TEST_GROUP" CCACHE=ccache WINE=wine CC64=x86_64-w64-mingw32-gcc-win32 > source-ui.log 2>&1
+          runuser -u ex95test -- sh tests/run_ui.sh TEST_GROUP="$TEST_GROUP" CCACHE=ccache WINE=wine CC64=x86_64-w64-mingw32-gcc-win32 > source-ui.log 2>&1
           result=$?
           set -e
           cat source-ui.log
@@ -58,5 +58,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: source-ui-${{ inputs.group }}
-          path: source-ui.log
+          path: |
+            source-ui.log
+            build/openbox.log
+            build/smoke-failure.bmp
           if-no-files-found: ignore
