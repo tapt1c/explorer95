@@ -25,6 +25,7 @@ static BOOL FolderPopup(int id);
 static PaintBuffer menuBuffer, itemBuffer;
 static int loadedIconSize;
 static int IconSize(void) { return env.options.largeStartIcons ? 32 : 16; }
+static UINT VisibleItems(void) { return env.options.startItems & env.availableStartItems; }
 static void LoadItemIcons(void);
 
 static const char *BaseName(const char *path)
@@ -375,7 +376,7 @@ static void MeasureStart(int pins, int requestedRecent, BOOL largeIcons, StartLa
         if (bounds.right > bar.left) bounds.right = bar.left;
         x = bounds.right - StartMenuWidth(largeIcons);
     }
-    for (i = 0; i < 10; ++i) if (env.options.startItems & RightBit(i)) ++right;
+    for (i = 0; i < 10; ++i) if (VisibleItems() & RightBit(i)) ++right;
     CalculateStartLayout(&bounds, x, y, GetSystemMetrics(SM_CXDLGFRAME), GetSystemMetrics(SM_CYDLGFRAME),
         fontHeight, pins, requestedRecent, right, largeIcons, layout);
 }
@@ -388,7 +389,7 @@ int StartMaximumRecentFor(int pins, BOOL largeIcons)
 int StartMaximumRecent(int pins) { return StartMaximumRecentFor(pins, env.options.largeStartIcons); }
 int StartMaximumRecentOptions(int pins, const ShellOptions *options)
 {
-    RECT bounds; int thickness, fontHeight = 14; StartLayout layout; HDC dc; HGDIOBJ old; TEXTMETRICA metrics;
+    RECT bounds; int thickness, fontHeight = 14, i, right = 0; StartLayout layout; HDC dc; HGDIOBJ old; TEXTMETRICA metrics;
     if (options->edge == env.options.edge && options->rows == env.options.rows && options->largeIcons == env.options.largeIcons)
         return StartMaximumRecentFor(pins, options->largeStartIcons);
     if (!SystemParametersInfoA(SPI_GETWORKAREA, 0, &bounds, 0)) SetRect(&bounds, 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
@@ -407,8 +408,9 @@ int StartMaximumRecentOptions(int pins, const ShellOptions *options)
     dc = GetDC(env.bar); old = SelectObject(dc, env.host.font);
     if (GetTextMetricsA(dc, &metrics)) fontHeight = metrics.tmHeight;
     SelectObject(dc, old); ReleaseDC(env.bar, dc);
+    for (i = 0; i < 10; ++i) if (options->startItems & env.availableStartItems & RightBit(i)) ++right;
     CalculateStartLayout(&bounds, bounds.left, bounds.top, GetSystemMetrics(SM_CXDLGFRAME), GetSystemMetrics(SM_CYDLGFRAME),
-        fontHeight, pins, RECENT_LIMIT, 10, options->largeStartIcons, &layout);
+        fontHeight, pins, RECENT_LIMIT, right, options->largeStartIcons, &layout);
     return layout.recentRows;
 }
 void StartPosition(void)
@@ -419,6 +421,7 @@ void StartPosition(void)
 }
 void StartToggle(void)
 {
+    if (EnvRefreshStartItems()) { loadedIconSize = 0; StartRefresh(); }
     if (env.options.classicStart) { if (classicActive) StartHide(); else ClassicPopup(); return; }
     if (IsWindowVisible(env.start)) StartHide();
     else {
@@ -457,7 +460,7 @@ static void LayoutStart(HWND window)
     MoveWindow(GetDlgItem(window, ID_PROGRAMS), 5, geometry.programsY + 2, half - 10, geometry.programsHeight - 4, TRUE);
     visible = 0; rightShown = geometry.rightRows - (geometry.moreRight ? 1 : 0);
     for (i = 0; i < 10; ++i) {
-        BOOL show = (env.options.startItems & RightBit(i)) && visible < rightShown;
+        BOOL show = (VisibleItems() & RightBit(i)) && visible < rightShown;
         ShowWindow(GetDlgItem(window, rightCommands[i]), show ? SW_SHOW : SW_HIDE);
         if (show) MoveWindow(GetDlgItem(window, rightCommands[i]), half + 5, geometry.bodyTop + visible++ * row, half - 10, row, TRUE);
     }
@@ -469,9 +472,9 @@ static void LayoutStart(HWND window)
         MoveWindow(GetDlgItem(window, ID_LOGOFF), 5 + third, geometry.footerY + 4, third, height, TRUE);
         MoveWindow(GetDlgItem(window, ID_SHUTDOWN), 5 + 2 * third, geometry.footerY + 4, third, height, TRUE);
     }
-    ShowWindow(GetDlgItem(window, ID_EXIT), env.options.startItems & (1U << 9) ? SW_SHOW : SW_HIDE);
-    ShowWindow(GetDlgItem(window, ID_LOGOFF), env.options.startItems & (1U << 10) ? SW_SHOW : SW_HIDE);
-    ShowWindow(GetDlgItem(window, ID_SHUTDOWN), env.options.startItems & (1U << 11) ? SW_SHOW : SW_HIDE);
+    ShowWindow(GetDlgItem(window, ID_EXIT), VisibleItems() & (1U << 9) ? SW_SHOW : SW_HIDE);
+    ShowWindow(GetDlgItem(window, ID_LOGOFF), VisibleItems() & (1U << 10) ? SW_SHOW : SW_HIDE);
+    ShowWindow(GetDlgItem(window, ID_SHUTDOWN), VisibleItems() & (1U << 11) ? SW_SHOW : SW_HIDE);
 }
 
 static HICON DosIcon(BOOL large)
@@ -484,6 +487,7 @@ static HICON DosIcon(BOOL large)
 void StartRefresh(void)
 {
     int i; if (!env.start) return;
+    if (EnvRefreshStartItems()) loadedIconSize = 0;
     if (loadedIconSize != IconSize()) {
         loadedIconSize = IconSize(); LoadItemIcons();
         for (i = 0; i < RECENT_LIMIT; ++i) {
@@ -552,7 +556,7 @@ static void MorePopup(BOOL pins)
     int skip = pins ? geometry.pinRows - 1 : geometry.rightRows - 1;
     for (i = 0; i < (pins ? startPinCount : 10); ++i) {
         int id = pins ? ID_PINNED + i : rightCommands[i];
-        if (!pins && !(env.options.startItems & RightBit(i))) continue;
+        if (!pins && !(VisibleItems() & RightBit(i))) continue;
         if (visible++ < skip) continue;
         GetWindowTextA(GetDlgItem(env.start, id), entries[used].label, MAX_PATH);
         if (pins) {
@@ -605,7 +609,8 @@ static void LoadItemIcons(void)
     int i;
     for (i = 0; i < 16; ++i) { if (itemIcons[i]) DestroyIcon(itemIcons[i]); itemIcons[i] = NULL; }
     itemIcons[0] = SpecialIcon(CSIDL_DRIVES, env.options.largeStartIcons); itemIcons[1] = MenuSystemIcon(4);
-    itemIcons[2] = SpecialIcon(CSIDL_NETWORK, env.options.largeStartIcons); itemIcons[3] = SpecialIcon(CSIDL_CONTROLS, env.options.largeStartIcons);
+    itemIcons[2] = (env.availableStartItems & START_ITEM_NETWORK) ? SpecialIcon(CSIDL_NETWORK, env.options.largeStartIcons) : NULL;
+    itemIcons[3] = SpecialIcon(CSIDL_CONTROLS, env.options.largeStartIcons);
     itemIcons[4] = SpecialIcon(CSIDL_PRINTERS, env.options.largeStartIcons); itemIcons[5] = SpecialIcon(CSIDL_RECENT, env.options.largeStartIcons);
     itemIcons[6] = MenuSystemIcon(37); itemIcons[7] = MenuSystemIcon(24);
     itemIcons[8] = MenuSystemIcon(23); itemIcons[9] = MenuSystemIcon(25);
@@ -807,7 +812,7 @@ static BOOL FolderPopup(int id)
 {
     static const int folders[] = {CSIDL_PERSONAL, CSIDL_RECENT, CSIDL_DRIVES, CSIDL_NETWORK, CSIDL_CONTROLS, CSIDL_PRINTERS};
     int index = FolderIndex(id), csidl, command; char path[MAX_PATH]; HMENU menu; RECT button;
-    if (index < 0 || (index >= 6 && index != 9) || !(env.options.startMenus & RightBit(index))) return FALSE;
+    if (index < 0 || (index >= 6 && index != 9) || !(VisibleItems() & RightBit(index)) || !(env.options.startMenus & RightBit(index))) return FALSE;
     csidl = index == 9 ? CSIDL_FAVORITES : folders[index]; FreePrograms();
     if (env.host.specialPath(csidl, path)) menu = FolderMenu(path, 0); else menu = NamespaceMenu(csidl);
     GetWindowRect(GetDlgItem(env.start, id), &button); popupActive = TRUE;
@@ -830,7 +835,7 @@ static void ClassicPopup(void)
         ProgramItem *item = &entries[used++]; lstrcpyA(item->label, "Programs"); item->icon = SystemIcon(37, FALSE);
         AppendMenuA(menu, MF_OWNERDRAW | MF_POPUP, (UINT_PTR)ProgramsMenu(FALSE), (LPCSTR)item);
     }
-    for (i = 0; i < 10; ++i) if (env.options.startItems & RightBit(i)) {
+    for (i = 0; i < 10; ++i) if (VisibleItems() & RightBit(i)) {
         static const int folders[] = {CSIDL_PERSONAL, CSIDL_RECENT, CSIDL_DRIVES, CSIDL_NETWORK, CSIDL_CONTROLS, CSIDL_PRINTERS};
         static const int resources[] = {24, 23, 25};
         ProgramItem *item = &entries[used++]; lstrcpynA(item->label, rightLabels[i], MAX_PATH);
@@ -843,7 +848,7 @@ static void ClassicPopup(void)
         } else AppendMenuA(menu, MF_OWNERDRAW, rightCommands[i], (LPCSTR)item);
     }
     AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
-    for (i = 0; i < 3; ++i) if (env.options.startItems & (1U << (9 + i))) {
+    for (i = 0; i < 3; ++i) if (VisibleItems() & (1U << (9 + i))) {
         const int ids[] = {ID_EXIT, ID_LOGOFF, ID_SHUTDOWN}; ProgramItem *item = &entries[used++];
         GetWindowTextA(GetDlgItem(env.start, ids[i]), item->label, MAX_PATH); item->icon = CopyIcon(StartIcon(ids[i])); AppendMenuA(menu, MF_OWNERDRAW, ids[i], (LPCSTR)item);
     }

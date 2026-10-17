@@ -15,8 +15,44 @@ static BOOL previousGrouping;
 static BOOL quickLarge;
 static DWORD awaySince, quickChecked;
 static BOOL hotkeyDesktop, hotkeyStart;
+static BOOL hotkeyLeftWin, hotkeyRightWin, winPending, winUsed;
 static PaintColors desktopColors;
 static BOOL changingDesktopColors;
+
+BOOL EnvRefreshStartItems(void)
+{
+    UINT items = ShellAvailableStartItems(GetVersion(), GetSystemMetrics(SM_NETWORK), HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER);
+    BOOL changed = items != env.availableStartItems;
+    env.availableStartItems = items; return changed;
+}
+
+/* RegisterHotKey notifies on key-down. Wait for release so Win+D (and other
+ * Win chords) do not also open Start. Only poll while a Win key is held;
+ * there is no global hook DLL or permanently running keyboard timer. */
+static void WinKeyBegin(void)
+{
+    int key;
+    if (winPending) return;
+    winUsed = FALSE;
+    for (key = 1; key < 256; ++key) if (key != VK_LWIN && key != VK_RWIN) {
+        if (GetAsyncKeyState(key) & 0x8000) winUsed = TRUE;
+    }
+    winPending = SetTimer(env.bar, 2, 25, NULL) != 0;
+}
+static void WinKeyTick(void)
+{
+    int key; BOOL down;
+    if (!winPending) return;
+    down = (GetAsyncKeyState(VK_LWIN) & 0x8000) || (GetAsyncKeyState(VK_RWIN) & 0x8000);
+    for (key = 1; key < 256 && !winUsed; ++key) if (key != VK_LWIN && key != VK_RWIN) {
+        if (GetAsyncKeyState(key) & 0x8001) winUsed = TRUE;
+    }
+    if (ShutdownActive() || env.closing) winUsed = TRUE;
+    if (!down) {
+        KillTimer(env.bar, 2); winPending = FALSE;
+        if (!winUsed) PostMessageA(env.bar, WM_COMMAND, ID_START, 0);
+    }
+}
 
 BOOL PropertiesRegister(void);
 
@@ -563,7 +599,7 @@ void EnvCommand(int id)
     switch (id) {
     case ID_COMPUTER: EnvironmentOpenNamespace(CSIDL_DRIVES); break;
     case ID_CONTROL: EnvironmentOpenNamespace(CSIDL_CONTROLS); break;
-    case ID_NETWORK: EnvironmentOpenNamespace(CSIDL_NETWORK); break;
+    case ID_NETWORK: if (env.availableStartItems & START_ITEM_NETWORK) EnvironmentOpenNamespace(CSIDL_NETWORK); break;
     case ID_PRINTERS: EnvironmentOpenNamespace(CSIDL_PRINTERS); break;
     case ID_RECENTDOCS: {
         char recentPath[MAX_PATH]; if (env.host.specialPath(CSIDL_RECENT, recentPath)) env.host.openFolder(recentPath); break;
@@ -585,6 +621,7 @@ void EnvCommand(int id)
         break;
     case ID_SHUTDOWN: ShutdownShow(); break;
     case ID_LOGOFF:
+        if (!(env.availableStartItems & START_ITEM_LOGOFF)) break;
         if (MessageBoxA(env.bar, id == ID_LOGOFF ? "Save your work. Log off Windows now?" : "Save your work. Shut down Windows now?",
             "Explorer95", MB_YESNO | MB_DEFBUTTON2 | MB_ICONQUESTION) == IDYES)
             {
@@ -670,6 +707,9 @@ static LRESULT CALLBACK BridgeProc(HWND window, UINT message, WPARAM wp, LPARAM 
 {
     if (message == WM_COPYDATA) return TrayCopyData((const COPYDATASTRUCT *)lp);
     if (message == WM_COMMAND) { PostMessageA(env.bar, message, wp, lp); return 0; }
+    if (message == WM_SYSCOMMAND && (wp & 0xfff0) == SC_TASKLIST) {
+        PostMessageA(env.bar, message, wp, lp); return 0;
+    }
     return DefWindowProcA(window, message, wp, lp);
 }
 static void AutoHideTick(void)
@@ -725,6 +765,7 @@ static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
         return 0;
     case WM_TIMER: {
         SYSTEMTIME now; char text[32];
+        if (wp == 2) { WinKeyTick(); return 0; }
         UpdateTasks(); TrayPrune(); AutoHideTick();
         GetLocalTime(&now);
         if (!GetTimeFormatA(LOCALE_USER_DEFAULT, TIME_NOSECONDS, &now, NULL, text, sizeof(text)))
@@ -743,7 +784,19 @@ static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
         return 0;
     }
     case WM_CONTEXTMENU: BarMenu((HWND)wp); return 0;
-    case WM_HOTKEY: if (wp == 1) EnvShowDesktop(); else StartToggle(); return 0;
+    case WM_HOTKEY:
+        if (wp == 1) { winUsed = TRUE; EnvShowDesktop(); }
+        else if (wp == 2) { winUsed = TRUE; StartToggle(); }
+        else if (wp == 3 || wp == 4) WinKeyBegin();
+        return 0;
+    case WM_SYSCOMMAND:
+        if ((wp & 0xfff0) == SC_TASKLIST) {
+            /* Some installed shells reserve the Win hotkeys. Retain the
+             * legacy shell command path without toggling twice. */
+            if (!hotkeyLeftWin && !hotkeyRightWin && !ShutdownActive()) StartToggle();
+            return 0;
+        }
+        break;
     case WM_LBUTTONDOWN:
         StartHide(); if (!env.options.locked) { env.dragging = TRUE; SetCapture(window); } return 0;
     case WM_MOUSEMOVE:
@@ -792,7 +845,7 @@ static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
         /* Global shell teardown runs after this window procedure unwinds.
          * Destroying another top-level desktop inside WM_DESTROY can reenter
          * activation/IME handling while the taskbar is half destroyed. */
-        KillTimer(window, 1); PostQuitMessage(0); return 0;
+        KillTimer(window, 1); KillTimer(window, 2); PostQuitMessage(0); return 0;
     }
     return DefWindowProcA(window, message, wp, lp);
 }
@@ -801,7 +854,7 @@ HWND EnvironmentCreate(const EnvironmentHost *callbacks)
 {
     APPBARDATA data;
     RenderTraceOpen();
-    env.host = *callbacks; SettingsPath(); NativeViewSetHost(callbacks); PaintColorsChanged(&desktopColors);
+    env.host = *callbacks; SettingsPath(); NativeViewSetHost(callbacks); PaintColorsChanged(&desktopColors); EnvRefreshStartItems();
     SystemParametersInfoA(SPI_GETWORKAREA, 0, &env.originalArea, 0);
     env.primary = FindWindowA("Shell_TrayWnd", NULL) == NULL;
     if (!EnvRegister("Explorer95.Desktop", DesktopProc, (HBRUSH)(COLOR_BACKGROUND + 1), 0) ||
@@ -837,11 +890,15 @@ HWND EnvironmentCreate(const EnvironmentHost *callbacks)
     ShowWindow(env.bar, SW_SHOWNOACTIVATE); UpdateTasks(); SetTimer(env.bar, 1, 400, NULL);
     DragAcceptFiles(env.bar, TRUE);
     hotkeyDesktop = RegisterHotKey(env.bar, 1, MOD_WIN, 'D'); hotkeyStart = RegisterHotKey(env.bar, 2, MOD_CONTROL, VK_ESCAPE);
+    hotkeyLeftWin = RegisterHotKey(env.bar, 3, MOD_WIN, VK_LWIN);
+    hotkeyRightWin = RegisterHotKey(env.bar, 4, MOD_WIN, VK_RWIN);
     if (env.primary) SendNotifyMessageA(HWND_BROADCAST, RegisterWindowMessageA("TaskbarCreated"), 0, 0);
     return env.bar;
 }
 BOOL EnvironmentTranslate(MSG *message)
 {
+    if (winPending && (message->message == WM_KEYDOWN || message->message == WM_SYSKEYDOWN) &&
+        message->wParam != VK_LWIN && message->wParam != VK_RWIN) winUsed = TRUE;
     if (ShutdownTranslate(message)) return TRUE;
     if ((message->message == WM_LBUTTONDOWN || message->message == WM_RBUTTONDOWN || message->message == WM_MBUTTONDOWN) &&
         IsWindowVisible(env.start) && message->hwnd != env.start && message->hwnd != env.startButton &&
@@ -854,9 +911,11 @@ void EnvironmentShutdown(void)
     if (env.closing) return;
     env.closing = TRUE;
     ShutdownClose();
-    KillTimer(env.bar, 1); DragAcceptFiles(env.bar, FALSE);
+    KillTimer(env.bar, 1); KillTimer(env.bar, 2); winPending = FALSE; DragAcceptFiles(env.bar, FALSE);
     if (hotkeyDesktop) UnregisterHotKey(env.bar, 1);
     if (hotkeyStart) UnregisterHotKey(env.bar, 2);
+    if (hotkeyLeftWin) UnregisterHotKey(env.bar, 3);
+    if (hotkeyRightWin) UnregisterHotKey(env.bar, 4);
     /* Browser windows own shell objects too: release them while the desktop
      * and its shell services are still alive. */
     if (env.host.closeFolders) env.host.closeFolders();

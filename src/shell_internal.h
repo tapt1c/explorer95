@@ -9,6 +9,7 @@
 #include "native_view.h"
 #include "start_layout.h"
 #include "paint.h"
+#include "shell_features.h"
 
 #define ID_START 100
 #define ID_TASK 200
@@ -95,6 +96,7 @@ typedef struct ShellState {
     NativeView *desktopView;
     RECT originalArea, anchor;
     BOOL primary, appbar, positioning, hidden, dragging, closing;
+    UINT availableStartItems;
     char ini[MAX_PATH], dataDir[MAX_PATH], quickDir[MAX_PATH];
 } ShellState;
 
@@ -120,6 +122,7 @@ BOOL EnvMoveControl(HWND window, int x, int y, int width, int height);
 BOOL EnvShowControl(HWND window, BOOL visible);
 void EnvShowDesktop(void);
 void EnvCommand(int id);
+BOOL EnvRefreshStartItems(void);
 BOOL EnvRegister(const char *name, WNDPROC proc, HBRUSH brush, UINT style);
 
 BOOL StartCreate(void);

@@ -89,6 +89,7 @@ static void Check(BOOL okay, const char *description)
 }
 
 #include "desktop_icons_cases.h"
+#include "shell_features_cases.h"
 
 static HWND WaitFor(const char *kind, const char *title)
 {
@@ -743,6 +744,40 @@ static void PumpFor(DWORD duration)
         Sleep(10);
     } while (GetTickCount() - started < duration);
 }
+static void WinKeyTests(HWND bar, HWND menu)
+{
+    HWND fixture; int key;
+    fixture = CreateWindowA("STATIC", "Win key input fixture", WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+        30, 30, 180, 100, NULL, NULL, GetModuleHandleA(NULL), NULL);
+    Check(fixture != NULL && !IsWindowVisible(menu), "Win key tests start with an external foreground window and closed Start");
+    SetForegroundWindow(fixture); PumpFor(100);
+    for (key = VK_LWIN; key <= VK_RWIN; ++key) {
+        keybd_event((BYTE)key, 0, 0, 0); PumpFor(90);
+        Check(!IsWindowVisible(menu), "holding Win does not open Start before release");
+        keybd_event((BYTE)key, 0, KEYEVENTF_KEYUP, 0); PumpFor(160);
+        Check(IsWindowVisible(menu), "either Win key opens Explorer95 Start from another process");
+        keybd_event((BYTE)key, 0, 0, 0); PumpFor(70);
+        keybd_event((BYTE)key, 0, 0, 0); PumpFor(50);
+        keybd_event((BYTE)key, 0, KEYEVENTF_KEYUP, 0); PumpFor(160);
+        Check(!IsWindowVisible(menu), "second Win press closes Start once, including repeated key-down");
+    }
+    SetForegroundWindow(fixture); PumpFor(60);
+    keybd_event(VK_LWIN, 0, 0, 0); PumpFor(60);
+    keybd_event('D', 0, 0, 0); PumpFor(60); keybd_event('D', 0, KEYEVENTF_KEYUP, 0);
+    keybd_event(VK_LWIN, 0, KEYEVENTF_KEYUP, 0); PumpFor(160);
+    Check(!IsWindowVisible(menu) && IsIconic(fixture), "Win+D shows desktop without also opening Start on Win release");
+    SendMessageA(bar, WM_COMMAND, 609, 0); PumpFor(80);
+    SetForegroundWindow(fixture); PumpFor(60);
+    keybd_event(VK_LWIN, 0, 0, 0); PumpFor(60);
+    keybd_event('A', 0, 0, 0); keybd_event('A', 0, KEYEVENTF_KEYUP, 0); PumpFor(80);
+    keybd_event(VK_LWIN, 0, KEYEVENTF_KEYUP, 0); PumpFor(160);
+    Check(!IsWindowVisible(menu), "a brief unregistered Win chord does not open Start");
+    keybd_event(VK_CONTROL, 0, 0, 0); keybd_event(VK_ESCAPE, 0, 0, 0);
+    keybd_event(VK_ESCAPE, 0, KEYEVENTF_KEYUP, 0); keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0); PumpFor(160);
+    Check(IsWindowVisible(menu), "Ctrl+Esc still opens Start");
+    SendMessageA(bar, WM_COMMAND, 100, 0);
+    DestroyWindow(fixture);
+}
 static int workAreaNotices;
 static LRESULT CALLBACK RepaintObserver(HWND window, UINT message, WPARAM wp, LPARAM lp)
 {
@@ -955,8 +990,11 @@ static void StartBehaviorTests(HWND properties, HWND bar, HWND menu, const char 
         Check(!popup || !IsWindowVisible(popup), "Start toggles the classic popup closed without EndMenu");
         Check(!(SendDlgItemMessageA(bar, 100, BM_GETSTATE, 0, 0) & BST_PUSHED), "closing the classic popup releases the Start button");
     }
-    PostMessageA(bar, WM_COMMAND, 100, 0); popup = WaitFor("#32768", NULL);
-    Check(popup != NULL, "classic Start can reopen after cancelling menu tracking"); CloseStartPopup(menu);
+    keybd_event(VK_LWIN, 0, 0, 0); PumpFor(60); keybd_event(VK_LWIN, 0, KEYEVENTF_KEYUP, 0);
+    popup = WaitFor("#32768", NULL);
+    Check(popup != NULL, "Win opens classic Start after cancelling menu tracking");
+    keybd_event(VK_LWIN, 0, 0, 0); PumpFor(60); keybd_event(VK_LWIN, 0, KEYEVENTF_KEYUP, 0); PumpFor(160);
+    Check(!IsWindowVisible(popup), "Win closes a classic Start popup inside its native menu loop");
     SendDlgItemMessageA(properties, 1002, CB_SETCURSEL, 0, 0); SendMessageA(properties, WM_COMMAND, 0x3021, 0);
     Check(GetPrivateProfileIntA("Start", "Classic", -1, settings) == 0, "two-column Start style can be restored");
 }
@@ -1268,7 +1306,7 @@ void start(void)
     wsprintfA(settingsDir, "%s profile", fixture);
     Check(CreateDirectoryA(settingsDir, NULL), "create isolated settings directory");
     wsprintfA(settings, "%s\\settings.ini", settingsDir);
-    if (group != GROUP_BROWSER) { LayoutTests(); HistoryTests(settingsDir, module, settings); }
+    if (group != GROUP_BROWSER) { LayoutTests(); HistoryTests(settingsDir, module, settings); ShellFeatureTests(); }
     if (group == GROUP_FULL || group == GROUP_CORE) { PaintTests(); ConfigTests(settingsDir); DesktopIconTests(settingsDir); }
     if (group == GROUP_CORE) goto cleanup;
     wsprintfA(command, "\"%s\" --settings=\"%s\"", executable, settings);
@@ -1288,6 +1326,7 @@ void start(void)
     started = GetTickCount();
     while (!FindWindowExA(desktop, NULL, NULL, NULL) && GetTickCount() - started < 10000) Sleep(50);
     Check(FindWindowExA(desktop, NULL, NULL, NULL) != NULL, "desktop hosts the installed native shell view");
+    if (group != GROUP_BROWSER) WinKeyTests(bar, FindWindowA("Explorer95.Start", NULL));
     if (group != GROUP_MENU) DesktopRefreshTests(desktop);
     if (group == GROUP_MENU) {
         menu = FindWindowA("Explorer95.Start", NULL);
