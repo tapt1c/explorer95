@@ -1,1 +1,6 @@
 143 BITMAP "resources/Bitmap143.bmp"
+#ifdef _WIN64
+201 RCDATA "build/ui64/tray_hook.dll"
+#else
+201 RCDATA "build/tray_hook.dll"
+#endif

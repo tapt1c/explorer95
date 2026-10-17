@@ -15,7 +15,8 @@ def main():
     root = Path(__file__).resolve().parents[1]
     with tempfile.TemporaryDirectory(prefix="explorer95-build-") as temp:
         work = Path(temp)
-        for name in ("Makefile", "src/start_layout.c", "src/start_layout.h", "src/explorer95.rc", "resources/Bitmap143.bmp"):
+        for name in ("Makefile", "src/start_layout.c", "src/start_layout.h", "src/explorer95.rc", "resources/Bitmap143.bmp",
+                     "src/tray_hook.c", "src/tray_mirror.h"):
             target = work / name
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(root / name, target)

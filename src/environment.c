@@ -1,6 +1,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include "shell_internal.h"
 #include "render_trace.h"
+#include "tray_mirror.h"
 
 ShellState env;
 typedef struct TaskGroup { HWND windows[TASK_LIMIT], button; int count; DWORD process; BOOL active; HICON icon; } TaskGroup;
@@ -900,6 +901,8 @@ static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
     }
     case WM_COPYDATA: {
         const COPYDATASTRUCT *copy = (const COPYDATASTRUCT *)lp;
+        if (copy && (copy->dwData == TRAY_MIRROR_EVENT || copy->dwData == TRAY_MIRROR_SNAPSHOT || copy->dwData == TRAY_MIRROR_STATUS))
+            return TrayMirrorCopyData((HWND)wp, copy);
         if (copy && copy->dwData == FOLDER_OPEN_COPYDATA) {
             FolderRequest request;
             if (env.closing || folderCount == 16 || !FolderRequestCopy(copy,&request)) return FALSE;

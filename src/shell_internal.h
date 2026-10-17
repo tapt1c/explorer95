@@ -159,6 +159,7 @@ int TrayWidth(int height);
 void TrayLayout(int width, int height);
 void TrayPrune(void);
 LRESULT TrayCopyData(const COPYDATASTRUCT *copy);
+LRESULT TrayMirrorCopyData(HWND source, const COPYDATASTRUCT *copy);
 void TrayDestroy(void);
 void PropertiesOpen(void);
 void PropertiesSelectPage(int page);

@@ -53,16 +53,24 @@ build/obj64/%.o: %.c build/obj64/.flags Makefile
 build/explorer95.exe: $(OBJECTS) build/resources.o Makefile
 	$(CC) $(CFLAGS) $(filter %.o,$^) $(LDFLAGS) $(LDLIBS) -o $@
 
-build/resources.o: src/explorer95.rc resources/Bitmap143.bmp build/obj32/.flags Makefile
+build/tray_hook.dll: build/obj32/src/tray_hook.o Makefile
+	$(CC) $(CFLAGS) -shared -nostdlib $< -Wl,--entry,_DllMain@12 -Wl,--kill-at -Wl,--subsystem,windows:4.0 -Wl,--major-os-version,4 -Wl,--minor-os-version,0 -Wl,--disable-dynamicbase -Wl,--disable-nxcompat -lcomctl32 -luser32 -lkernel32 -o $@
+
+build/ui64/tray_hook.dll: build/obj64/src/tray_hook.o Makefile
+	@mkdir -p $(@D)
+	$(CC64) $(CFLAGS_COMMON) -shared -nostdlib $< -Wl,--entry,DllMain -Wl,--kill-at -lcomctl32 -luser32 -lkernel32 -o $@
+
+build/resources.o: src/explorer95.rc resources/Bitmap143.bmp build/tray_hook.dll build/obj32/.flags Makefile
 	@mkdir -p $(@D)
 	$(WINDRES) --preprocessor="$(CC)" --preprocessor-arg=-E --preprocessor-arg=-xc -I. -i $< -o $@
 
-build/ui64/resources.o: src/explorer95.rc resources/Bitmap143.bmp build/obj64/.flags Makefile
+build/ui64/resources.o: src/explorer95.rc resources/Bitmap143.bmp build/ui64/tray_hook.dll build/obj64/.flags Makefile
 	@mkdir -p $(@D)
 	$(WINDRES64) --preprocessor="$(CC64)" --preprocessor-arg=-E --preprocessor-arg=-xc -I. -i $< -o $@
 
 check: all
 	python3 -m unittest discover -s tests -p test_check_pe.py
+	python3 tests/check_pe.py build/tray_hook.dll --dll
 	python3 tests/check_pe.py build/explorer95.exe
 
 check-build:
@@ -97,7 +105,7 @@ build/ui64/smoke.exe: $(TEST_OBJECTS64) build/ui64/resources.o Makefile
 ui64-smoke: build/ui64/smoke.exe
 	$(WINE) build/ui64/smoke.exe --group="$(TEST_GROUP)"
 
--include $(sort $(OBJECTS:.o=.d) $(OBJECTS64:.o=.d) $(TEST_OBJECTS:.o=.d) $(TEST_OBJECTS64:.o=.d))
+-include $(sort $(OBJECTS:.o=.d) $(OBJECTS64:.o=.d) $(TEST_OBJECTS:.o=.d) $(TEST_OBJECTS64:.o=.d) build/obj32/src/tray_hook.d build/obj64/src/tray_hook.d)
 
 clean:
 	rm -rf build

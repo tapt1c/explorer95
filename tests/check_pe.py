@@ -22,7 +22,7 @@ ALLOWED = {
     "comctl32.dll": {"InitCommonControls", "ImageList_Create", "ImageList_Destroy",
                       "ImageList_AddMasked", "ImageList_GetImageCount", "ImageList_ReplaceIcon",
                       # Original Win95 common-controls drag-image API (no IE4+ dependency).
-                      "ImageList_BeginDrag", "ImageList_DragEnter", "ImageList_DragMove",
+                      "ImageList_GetIcon", "ImageList_BeginDrag", "ImageList_DragEnter", "ImageList_DragMove",
                       "ImageList_DragLeave", "ImageList_EndDrag", "ImageList_Draw", "ImageList_Add"},
     "comdlg32.dll": {"GetOpenFileNameA"},
     # Classic GDI drawing and DIB transfer APIs, available in Windows 95;
@@ -30,6 +30,7 @@ ALLOWED = {
     "gdi32.dll": {"CreatePatternBrush", "PatBlt", "GetDeviceCaps", "GetClipBox", "SaveDC", "RestoreDC", "ExcludeClipRect", "Arc", "CreatePen", "Ellipse", "CreateSolidBrush", "GetDIBits", "SetDIBits", "LineTo", "MoveToEx", "GetStockObject", "SelectObject", "SetBkMode", "SetTextColor", "BitBlt",
                   "Polygon", "StretchBlt", "CreateCompatibleBitmap", "CreateBitmap", "SetBkColor", "SetWindowOrgEx", "CreateFontIndirectA", "GetTextFaceA", "GetTextExtentPoint32A", "GetTextMetricsA", "CreateCompatibleDC", "DeleteDC", "DeleteObject", "GetObjectA"},
     "kernel32.dll": set("""
+        FindResourceA LoadResource SizeofResource LockResource GetCurrentProcess ReadProcessMemory
         GetDiskFreeSpaceA GetVolumeInformationA WideCharToMultiByte WritePrivateProfileSectionA
         CreateMutexA ReleaseMutex CreateToolhelp32Snapshot Process32First Process32Next GetSystemTimeAsFileTime GetTempFileNameA MoveFileA
         CompareFileTime FileTimeToLocalFileTime FileTimeToSystemTime GetDateFormatA
@@ -50,6 +51,7 @@ ALLOWED = {
         DragAcceptFiles DragQueryFileA DragFinish
     """.split()),
     "user32.dll": set("""
+        SetWindowsHookExA CallNextHookEx UnhookWindowsHookEx
         CharUpperBuffA SetScrollInfo IsRectEmpty SetRectEmpty OffsetRect
         AdjustWindowRectEx EnableWindow CheckMenuItem ClientToScreen CloseClipboard DeleteMenu EmptyClipboard EnableMenuItem
         GetClipboardData GetMenu GetMenuDefaultItem GetMenuItemID IsClipboardFormatAvailable OpenClipboard RegisterClipboardFormatA SetClipboardData
@@ -74,8 +76,11 @@ ALLOWED = {
 }
 
 
-def check(path):
-    data = Path(path).read_bytes()
+def check(path, dll=False, require_hook=False):
+    check_data(Path(path).read_bytes(), dll=dll, require_hook=require_hook)
+
+
+def check_data(data, dll=False, require_hook=False):
 
     def unpack(fmt, offset):
         return struct.unpack_from("<" + fmt, data, offset)
@@ -90,7 +95,8 @@ def check(path):
     machine, section_count = unpack("HH", pe + 4)
     require(machine == 0x14C, "target must be 32-bit x86")
     optional_size, characteristics = unpack("HH", pe + 20)
-    require(characteristics & 2 and not characteristics & 0x2000, "target must be an executable")
+    require(characteristics & 2 and bool(characteristics & 0x2000) == dll,
+            "target must be a DLL" if dll else "target must be an executable")
     optional = pe + 24
     require(unpack("H", optional)[0] == 0x10B, "target must be PE32")
     os_version = unpack("HH", optional + 40)
@@ -101,10 +107,15 @@ def check(path):
     require(subsystem == 2, "target must use the Windows GUI subsystem")
     require(not dll_flags & (0x40 | 0x100 | 0x4000), "unexpected modern loader flags")
     sections = []
+    shared = False
     for i in range(section_count):
         base = optional + optional_size + 40 * i
         virtual_size, rva, raw_size, raw_offset = unpack("IIII", base + 8)
         sections.append((rva, max(virtual_size, raw_size), raw_offset))
+        if data[base:base + 8].rstrip(b"\0") == b".shared":
+            shared = unpack("I", base + 36)[0] & 0xd0000000 == 0xd0000000
+    if dll:
+        require(shared, "tray DLL must have a readable, writable shared handle section")
 
     def offset(rva):
         for start, size, raw in sections:
@@ -140,11 +151,38 @@ def check(path):
             thunk += 4
         descriptor += 20
     require(libraries and functions, "no imports were checked")
-    print(f"PASS: x86 PE32, GUI/OS 4.0, {functions} reviewed imports in {libraries} system DLLs; no CRT")
+    if require_hook:
+        resource_rva, resource_size = unpack("II", optional + 112)
+        require(resource_rva and resource_size, "missing embedded tray hook")
+        root = offset(resource_rva)
+
+        def resource_entry(directory, wanted=None):
+            require(0 <= directory <= resource_size - 16, "invalid resource directory")
+            named, ids = unpack("HH", root + directory + 12)
+            count = named + ids
+            require(count <= 4096 and directory + 16 + count * 8 <= resource_size, "invalid resource entries")
+            for index in range(count):
+                name, target = unpack("II", root + directory + 16 + index * 8)
+                if wanted is None or name == wanted:
+                    return target
+            raise ValueError("missing embedded tray hook")
+
+        kind = resource_entry(0, 10)
+        require(kind & 0x80000000, "invalid RCDATA directory")
+        hook = resource_entry(kind & 0x7fffffff, 201)
+        require(hook & 0x80000000, "invalid tray hook resource directory")
+        leaf = resource_entry(hook & 0x7fffffff)
+        require(not leaf & 0x80000000 and leaf + 16 <= resource_size, "invalid tray hook resource leaf")
+        payload_rva, size = unpack("II", root + leaf)
+        start = offset(payload_rva)
+        require(size and start + size <= len(data), "truncated embedded tray hook")
+        check_data(data[start:start + size], dll=True)
+    print(f"PASS: x86 PE32 {'DLL' if dll else 'EXE'}, GUI/OS 4.0, {functions} reviewed imports in {libraries} system DLLs; no CRT")
 
 
 if __name__ == "__main__":
     try:
-        check(sys.argv[1])
+        dll = len(sys.argv) == 3 and sys.argv[2] == "--dll"
+        check(sys.argv[1], dll=dll, require_hook=not dll)
     except (IndexError, ValueError, struct.error) as error:
         sys.exit(f"FAIL: {error}")
