@@ -11,6 +11,7 @@
 #include "render_trace.h"
 #include "browser.h"
 #include "desktop_icons.h"
+#include "folder_open.h"
 
 struct NativeView {
     IShellBrowser browser;
@@ -215,8 +216,8 @@ static void PaintBackground(NativeView *view, HDC target, HWND window)
     PaintBufferEnd(&view->background, target, &rect);
 }
 
-/* Route filesystem default actions through us so desktop launches also enter
- * the recent-program list. Virtual shell objects keep their native behavior. */
+/* Route filesystem and virtual folders through our browser. Shell IDList Array
+ * carries My Computer/Recycle Bin without relying on a filesystem path. */
 static BOOL OpenDesktopSelection(NativeView *view)
 {
     IDataObject *data;
@@ -225,6 +226,14 @@ static BOOL OpenDesktopSelection(NativeView *view)
     char path[MAX_PATH];
     BOOL handled = FALSE;
     if (FAILED(IShellView_GetItemObject(view->view, SVGIO_SELECTION, &IID_IDataObject, (void **)&data))) return FALSE;
+    {
+        LPITEMIDLIST absolute = FolderSelectionPidl(data);
+        if (absolute) {
+            HWND opened = SHGetPathFromIDListA(absolute,path) ? host.openFolder(path) : OpenNativeFolder(absolute);
+            if (!opened) MessageBoxA(view->parent,"This folder could not be opened.","Explorer95",MB_OK | MB_ICONEXCLAMATION);
+            HeapFree(GetProcessHeap(),0,absolute); IDataObject_Release(data); return TRUE;
+        }
+    }
     ZeroMemory(&format, sizeof(format));
     format.cfFormat = CF_HDROP; format.dwAspect = DVASPECT_CONTENT;
     format.lindex = -1; format.tymed = TYMED_HGLOBAL;

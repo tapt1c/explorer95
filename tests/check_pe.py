@@ -15,7 +15,10 @@ from pathlib import Path
 # this list. In particular EndMenu was mistakenly allowed in v0.7.0-alpha.1;
 # the user's real Windows 95 loader rejected it before our entry point ran.
 ALLOWED = {
-    "advapi32.dll": {"GetUserNameA", "RegOpenKeyExA", "RegQueryValueExA", "RegCloseKey"},
+    # ANSI registry enumeration, recovery and flush APIs from stock Win95.
+    "advapi32.dll": {"GetUserNameA", "RegOpenKeyExA", "RegQueryValueExA", "RegCloseKey",
+                     "RegCreateKeyExA", "RegSetValueExA", "RegDeleteValueA", "RegDeleteKeyA",
+                     "RegEnumKeyExA", "RegEnumValueA", "RegQueryInfoKeyA", "RegFlushKey"},
     "comctl32.dll": {"InitCommonControls", "ImageList_Create", "ImageList_Destroy",
                       "ImageList_AddMasked", "ImageList_GetImageCount", "ImageList_ReplaceIcon",
                       # Original Win95 common-controls drag-image API (no IE4+ dependency).
@@ -27,7 +30,7 @@ ALLOWED = {
     "gdi32.dll": {"CreatePatternBrush", "PatBlt", "GetDeviceCaps", "GetClipBox", "SaveDC", "RestoreDC", "ExcludeClipRect", "Arc", "CreatePen", "Ellipse", "CreateSolidBrush", "GetDIBits", "SetDIBits", "LineTo", "MoveToEx", "GetStockObject", "SelectObject", "SetBkMode", "SetTextColor", "BitBlt",
                   "StretchBlt", "CreateCompatibleBitmap", "CreateBitmap", "SetBkColor", "SetWindowOrgEx", "CreateFontIndirectA", "GetTextExtentPoint32A", "GetTextMetricsA", "CreateCompatibleDC", "DeleteDC", "DeleteObject", "GetObjectA"},
     "kernel32.dll": set("""
-        CreateToolhelp32Snapshot Process32First Process32Next GetSystemTimeAsFileTime GetTempFileNameA MoveFileA
+        CreateMutexA ReleaseMutex CreateToolhelp32Snapshot Process32First Process32Next GetSystemTimeAsFileTime GetTempFileNameA MoveFileA
         CompareFileTime FileTimeToLocalFileTime FileTimeToSystemTime GetDateFormatA
         GetFileSize ReadFile WriteFile GlobalAlloc GlobalFree GlobalLock GlobalSize GlobalUnlock
         CloseHandle CopyFileA CreateDirectoryA CreateFileA ExitProcess ExpandEnvironmentStringsA FindClose FindFirstFileA
@@ -40,7 +43,7 @@ ALLOWED = {
     """.split()),
     "ole32.dll": {"CoTaskMemAlloc", "OleInitialize", "OleUninitialize", "CoCreateInstance", "CoTaskMemFree", "ReleaseStgMedium"},
     "shell32.dll": set("""
-        SHAddToRecentDocs SHFileOperationA ShellExecuteExA ExtractIconExA SHGetFileInfoA SHGetMalloc SHGetPathFromIDListA
+        SHChangeNotify SHAddToRecentDocs SHFileOperationA ShellExecuteExA ExtractIconExA SHGetFileInfoA SHGetMalloc SHGetPathFromIDListA
         SHGetSpecialFolderLocation ShellExecuteA SHAppBarMessage SHGetDesktopFolder
         DragAcceptFiles DragQueryFileA DragFinish
     """.split()),

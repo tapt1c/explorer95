@@ -22,6 +22,10 @@ static BOOL hotkeyDesktop, hotkeyStart;
 static BOOL hotkeyLeftWin, hotkeyRightWin, winPending, winUsed;
 static PaintColors desktopColors;
 static BOOL changingDesktopColors;
+/* Internal wakeups carry no pointer: only validated WM_COPYDATA payloads enter
+ * this bounded, process-owned queue. External WM_APP messages cannot free data. */
+static FolderRequest folderRequests[16];
+static UINT folderHead, folderCount;
 
 BOOL EnvRefreshStartItems(void)
 {
@@ -108,23 +112,13 @@ static int Clamp(int value, int low, int high) { return value < low ? low : valu
 static int Option(const char *name, int fallback)
 { return (int)GetPrivateProfileIntA("Taskbar", name, fallback, env.ini); }
 
-static void SettingsPath(void)
+static BOOL SettingsPath(void)
 {
-    const char *command = GetCommandLineA(), *match = NULL, *p;
-    int i, length;
-    /* An explicit path keeps tests and portable installations independent of
-     * the normal user profile. The path may be quoted after the equals sign. */
-    for (p = command; *p; ++p) if (*p == '-' && p[1] == '-') {
-        const char key[] = "--settings=";
-        for (i = 0; key[i] && p[i] == key[i]; ++i) {}
-        if (!key[i]) { match = p + i; break; }
-    }
-    if (match) {
-        BOOL quoted = *match == '"'; if (quoted) ++match;
-        for (i = 0; match[i] && i < MAX_PATH - 1 && (quoted ? match[i] != '"' : match[i] != ' '); ++i)
-            env.ini[i] = match[i];
-        env.ini[i] = 0;
-        GetFullPathNameA(env.ini, MAX_PATH, env.dataDir, NULL);
+    int length; DWORD error = FolderSettingsPath(GetCommandLineA(),env.ini);
+    if (error) { EnvError(NULL,"The settings path is invalid.",error); return FALSE; }
+    /* Parse real arguments: a folder named --settings=... is not an option. */
+    if (env.ini[0]) {
+        lstrcpyA(env.dataDir,env.ini);
         length = lstrlenA(env.dataDir);
         while (length && env.dataDir[length - 1] != '\\') --length;
         if (length > 3) --length;
@@ -163,6 +157,7 @@ static void SettingsPath(void)
     env.options.startItems = GetPrivateProfileIntA("Start", "VisibleItems", (1U << 12) - 1, env.ini);
     GetPrivateProfileStringA("Start", "ButtonLabel", "Start", env.options.startLabel, sizeof(env.options.startLabel), env.ini);
     if (!env.options.startLabel[0]) lstrcpyA(env.options.startLabel, "Start");
+    return TRUE;
 }
 
 BOOL EnvironmentLaunch(HWND owner, const char *path, const char *arguments, const char *directory)
@@ -841,6 +836,13 @@ static LRESULT CALLBACK BridgeProc(HWND window, UINT message, WPARAM wp, LPARAM 
     }
     return DefWindowProcA(window, message, wp, lp);
 }
+BOOL EnvironmentOpenRequest(const FolderRequest *request)
+{
+    if (env.closing || !FolderRequestValid(request)) return FALSE;
+    if (env.host.openRequest(request)) return TRUE;
+    MessageBoxA(env.bar,"This folder could not be opened. Check that it exists and is available.","Explorer95",MB_OK | MB_ICONEXCLAMATION);
+    return FALSE;
+}
 static void AutoHideTick(void)
 {
     POINT point; RECT rect; BOOL inside;
@@ -893,7 +895,25 @@ static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
         item.hDC = PaintBufferBegin(&barButtonBuffer, target, &item.rcItem);
         result = EnvDrawBarButton(&item); PaintBufferEnd(&barButtonBuffer, target, &item.rcItem); return result;
     }
-    case WM_COPYDATA: return TrayCopyData((const COPYDATASTRUCT *)lp);
+    case WM_COPYDATA: {
+        const COPYDATASTRUCT *copy = (const COPYDATASTRUCT *)lp;
+        if (copy && copy->dwData == FOLDER_OPEN_COPYDATA) {
+            FolderRequest request;
+            if (env.closing || folderCount == 16 || !FolderRequestCopy(copy,&request)) return FALSE;
+            if (!PostMessageA(window,WM_APP + 34,0,0)) return FALSE;
+            folderRequests[(folderHead+folderCount)%16] = request; ++folderCount;
+            return TRUE;
+        }
+        return TrayCopyData(copy);
+    }
+    case WM_APP + 34: {
+        if (folderCount) {
+            FolderRequest request = folderRequests[folderHead];
+            folderHead = (folderHead+1)%16; --folderCount;
+            EnvironmentOpenRequest(&request);
+        }
+        return 0;
+    }
     case WM_SETTINGCHANGE: case WM_DISPLAYCHANGE:
         if (message == WM_DISPLAYCHANGE) EndQuickResize(FALSE);
         if (message == WM_DISPLAYCHANGE || wp != SPI_SETWORKAREA) StartRefresh();
@@ -999,7 +1019,8 @@ HWND EnvironmentCreate(const EnvironmentHost *callbacks)
 {
     APPBARDATA data;
     RenderTraceOpen();
-    env.host = *callbacks; SettingsPath(); NativeViewSetHost(callbacks); PaintColorsChanged(&desktopColors); EnvRefreshStartItems();
+    env.host = *callbacks; if (!SettingsPath()) return NULL;
+    NativeViewSetHost(callbacks); PaintColorsChanged(&desktopColors); EnvRefreshStartItems();
     SystemParametersInfoA(SPI_GETWORKAREA, 0, &env.originalArea, 0);
     env.primary = FindWindowA("Shell_TrayWnd", NULL) == NULL;
     if (!EnvRegister("Explorer95.Desktop", DesktopProc, (HBRUSH)(COLOR_BACKGROUND + 1), 0) ||
@@ -1064,6 +1085,7 @@ void EnvironmentShutdown(void)
     APPBARDATA data; int i;
     if (env.closing) return;
     env.closing = TRUE;
+    folderHead = folderCount = 0;
     ShutdownClose(); EndQuickResize(FALSE); QuickHover(NULL);
     KillTimer(env.bar, 1); KillTimer(env.bar, 2); winPending = FALSE; DragAcceptFiles(env.bar, FALSE);
     if (hotkeyDesktop) UnregisterHotKey(env.bar, 1);

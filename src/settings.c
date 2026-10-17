@@ -1,6 +1,47 @@
 #define WIN32_LEAN_AND_MEAN
 #include "settings_internal.h"
+#include "folder_handler.h"
 #define ID_APPLY_NOW 0x3021
+
+static void FolderSelection(HWND owner, BOOL restore)
+{
+    DWORD version = GetVersion(), error; HKEY storage = NULL;
+    char directory[MAX_PATH], executable[MAX_PATH], source[MAX_PATH], selection[32];
+    if (!(version & 0x80000000UL) || LOBYTE(LOWORD(version)) != 4 || HIBYTE(LOWORD(version)) != 0) {
+        MessageBoxA(owner,"System folder registration is supported only on Windows 95.\r\nNo file associations were changed.","Explorer95 Folders",MB_OK | MB_ICONINFORMATION); return;
+    }
+    if (MessageBoxA(owner,restore ?
+        "Restore the folder-opening commands saved before Explorer95 was selected?\r\n\r\n"
+        "Changes made by another file manager will not be overwritten.\r\nThis takes effect immediately; startup shell settings stay unchanged." :
+        "Use Explorer95 to open folders, drives, My Computer and Recycle Bin?\r\n\r\n"
+        "This changes system-wide folder associations immediately.\r\nOriginal commands and DDE settings will be saved for Restore.\r\n"
+        "A separate executable will be copied into the Windows directory.\r\nStartup shell settings stay unchanged. Test in a Windows 95 VM first.",
+        "Explorer95 Folders",MB_YESNO | MB_DEFBUTTON2 | MB_ICONEXCLAMATION) != IDYES) return;
+    error = RegCreateKeyExA(HKEY_LOCAL_MACHINE,"Software\\Explorer95",0,NULL,0,KEY_READ | KEY_WRITE,NULL,&storage,NULL);
+    if (error) { EnvError(owner,"Cannot open folder-handler recovery storage.",error); return; }
+    executable[0] = 0;
+    if (!restore) {
+        HKEY existing = NULL;
+        error = RegOpenKeyExA(storage,"FolderHandler",0,KEY_READ,&existing);
+        if (!error) { RegCloseKey(existing); error = ERROR_ALREADY_EXISTS; }
+        else if (error == ERROR_FILE_NOT_FOUND) {
+            error = ERROR_SUCCESS;
+            if (!GetModuleFileNameA(NULL,source,MAX_PATH) || !GetWindowsDirectoryA(directory,MAX_PATH)) error = GetLastError();
+            if (!error) error = StageShellExecutable(source,directory,selection);
+            if (!error && !EnvJoin(executable,directory,selection)) error = ERROR_FILENAME_EXCED_RANGE;
+        }
+    }
+    if (!error) error = ConfigureFolderHandler(HKEY_CLASSES_ROOT,storage,executable,env.ini,restore);
+    RegCloseKey(storage);
+    if (error) {
+        EnvError(owner,"Could not change folder associations. Recovery data, if present, remains in\r\n"
+            "HKEY_LOCAL_MACHINE\\Software\\Explorer95\\FolderHandler.\r\n"
+            "If already selected, use Restore before installing an updated handler.",error); return;
+    }
+    SHChangeNotify(SHCNE_ASSOCCHANGED,SHCNF_IDLIST,NULL,NULL);
+    MessageBoxA(owner,restore ? "The previous folder-opening commands were restored." :
+        "Explorer95 now handles folder opening.\r\nUse Restore folder handler to undo this selection.","Explorer95 Folders",MB_OK | MB_ICONINFORMATION);
+}
 
 static void ShellSelection(HWND owner, BOOL restore)
 {
@@ -330,11 +371,15 @@ static LRESULT CALLBACK PropertiesProc(HWND window, UINT message, WPARAM wp, LPA
         Control(window, SETTINGS_DESKTOP, "BUTTON", "Background / display settings...", WS_TABSTOP, ID_BACKGROUND, 252, 298, 232, 26);
         Control(window, SETTINGS_DESKTOP, "STATIC", "Wallpaper, colors and screen saver use Windows display properties.", 0, 0, 30, 326, 454, 16);
         TraySettingsBegin(); TraySettingsCreate(window);
-        Control(window, SETTINGS_SHELL, "BUTTON", "Windows 95 startup shell", BS_GROUPBOX, 0, 24, 54, 472, 194);
-        Control(window, SETTINGS_SHELL, "STATIC", "Select which shell starts with Windows.\r\nYour current session stays open; the change takes effect after restart.", 0, 0, 38, 82, 442, 48);
-        Control(window, SETTINGS_SHELL, "BUTTON", "Use Explorer95 as shell...", WS_TABSTOP, ID_INSTALLSHELL, 38, 150, 442, 28);
-        Control(window, SETTINGS_SHELL, "BUTTON", "Restore previous shell...", WS_TABSTOP, ID_RESTORESHELL, 38, 192, 442, 28);
-        Control(window, SETTINGS_SHELL, "STATIC", "These system actions have their own confirmation.\r\nExplorer95 file-window preferences remain in Tools > Folder Options.", 0, 0, 38, 270, 442, 52);
+        Control(window, SETTINGS_SHELL, "BUTTON", "Windows 95 startup shell", BS_GROUPBOX, 0, 24, 48, 472, 116);
+        Control(window, SETTINGS_SHELL, "STATIC", "Select which shell starts with Windows.\r\nThe change takes effect after restart.", 0, 0, 38, 68, 442, 34);
+        Control(window, SETTINGS_SHELL, "BUTTON", "Use Explorer95 as shell...", WS_TABSTOP, ID_INSTALLSHELL, 38, 116, 214, 28);
+        Control(window, SETTINGS_SHELL, "BUTTON", "Restore previous shell...", WS_TABSTOP, ID_RESTORESHELL, 266, 116, 214, 28);
+        Control(window, SETTINGS_SHELL, "BUTTON", "Windows 95 folder opening", BS_GROUPBOX, 0, 24, 176, 472, 148);
+        Control(window, SETTINGS_SHELL, "STATIC", "Open folders, drives, My Computer and Recycle Bin in Explorer95.\r\nIndependent of the startup shell; original commands can be restored.", 0, 0, 38, 198, 442, 38);
+        Control(window, SETTINGS_SHELL, "BUTTON", "Use Explorer95 for folders...", WS_TABSTOP, ID_INSTALLFOLDERS, 38, 246, 214, 28);
+        Control(window, SETTINGS_SHELL, "BUTTON", "Restore folder handler...", WS_TABSTOP, ID_RESTOREFOLDERS, 266, 246, 214, 28);
+        Control(window, SETTINGS_SHELL, "STATIC", "These actions apply immediately after confirmation.\r\nCancel does not undo them; use the corresponding Restore button.", 0, 0, 38, 282, 442, 34);
         MoveWindow(EnvControl(window, "BUTTON", "OK", WS_TABSTOP | BS_DEFPUSHBUTTON, IDOK), 250, 352, 80, 26, FALSE);
         MoveWindow(EnvControl(window, "BUTTON", "Cancel", WS_TABSTOP, IDCANCEL), 338, 352, 80, 26, FALSE);
         MoveWindow(EnvControl(window, "BUTTON", "Apply", WS_TABSTOP, ID_APPLY_NOW), 426, 352, 80, 26, FALSE);
@@ -367,6 +412,7 @@ static LRESULT CALLBACK PropertiesProc(HWND window, UINT message, WPARAM wp, LPA
         if (LOWORD(wp) == ID_BACKGROUND) { EnvironmentLaunch(window, "control.exe", "desk.cpl", NULL); return 0; }
         if (LOWORD(wp) == ID_LINEUP) { NativeViewLineUp(env.desktopView); return 0; }
         if (LOWORD(wp) == ID_INSTALLSHELL || LOWORD(wp) == ID_RESTORESHELL) { ShellSelection(window, LOWORD(wp) == ID_RESTORESHELL); return 0; }
+        if (LOWORD(wp) == ID_INSTALLFOLDERS || LOWORD(wp) == ID_RESTOREFOLDERS) { FolderSelection(window,LOWORD(wp) == ID_RESTOREFOLDERS); return 0; }
         if (LOWORD(wp) == ID_EDGE || LOWORD(wp) == ID_ROWS || LOWORD(wp) == ID_LARGE) StartSettingsScreenChanged(window);
         if (StartSettingsCommand(window, wp) || TraySettingsCommand(window, wp)) return 0;
         if (HIWORD(wp) == BN_CLICKED || HIWORD(wp) == EN_CHANGE || HIWORD(wp) == CBN_SELCHANGE) SettingsPreviewChanged(window);

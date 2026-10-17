@@ -2,6 +2,7 @@
 #define EXPLORER95_ENVIRONMENT_H
 #include <windows.h>
 #include <shlobj.h>
+#include "folder_open.h"
 
 typedef struct EnvironmentHost {
     HINSTANCE instance;
@@ -10,10 +11,12 @@ typedef struct EnvironmentHost {
     BOOL (*specialPath)(int folder, char *path);
     void (*showRun)(void);
     void (*closeFolders)(void);
+    HWND (*openRequest)(const FolderRequest *request);
 } EnvironmentHost;
 
 HWND EnvironmentCreate(const EnvironmentHost *host);
 BOOL EnvironmentTranslate(MSG *message);
+BOOL EnvironmentOpenRequest(const FolderRequest *request);
 void EnvironmentRecordLaunch(const char *path, const char *arguments);
 BOOL EnvironmentLaunch(HWND owner, const char *path, const char *arguments, const char *directory);
 void EnvironmentOpenNamespace(int csidl);

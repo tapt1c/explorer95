@@ -615,6 +615,36 @@ static HWND Open(const char *path, LPCITEMIDLIST pidl)
 }
 HWND BrowserOpen(const char *path) { return Open(path, NULL); }
 HWND BrowserOpenNamespace(LPCITEMIDLIST absolute) { return Open(NULL, absolute); }
+HWND BrowserOpenRequest(const FolderRequest *request)
+{
+    HWND window = NULL;
+    if (!FolderRequestValid(request)) return NULL;
+    if (request->target[0] == ':' && request->target[1] == ':') {
+        IShellFolder *desktop; LPITEMIDLIST pidl = NULL; WCHAR wide[MAX_PATH]; SFGAOF attributes = SFGAO_FOLDER;
+        if (MultiByteToWideChar(CP_ACP,0,request->target,-1,wide,MAX_PATH) && SUCCEEDED(SHGetDesktopFolder(&desktop))) {
+            if (SUCCEEDED(IShellFolder_ParseDisplayName(desktop,NULL,NULL,wide,NULL,&pidl,NULL)) && pidl) {
+                /* GetAttributesOf takes a fresh input mask; ParseDisplayName's
+                 * optional attribute output is not a reusable request mask. */
+                attributes = SFGAO_FOLDER;
+                if (SUCCEEDED(IShellFolder_GetAttributesOf(desktop,1,(LPCITEMIDLIST *)&pidl,&attributes)) && (attributes & SFGAO_FOLDER)) {
+                    char path[MAX_PATH];
+                    window = SHGetPathFromIDListA(pidl,path) ? BrowserOpen(path) : BrowserOpenNamespace(pidl);
+                }
+            }
+            if (pidl) CoTaskMemFree(pidl);
+            IShellFolder_Release(desktop);
+        }
+    } else {
+        DWORD attributes = GetFileAttributesA(request->target);
+        if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY)) window = BrowserOpen(request->target);
+    }
+    if (window && request->explore) {
+        Browser *browser = (Browser *)GetWindowLongPtrA(window,GWLP_USERDATA);
+        browser->options.folders = TRUE; BrowserLayout(browser); BrowserUpdate(browser); BrowserTreeSync(browser);
+    }
+    if (window) SetForegroundWindow(window);
+    return window;
+}
 
 static BOOL CALLBACK CloseBrowser(HWND window, LPARAM unused)
 {

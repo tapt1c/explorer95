@@ -175,9 +175,22 @@ void start(void)
     HICON icon;
     EnvironmentHost host;
     HRESULT ole;
+    FolderRequest request; BOOL requested; DWORD error, waited; HANDLE startup;
     instance = GetModuleHandleA(NULL);
+    error = FolderRequestParse(GetCommandLineA(),&request,&requested);
+    if (error) { ErrorMessage(NULL,"Invalid folder-opening command.",error); ExitProcess(1); }
+    startup = CreateMutexA(NULL,FALSE,"Explorer95.Startup");
+    if (!startup) { ErrorMessage(NULL,"Cannot coordinate Explorer95 startup.",GetLastError()); ExitProcess(1); }
+    waited = WaitForSingleObject(startup,10000);
+    if (waited != WAIT_OBJECT_0 && waited != WAIT_ABANDONED) { CloseHandle(startup); ErrorMessage(NULL,"Explorer95 startup is busy.",ERROR_TIMEOUT); ExitProcess(1); }
     previous = FindWindowA(BAR_CLASS, NULL);
     if (previous) {
+        ReleaseMutex(startup); CloseHandle(startup);
+        if (requested) {
+            error = FolderRequestSend(previous,&request);
+            if (error) ErrorMessage(previous,"The running Explorer95 could not accept the folder request.",error);
+            ExitProcess(error ? 1 : 0);
+        }
         if (RenderTraceRequested()) MessageBoxA(previous,
             "Explorer95 is already running. Exit that instance before starting rendering diagnostics.",
             "Explorer95 diagnostics", MB_OK | MB_ICONINFORMATION);
@@ -194,8 +207,11 @@ void start(void)
         ExitProcess(1);
     host.instance = instance; host.font = uiFont;
     host.openFolder = BrowserOpen; host.specialPath = SpecialPath; host.showRun = ShowRun; host.closeFolders = BrowserShutdown;
+    host.openRequest = BrowserOpenRequest;
     bar = EnvironmentCreate(&host);
     if (!bar) { EnvironmentShutdown(); ExitProcess(1); }
+    ReleaseMutex(startup); CloseHandle(startup);
+    if (requested) EnvironmentOpenRequest(&request);
     while (GetMessageA(&message, NULL, 0, 0) > 0) {
         HWND root = RootWindow(message.hwnd);
         char kind[64];

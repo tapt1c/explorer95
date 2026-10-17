@@ -2,6 +2,7 @@
 #define EXPLORER95_BROWSER_H
 #include <windows.h>
 #include <shlobj.h>
+#include "folder_open.h"
 
 #define BROWSER_CLASS "Explorer95.Files"
 #define BROWSER_NAMESPACE_CLASS "Explorer95.Namespace"
@@ -48,6 +49,7 @@
 BOOL BrowserRegister(HINSTANCE instance, HFONT font);
 HWND BrowserOpen(const char *path);
 HWND BrowserOpenNamespace(LPCITEMIDLIST absolute);
+HWND BrowserOpenRequest(const FolderRequest *request);
 BOOL BrowserTranslate(MSG *message);
 void BrowserShutdown(void);
 #endif

@@ -12,6 +12,7 @@
 #include "../src/paint.h"
 #include "../src/browser.h"
 #include "../src/program_history.h"
+#include "../src/settings_internal.h"
 
 static PROCESS_INFORMATION process;
 static HWND child;
@@ -25,6 +26,12 @@ void *memset(void *destination, int value, size_t count)
     return destination;
 }
 
+void *memcpy(void *destination, const void *source, size_t count)
+{
+    unsigned char *out = destination; const unsigned char *in = source;
+    while (count--) *out++ = *in++;
+    return destination;
+}
 static void Log(const char *text)
 {
     DWORD written;
@@ -119,6 +126,8 @@ static void Check(BOOL okay, const char *description)
 
 #include "desktop_icons_cases.h"
 #include "shell_features_cases.h"
+#include "folder_handler_cases.h"
+#include "folder_selection_cases.h"
 
 static HWND WaitFor(const char *kind, const char *title)
 {
@@ -130,6 +139,38 @@ static HWND WaitFor(const char *kind, const char *title)
         Sleep(50);
     } while (GetTickCount() - started < 10000);
     return NULL;
+}
+static void FolderForwardTests(const char *executable, const char *settings, const char *folder, HWND bar)
+{
+    const char *options[] = {"open","explore","namespace","namespace"};
+    const char *targets[] = {folder,folder,"computer","recyclebin"}; int i;
+    for (i = 0; i < 4; ++i) {
+        char command[1024]; STARTUPINFOA startup; PROCESS_INFORMATION sender; HWND window; DWORD code, started;
+        ZeroMemory(&startup,sizeof(startup)); startup.cb = sizeof(startup);
+        wsprintfA(command,"\"%s\" --settings=\"%s\" --%s=\"%s\"",executable,settings,options[i],targets[i]);
+        Check(CreateProcessA(NULL,command,NULL,NULL,FALSE,0,NULL,NULL,&startup,&sender),"launch a folder-opening client instance");
+        Check(WaitForGuiProcess(sender.hProcess,10000) == WAIT_OBJECT_0 && GetExitCodeProcess(sender.hProcess,&code) && !code,
+            "client forwards its folder request and exits without another shell");
+        CloseHandle(sender.hThread); CloseHandle(sender.hProcess);
+        window = WaitFor(i < 2 ? BROWSER_CLASS : BROWSER_NAMESPACE_CLASS,NULL);
+        Check(window && FindWindowA("Explorer95.Taskbar",NULL) == bar,"existing Explorer95 receives the folder-opening request");
+        if (i == 1) {
+            started = GetTickCount();
+            while (!IsWindowVisible(GetDlgItem(window,ID_FOLDERTREE)) && GetTickCount()-started < 3000) DesktopPump();
+            Check(IsWindowVisible(GetDlgItem(window,ID_FOLDERTREE)),"Explore opens the Folders pane without changing other windows");
+        }
+        if (i >= 2) Check(FindWindowExA(window,NULL,"SHELLDLL_DefView",NULL) != NULL,"requested My Computer or Recycle Bin retains the real Shell32 view");
+        PostMessageA(window,WM_CLOSE,0,0); started = GetTickCount();
+        while (IsWindow(window) && GetTickCount()-started < 3000) DesktopPump();
+        Check(!IsWindow(window),"requested folder closes without terminating the shell");
+    }
+    {
+        COPYDATASTRUCT copy; FolderRequest invalid; ZeroMemory(&invalid,sizeof(invalid));
+        copy.dwData = FOLDER_OPEN_COPYDATA; copy.cbData = sizeof(invalid); copy.lpData = &invalid;
+        Check(!SendMessageA(bar,WM_COPYDATA,0,(LPARAM)&copy),"running shell rejects a malformed folder IPC packet");
+        SendMessageA(bar,WM_APP + 34,0,(LPARAM)1);
+        Check(IsWindow(bar),"an unsolicited folder wakeup cannot dereference an external pointer");
+    }
 }
 
 static void Navigate(HWND browser, const char *path)
@@ -797,6 +838,21 @@ static HWND OpenSettings(HWND bar)
     HWND window; SendMessageA(bar, WM_COMMAND, 600, 0); window = WaitFor("Explorer95.Properties", NULL);
     Check(window != NULL, "unified environment properties open"); return window;
 }
+static void FolderSettingsTests(HWND bar)
+{
+    HWND properties = OpenSettings(bar), install, restore; RECT area, first, second;
+    SettingsPage(properties,4,-1); install = GetDlgItem(properties,ID_INSTALLFOLDERS); restore = GetDlgItem(properties,ID_RESTOREFOLDERS);
+    DesktopPump();
+    GetClientRect(properties,&area); GetWindowRect(install,&first); GetWindowRect(restore,&second);
+    MapWindowPoints(NULL,properties,(POINT *)&first,2); MapWindowPoints(NULL,properties,(POINT *)&second,2);
+    Check(IsWindowVisible(install) && IsWindowVisible(restore) && first.left >= 0 && second.right <= area.right &&
+        first.bottom < 344 && second.bottom < 344 && first.right <= second.left,
+        "System Shell page contains separate nonoverlapping folder install/restore controls at 640x480");
+    PostMessageA(properties,WM_COMMAND,ID_INSTALLFOLDERS,0);
+    { HWND dialog = WaitFor("#32770","Explorer95 Folders");
+      Check(dialog != NULL,"folder registration is guarded on systems other than Windows 95"); SendMessageA(dialog,WM_COMMAND,IDOK,0); }
+    SendMessageA(properties,WM_COMMAND,IDCANCEL,0);
+}
 static void PumpFor(DWORD duration)
 {
     DWORD started = GetTickCount(); MSG message;
@@ -1456,9 +1512,10 @@ void start(void)
     Check(CreateDirectoryA(settingsDir, NULL), "create isolated settings directory");
     wsprintfA(settings, "%s\\settings.ini", settingsDir);
     if (group != GROUP_BROWSER) { LayoutTests(); HistoryTests(settingsDir, module, settings); ShellFeatureTests(); }
-    if (group == GROUP_FULL || group == GROUP_CORE) { PaintTests(); ConfigTests(settingsDir); DesktopIconTests(settingsDir); }
+    if (group == GROUP_FULL || group == GROUP_CORE) { PaintTests(); ConfigTests(settingsDir); DesktopIconTests(settingsDir); FolderHandlerTests(module,settings); FolderSelectionTests(); }
     if (group == GROUP_CORE) goto cleanup;
     wsprintfA(command, "\"%s\" --settings=\"%s\"", executable, settings);
+    if (group != GROUP_MENU) wsprintfA(command,"\"%s\" --settings=\"%s\" --open=\"%s\"",executable,settings,fixture);
     ZeroMemory(&startup, sizeof(startup)); startup.cb = sizeof(startup);
     Check(CreateProcessA(NULL, command, NULL, NULL, FALSE, 0, NULL, NULL, &startup, &process), "launch built EXE");
     bar = WaitFor("Explorer95.Taskbar", NULL);
@@ -1479,7 +1536,12 @@ void start(void)
     Check(FindWindowExA(desktop, NULL, NULL, NULL) != NULL, "desktop hosts the installed native shell view");
     if (group != GROUP_BROWSER) WinKeyTests(bar, FindWindowA("Explorer95.Start", NULL));
     if (group != GROUP_BROWSER) QuickLaunchTests(bar, settings);
-    if (group != GROUP_MENU) DesktopRefreshTests(desktop);
+    if (group != GROUP_MENU) {
+        HWND initial = WaitFor(BROWSER_CLASS,NULL);
+        Check(initial && SendMessageA(GetDlgItem(initial,ID_FILES),LVM_GETITEMCOUNT,0,0) == 3,"cold startup opens the command-line folder after creating one shell");
+        SendMessageA(initial,WM_CLOSE,0,0); FolderForwardTests(executable,settings,fixture,bar); DesktopRefreshTests(desktop);
+        FolderSettingsTests(bar);
+    }
     if (group == GROUP_MENU) {
         menu = FindWindowA("Explorer95.Start", NULL);
         CheckStartFits(bar, menu); ContextPinTest(bar, menu, settings);
