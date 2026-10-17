@@ -1017,7 +1017,14 @@ static void ShutdownTests(HWND bar, HWND menu)
     { HWND browser = FindWindowA(BROWSER_CLASS, NULL);
       Check(IsWindowEnabled(fixture) && (!browser || !IsWindowVisible(browser) || !IsWindowEnabled(browser)),
           "modal choice disables other Explorer95 windows without disabling external applications"); }
-    dc = GetDC(overlay); first = GetPixel(dc, 10, 10); ReleaseDC(overlay, dc); started = GetTickCount();
+    /* IsWindowVisible can precede X11 mapping. Observe a painted bright
+     * snapshot before comparing fade samples; never force a repaint here. */
+    started = GetTickCount();
+    do {
+        PumpFor(10); dc = GetDC(overlay); first = GetPixel(dc, 10, 10); ReleaseDC(overlay, dc);
+    } while ((first == CLR_INVALID || GetRValue(first) <= 160) && GetTickCount() - started < 1000);
+    Check(first != CLR_INVALID && GetRValue(first) > 160, "initial desktop snapshot becomes visible before it finishes darkening");
+    started = GetTickCount();
     do {
         PumpFor(50); dc = GetDC(overlay); final = GetPixel(dc, 10, 10); ReleaseDC(overlay, dc);
     } while ((final == CLR_INVALID || GetRValue(final) >= 160) && GetTickCount() - started < 3000);
