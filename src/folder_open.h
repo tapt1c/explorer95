@@ -12,5 +12,6 @@ BOOL FolderRequestCopy(const COPYDATASTRUCT *copy, FolderRequest *request);
 DWORD FolderRequestSend(HWND owner, const FolderRequest *request);
 /* A validated absolute folder PIDL copied from Shell IDList Array; HeapFree. */
 LPITEMIDLIST FolderSelectionPidl(IDataObject *data);
-LPITEMIDLIST FolderSelectionFirstPidl(IDataObject *data);
+/* Optional in/out attribute mask, resolved by the selected item's parent. */
+LPITEMIDLIST FolderSelectionFirstPidl(IDataObject *data, SFGAOF *attributes);
 #endif

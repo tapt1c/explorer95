@@ -71,12 +71,16 @@ int BrowserToolbarAddImages(Browser *browser, int size)
             Ellipse(dc, Scale(1,size), Scale(1,size), Scale(18,size), Scale(18,size));
             Box(dc, size, 5, 4, 11, 6, white);
         } else if (i == 5) {
-            SelectObject(dc, greenPen);
-            Arc(dc, Scale(2,size), Scale(2,size), Scale(22,size), Scale(22,size), Scale(3,size), Scale(13,size), Scale(20,size), Scale(5,size));
-            Box(dc, size, 15, 3, 21, 6, green); Box(dc, size, 19, 3, 22, 10, green);
-            SelectObject(dc, bluePen);
-            Arc(dc, Scale(2,size), Scale(2,size), Scale(22,size), Scale(22,size), Scale(21,size), Scale(12,size), Scale(4,size), Scale(20,size));
-            Box(dc, size, 2, 15, 5, 22, blue); Box(dc, size, 3, 19, 10, 22, blue);
+            static const POINT shape[] = {{2,11},{2,4},{15,4},{15,1},{22,6},{15,11},{15,8},{6,8},{6,11}};
+            POINT arrow[9]; int half, point;
+            SelectObject(dc, greenPen); SelectObject(dc, green);
+            for (half = 0; half < 2; ++half) {
+                for (point = 0; point < 9; ++point) {
+                    arrow[point].x = Scale(half ? 23 - shape[point].x : shape[point].x, size);
+                    arrow[point].y = Scale(half ? 23 - shape[point].y : shape[point].y, size);
+                }
+                Polygon(dc, arrow, 9);
+            }
         } else if (i == 6) {
             Box(dc, size, 1, 2, 23, 22, blue); Box(dc, size, 2, 7, 22, 21, white);
             for (x = 0; x < 9; ++x) Box(dc, size, 4 + (x % 3) * 6, 9 + (x / 3) * 4, 8 + (x % 3) * 6, 12 + (x / 3) * 4, x % 3 == 0 ? red : x % 3 == 1 ? green : blue);

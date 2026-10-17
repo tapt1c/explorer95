@@ -107,9 +107,11 @@ static UINT PidlLength(const BYTE *data, SIZE_T size, UINT offset)
     }
     return 0;
 }
-static LPITEMIDLIST SelectionPidl(IDataObject *data, BOOL foldersOnly)
+static LPITEMIDLIST SelectionPidl(IDataObject *data, BOOL foldersOnly, SFGAOF *attributes)
 {
-    FORMATETC format; STGMEDIUM medium; LPITEMIDLIST absolute = NULL; IShellFolder *desktop;
+    FORMATETC format; STGMEDIUM medium; LPITEMIDLIST absolute = NULL;
+    SFGAOF requested = foldersOnly ? SFGAO_FOLDER : attributes ? *attributes : 0;
+    if (attributes) *attributes = 0;
     ZeroMemory(&medium,sizeof(medium));
     ZeroMemory(&format,sizeof(format)); format.cfFormat = RegisterClipboardFormatA(CFSTR_SHELLIDLIST);
     format.dwAspect = DVASPECT_CONTENT; format.lindex = -1; format.tymed = TYMED_HGLOBAL;
@@ -122,23 +124,35 @@ static LPITEMIDLIST SelectionPidl(IDataObject *data, BOOL foldersOnly)
             if (count && count <= 1024 && size >= 4 + (count+1)*4 &&
                 parent >= 4 + (count+1)*4 && child >= 4 + (count+1)*4 &&
                 (left = PidlLength(bytes,size,parent)) && (right = PidlLength(bytes,size,child))) {
-                absolute = HeapAlloc(GetProcessHeap(),0,left+right-2);
-                if (absolute) { CopyMemory(absolute,bytes+parent,left-2); CopyMemory((BYTE *)absolute+left-2,bytes+child,right); }
+                SFGAOF found = 0;
+                if (requested) {
+                    IShellFolder *desktop, *owner = NULL;
+                    LPCITEMIDLIST relative = (LPCITEMIDLIST)(bytes + child);
+                    if (SUCCEEDED(SHGetDesktopFolder(&desktop))) {
+                        /* GetAttributesOf takes children of this folder, not
+                         * absolute multi-level PIDLs. Win95 otherwise reports
+                         * My Computer's folder flag for Control Panel applets. */
+                        if (left == 2) { owner = desktop; IShellFolder_AddRef(owner); }
+                        else IShellFolder_BindToObject(desktop, (LPCITEMIDLIST)(bytes + parent), NULL, &IID_IShellFolder, (void **)&owner);
+                        if (owner) {
+                            found = requested;
+                            if (FAILED(IShellFolder_GetAttributesOf(owner, 1, &relative, &found))) found = 0;
+                            IShellFolder_Release(owner);
+                        }
+                        IShellFolder_Release(desktop);
+                    }
+                }
+                if (attributes) *attributes = found;
+                if (!foldersOnly || (found & SFGAO_FOLDER)) {
+                    absolute = HeapAlloc(GetProcessHeap(),0,left+right-2);
+                    if (absolute) { CopyMemory(absolute,bytes+parent,left-2); CopyMemory((BYTE *)absolute+left-2,bytes+child,right); }
+                }
             }
         }
         if (bytes) GlobalUnlock(medium.hGlobal);
     }
     ReleaseStgMedium(&medium);
-    if (absolute) {
-        SFGAOF attributes = SFGAO_FOLDER;
-        BOOL folder = FALSE;
-        if (SUCCEEDED(SHGetDesktopFolder(&desktop))) {
-            folder = SUCCEEDED(IShellFolder_GetAttributesOf(desktop,1,(LPCITEMIDLIST *)&absolute,&attributes)) && (!foldersOnly || (attributes & SFGAO_FOLDER));
-            IShellFolder_Release(desktop);
-        }
-        if (!folder) { HeapFree(GetProcessHeap(),0,absolute); absolute = NULL; }
-    }
     return absolute;
 }
-LPITEMIDLIST FolderSelectionPidl(IDataObject *data) { return SelectionPidl(data, TRUE); }
-LPITEMIDLIST FolderSelectionFirstPidl(IDataObject *data) { return SelectionPidl(data, FALSE); }
+LPITEMIDLIST FolderSelectionPidl(IDataObject *data) { return SelectionPidl(data, TRUE, NULL); }
+LPITEMIDLIST FolderSelectionFirstPidl(IDataObject *data, SFGAOF *attributes) { return SelectionPidl(data, FALSE, attributes); }

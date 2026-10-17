@@ -1,5 +1,5 @@
 /* A real My Computer PIDL in a controllable Shell IDList Array medium. */
-static BYTE selectionBytes[256];
+static BYTE selectionBytes[4096];
 static UINT selectionSize;
 static HRESULT STDMETHODCALLTYPE SelectionQuery(IDataObject *self, REFIID iid, void **out)
 { (void)self; (void)iid; *out = NULL; return E_NOINTERFACE; }
@@ -49,5 +49,33 @@ static void FolderSelectionTests(void)
     header[2] = 14; header[0] = 0xffffffff; CopyMemory(selectionBytes,header,sizeof(header));
     Check(!FolderSelectionPidl(&data),"selection rejects a corrupt item count without integer overflow");
     header[0] = 1; CopyMemory(selectionBytes,header,sizeof(header)); --selectionSize;
-    Check(!FolderSelectionPidl(&data),"selection rejects a truncated PIDL terminator"); OleUninitialize();
+    Check(!FolderSelectionPidl(&data),"selection rejects a truncated PIDL terminator");
+    {
+        IShellFolder *desktop, *controls; IEnumIDList *items; LPITEMIDLIST parent, applet;
+        UINT left = 2, right = 2; SFGAOF expected, actual;
+        Check(SUCCEEDED(SHGetDesktopFolder(&desktop)) &&
+            SUCCEEDED(SHGetSpecialFolderLocation(NULL, CSIDL_CONTROLS, &parent)), "obtain the actual Control Panel parent namespace");
+        Check(SUCCEEDED(IShellFolder_BindToObject(desktop, parent, NULL, &IID_IShellFolder, (void **)&controls)),
+            "bind the Control Panel owner rather than querying its children through Desktop");
+        Check(SUCCEEDED(IShellFolder_EnumObjects(controls, NULL, SHCONTF_NONFOLDERS, &items)) && items &&
+            IEnumIDList_Next(items, 1, &applet, NULL) == S_OK, "enumerate a real nonfolder Control Panel applet without launching it");
+        expected = SFGAO_FOLDER | SFGAO_FILESYSTEM | SFGAO_CANRENAME | SFGAO_HASPROPSHEET;
+        Check(SUCCEEDED(IShellFolder_GetAttributesOf(controls, 1, (LPCITEMIDLIST *)&applet, &expected)) && !(expected & SFGAO_FOLDER),
+            "the owning Control Panel identifies its applet as an action rather than a folder");
+        for (scan = parent; scan->mkid.cb; scan = (LPCITEMIDLIST)((const BYTE *)scan + scan->mkid.cb)) left += scan->mkid.cb;
+        for (scan = applet; scan->mkid.cb; scan = (LPCITEMIDLIST)((const BYTE *)scan + scan->mkid.cb)) right += scan->mkid.cb;
+        Check(12 + left + right <= sizeof(selectionBytes), "Control Panel selection fits the bounded CIDA fixture");
+        header[0] = 1; header[1] = 12; header[2] = 12 + left;
+        CopyMemory(selectionBytes, header, sizeof(header)); CopyMemory(selectionBytes + 12, parent, left);
+        CopyMemory(selectionBytes + 12 + left, applet, right); selectionSize = 12 + left + right;
+        selected = FolderSelectionPidl(&data);
+        Check(selected == NULL, "Control Panel applets do not become folder navigation requests");
+        actual = SFGAO_FOLDER | SFGAO_FILESYSTEM | SFGAO_CANRENAME | SFGAO_HASPROPSHEET;
+        selected = FolderSelectionFirstPidl(&data, &actual);
+        Check(selected != NULL && actual == expected, "selection capabilities come from the relative child's owning folder");
+        HeapFree(GetProcessHeap(), 0, selected);
+        CoTaskMemFree(applet); CoTaskMemFree(parent); IEnumIDList_Release(items);
+        IShellFolder_Release(controls); IShellFolder_Release(desktop);
+    }
+    OleUninitialize();
 }
