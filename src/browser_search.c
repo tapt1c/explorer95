@@ -11,7 +11,7 @@ struct BrowserSearch {
     HWND parent, nameLabel, name, scopeLabel, scope, recursive, start, stop, results, status;
     SearchFrame *frame;
     SearchResult *found;
-    int count, depth, skipped;
+    int count, depth, skipped, extent;
     BOOL active, descend, limited;
     char pattern[MAX_PATH];
 };
@@ -70,12 +70,13 @@ void BrowserSearchStop(Browser *browser, BOOL finished)
 static void ClearResults(BrowserSearch *search)
 {
     SendMessageA(search->results, LB_RESETCONTENT, 0, 0);
+    search->extent = 0; SendMessageA(search->results, LB_SETHORIZONTALEXTENT, 0, 0);
     while (search->found) { SearchResult *next = search->found->next; EnvFree(search->found); search->found = next; }
     search->count = search->skipped = 0; search->limited = FALSE;
 }
 static void StartSearch(Browser *browser)
 {
-    BrowserSearch *search = browser->search; char scope[MAX_PATH], full[MAX_PATH], query[120]; DWORD length, attributes;
+    BrowserSearch *search = browser->search; char scope[MAX_PATH] = {0}, full[MAX_PATH], query[120] = {0}; DWORD length, attributes;
     GetWindowTextA(search->scope, scope, MAX_PATH); GetWindowTextA(search->name, query, sizeof(query));
     length = GetFullPathNameA(scope, MAX_PATH, full, NULL);
     if (!scope[0] || !length || length >= MAX_PATH) { BrowserError(browser->window, "Choose a valid search folder.", ERROR_BAD_PATHNAME); return; }
@@ -115,12 +116,21 @@ void BrowserSearchTick(Browser *browser)
         if (!EnvJoin(path, frame->path, data.cFileName)) { ++search->skipped; continue; }
         folder = (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
         if (Matches(search->pattern, data.cFileName)) {
-            SearchResult *result = EnvAlloc(sizeof(*result)); LRESULT index;
+            SearchResult *result = EnvAlloc(sizeof(*result)); LRESULT index; char label[MAX_PATH * 2 + 8];
             if (!result) { search->limited = TRUE; break; }
             lstrcpyA(result->path, path); result->folder = folder;
-            index = SendMessageA(search->results, LB_ADDSTRING, 0, (LPARAM)path);
+            wsprintfA(label, "%s  [%s]", data.cFileName, frame->path);
+            index = SendMessageA(search->results, LB_ADDSTRING, 0, (LPARAM)label);
             if (index < 0) { EnvFree(result); search->limited = TRUE; break; }
             SendMessageA(search->results, LB_SETITEMDATA, index, (LPARAM)result);
+            {
+                SIZE size; HDC dc = GetDC(search->results); HGDIOBJ old = SelectObject(dc, browserFont);
+                if (GetTextExtentPoint32A(dc, label, lstrlenA(label), &size) && size.cx + 4 > search->extent) {
+                    search->extent = size.cx + 4;
+                    SendMessageA(search->results, LB_SETHORIZONTALEXTENT, search->extent, 0);
+                }
+                SelectObject(dc, old); ReleaseDC(search->results, dc);
+            }
             result->next = search->found; search->found = result; ++search->count;
             if (search->count == SEARCH_LIMIT) { search->limited = TRUE; break; }
         }
@@ -170,11 +180,11 @@ BOOL BrowserSearchCommand(Browser *browser, int command, int notification)
     }
     return FALSE;
 }
-void BrowserSearchCreate(Browser *browser, HWND parent)
+BOOL BrowserSearchCreate(Browser *browser, HWND parent)
 {
     BrowserSearch *search;
-    if (browser->search) return;
-    search = EnvAlloc(sizeof(*search)); if (!search) return;
+    if (browser->search) return TRUE;
+    search = EnvAlloc(sizeof(*search)); if (!search) return FALSE;
     browser->search = search; search->parent = parent;
     search->nameLabel = BrowserControl(parent, "STATIC", "All or part of the file name:", 0, 0);
     search->name = BrowserControl(parent, "EDIT", "", WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL, ID_SEARCH_NAME);
@@ -189,7 +199,9 @@ void BrowserSearchCreate(Browser *browser, HWND parent)
     search->stop = BrowserControl(parent, "BUTTON", "Stop", WS_TABSTOP, ID_SEARCH_STOP); EnableWindow(search->stop, FALSE);
     search->status = BrowserControl(parent, "STATIC", "Select a result to show its folder.\r\nDouble-click to open it.", 0, ID_SEARCH_STATUS);
     search->results = BrowserControl(parent, "LISTBOX", "", WS_BORDER | WS_TABSTOP | WS_VSCROLL | WS_HSCROLL | LBS_NOTIFY | LBS_NOINTEGRALHEIGHT, ID_SEARCH_RESULTS);
-    SendMessageA(search->results, LB_SETHORIZONTALEXTENT, 1600, 0);
+    if (!search->nameLabel || !search->name || !search->scopeLabel || !search->scope || !search->recursive ||
+        !search->start || !search->stop || !search->status || !search->results) { BrowserSearchDestroy(browser); return FALSE; }
+    return TRUE;
 }
 void BrowserSearchLayout(Browser *browser, int width, int height, BOOL show)
 {
@@ -209,6 +221,11 @@ void BrowserSearchLayout(Browser *browser, int width, int height, BOOL show)
 }
 void BrowserSearchDestroy(Browser *browser)
 {
+    HWND controls[9]; BrowserSearch *s = browser->search; int i;
     if (!browser->search) return;
-    BrowserSearchStop(browser, FALSE); ClearResults(browser->search); EnvFree(browser->search); browser->search = NULL;
+    BrowserSearchStop(browser, FALSE); ClearResults(s);
+    controls[0] = s->nameLabel; controls[1] = s->name; controls[2] = s->scopeLabel; controls[3] = s->scope;
+    controls[4] = s->recursive; controls[5] = s->start; controls[6] = s->stop; controls[7] = s->status; controls[8] = s->results;
+    for (i = 0; i < 9; ++i) if (controls[i]) DestroyWindow(controls[i]);
+    EnvFree(s); browser->search = NULL;
 }

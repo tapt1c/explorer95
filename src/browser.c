@@ -85,8 +85,6 @@ void BrowserUpdate(Browser *browser)
         EnableMenuItem(menu, commands[i], MF_BYCOMMAND | (states[i] ? MF_ENABLED : MF_GRAYED));
     }
     if (browser->toolbar) {
-        SendMessageA(browser->toolbar, TB_ENABLEBUTTON, ID_BACK_HISTORY, MAKELONG(states[0], 0));
-        SendMessageA(browser->toolbar, TB_ENABLEBUTTON, ID_FORWARD_HISTORY, MAKELONG(states[1], 0));
         SendMessageA(browser->toolbar, TB_CHECKBUTTON, ID_FOLDERS, MAKELONG(browser->options.pane == BROWSER_PANE_FOLDERS, 0));
         SendMessageA(browser->toolbar, TB_CHECKBUTTON, ID_SEARCH, MAKELONG(browser->options.pane == BROWSER_PANE_SEARCH, 0));
     }
@@ -123,20 +121,24 @@ static void ToolbarButton(Browser *browser, int command, const char *label, int 
     string = SendMessageA(browser->toolbar, TB_ADDSTRINGA, 0, (LPARAM)text);
     ZeroMemory(&button, sizeof(button)); button.iBitmap = image; button.idCommand = command;
     button.fsState = TBSTATE_ENABLED; button.fsStyle = style | ((style & TBSTYLE_SEP) ? 0 : TBSTYLE_AUTOSIZE);
-    button.iString = command == ID_BACK_HISTORY || command == ID_FORWARD_HISTORY || command == ID_VIEWS ||
-        (browser->options.labels && (command == ID_BACK || command == ID_SEARCH || command == ID_FOLDERS ||
-         command == ID_EMPTY_RECYCLE || (command >= ID_COPY && command <= ID_BROWSER_OPTIONS))) ? string : -1;
+    button.iString = browser->options.labels && (command == ID_BACK || command == ID_SEARCH || command == ID_FOLDERS ||
+         command == ID_EMPTY_RECYCLE || (command >= ID_COPY && command <= ID_BROWSER_OPTIONS)) ? string : -1;
     SendMessageA(browser->toolbar, TB_ADDBUTTONSA, 1, (LPARAM)&button);
 }
 void BrowserBuildToolbar(Browser *browser)
 {
-    TBADDBITMAP images; int stock, history, views, i, size = browser->options.largeTools ? 24 : 16;
+    TBADDBITMAP images; int stock, history, views, navigation, i, size = browser->options.largeTools ? 24 : 16; BYTE dropdown;
     if (browser->toolbar) DestroyWindow(browser->toolbar);
+    if (browser->toolbarImages) { DeleteObject(browser->toolbarImages); browser->toolbarImages = NULL; }
     /* FLAT/LIST are optional rendering hints on later common controls. All
      * commands and stock bitmaps also work with original Win95 toolbars. */
     browser->toolbar = BrowserControl(browser->window, TOOLBARCLASSNAMEA, "", TBSTYLE_TOOLTIPS | TBSTYLE_WRAPABLE |
         TBSTYLE_FLAT | TBSTYLE_LIST | CCS_TOP | CCS_NODIVIDER | CCS_NOPARENTALIGN | CCS_NORESIZE, ID_TOOLBAR);
     SendMessageA(browser->toolbar, TB_BUTTONSTRUCTSIZE, sizeof(TBBUTTON), 0);
+    /* Split arrows are optional. Older controls keep ordinary navigation
+     * buttons and the right-click history menu rather than eating Back clicks. */
+    SendMessageA(browser->toolbar, TB_SETEXTENDEDSTYLE, 0, TBSTYLE_EX_DRAWDDARROWS);
+    dropdown = (SendMessageA(browser->toolbar, TB_GETEXTENDEDSTYLE, 0, 0) & TBSTYLE_EX_DRAWDDARROWS) ? TBSTYLE_DROPDOWN : 0;
     SendMessageA(browser->toolbar, TB_SETBITMAPSIZE, 0, MAKELONG(size, size));
     images.hInst = HINST_COMMCTRL; images.nID = browser->options.largeTools ? IDB_STD_LARGE_COLOR : IDB_STD_SMALL_COLOR;
     stock = (int)SendMessageA(browser->toolbar, TB_ADDBITMAP, 15, (LPARAM)&images); if (stock < 0) stock = 0;
@@ -144,29 +146,48 @@ void BrowserBuildToolbar(Browser *browser)
     views = (int)SendMessageA(browser->toolbar, TB_ADDBITMAP, 12, (LPARAM)&images);
     images.nID = browser->options.largeTools ? IDB_HIST_LARGE_COLOR : IDB_HIST_SMALL_COLOR;
     history = (int)SendMessageA(browser->toolbar, TB_ADDBITMAP, 5, (LPARAM)&images);
-    ToolbarButton(browser, ID_BACK, "Back", history >= 0 ? history + HIST_BACK : stock + STD_UNDO, TBSTYLE_BUTTON);
-    ToolbarButton(browser, ID_BACK_HISTORY, "v", -1, TBSTYLE_BUTTON | TBSTYLE_AUTOSIZE);
-    ToolbarButton(browser, ID_FORWARD, "", history >= 0 ? history + HIST_FORWARD : stock + STD_REDOW, TBSTYLE_BUTTON | TBSTYLE_AUTOSIZE);
-    ToolbarButton(browser, ID_FORWARD_HISTORY, "v", -1, TBSTYLE_BUTTON | TBSTYLE_AUTOSIZE);
-    ToolbarButton(browser, ID_UP, "", views >= 0 ? views + VIEW_PARENTFOLDER : stock + STD_FILEOPEN, TBSTYLE_BUTTON | TBSTYLE_AUTOSIZE);
+    navigation = BrowserToolbarAddImages(browser, size);
+    ToolbarButton(browser, ID_BACK, "Back", navigation >= 0 ? navigation : history >= 0 ? history + HIST_BACK : stock + STD_UNDO, TBSTYLE_BUTTON | dropdown);
+    ToolbarButton(browser, ID_FORWARD, "", navigation >= 0 ? navigation + 1 : history >= 0 ? history + HIST_FORWARD : stock + STD_REDOW, TBSTYLE_BUTTON | dropdown);
+    ToolbarButton(browser, ID_UP, "", navigation >= 0 ? navigation + 2 : views >= 0 ? views + VIEW_PARENTFOLDER : stock + STD_FILEOPEN, TBSTYLE_BUTTON | TBSTYLE_AUTOSIZE);
     ToolbarButton(browser, 0, "", 8, TBSTYLE_SEP);
-    ToolbarButton(browser, ID_SEARCH, "Search", stock + STD_FIND, TBSTYLE_CHECK);
-    ToolbarButton(browser, ID_FOLDERS, "Folders", history >= 0 ? history + HIST_VIEWTREE : stock + STD_FILEOPEN, TBSTYLE_CHECK);
-    ToolbarButton(browser, ID_REFRESH, "", stock + STD_REDOW, TBSTYLE_BUTTON | TBSTYLE_AUTOSIZE);
+    ToolbarButton(browser, ID_SEARCH, "Search", navigation >= 0 ? navigation + 3 : stock + STD_FIND, TBSTYLE_CHECK);
+    ToolbarButton(browser, ID_FOLDERS, "Folders", navigation >= 0 ? navigation + 4 : history >= 0 ? history + HIST_VIEWTREE : stock + STD_FILEOPEN, TBSTYLE_CHECK);
+    ToolbarButton(browser, ID_REFRESH, "", navigation >= 0 ? navigation + 5 : stock + STD_REDOW, TBSTYLE_BUTTON | TBSTYLE_AUTOSIZE);
     ToolbarButton(browser, 0, "", 8, TBSTYLE_SEP);
-    ToolbarButton(browser, ID_VIEWS, "v", views >= 0 ? views + VIEW_LARGEICONS : stock + STD_PRINTPRE, TBSTYLE_BUTTON | TBSTYLE_AUTOSIZE);
+    ToolbarButton(browser, ID_VIEWS, "", navigation >= 0 ? navigation + 6 : views >= 0 ? views + VIEW_LARGEICONS : stock + STD_PRINTPRE, TBSTYLE_BUTTON | dropdown);
     if (browser->recycleBin) ToolbarButton(browser, ID_EMPTY_RECYCLE, "Empty Recycle Bin", stock + STD_DELETE, TBSTYLE_BUTTON);
     if (browser->options.extraTools) ToolbarButton(browser, 0, "", 8, TBSTYLE_SEP);
     for (i = 0; i < BROWSER_EXTRA_TOOLS; ++i) if (browser->options.extraTools & (1U << i))
         ToolbarButton(browser, extraCommands[i], extraNames[i], stock + extraImages[i], TBSTYLE_BUTTON);
+    /* Optional width hints fix mixed caption/icon wrapping on newer controls.
+     * Original Win95 ignores this message and retains its native button sizes. */
+    for (i = 0; i < (int)SendMessageA(browser->toolbar, TB_BUTTONCOUNT, 0, 0); ++i) {
+        TBBUTTON button; RECT rect; TBBUTTONINFOA info;
+        if (SendMessageA(browser->toolbar, TB_GETBUTTON, i, (LPARAM)&button) && !(button.fsStyle & TBSTYLE_SEP) &&
+            SendMessageA(browser->toolbar, TB_GETITEMRECT, i, (LPARAM)&rect)) {
+            ZeroMemory(&info, sizeof(info)); info.cbSize = sizeof(info); info.dwMask = TBIF_SIZE; info.cx = (WORD)(rect.right - rect.left);
+            SendMessageA(browser->toolbar, TB_SETBUTTONINFOA, button.idCommand, (LPARAM)&info);
+        }
+    }
     BrowserUpdate(browser);
+}
+static BOOL SameLayoutOptions(const BrowserOptions *a, const BrowserOptions *b)
+{
+    return a->view == b->view && a->treeWidth == b->treeWidth && a->pane == b->pane &&
+        a->toolbar == b->toolbar && a->address == b->address && a->status == b->status &&
+        a->labels == b->labels && a->largeTools == b->largeTools && a->extraTools == b->extraTools &&
+        a->hidden == b->hidden && a->extensions == b->extensions;
 }
 void BrowserLayout(Browser *browser)
 {
     RECT rect, tool, previous; BOOL toolbarSized = FALSE; int top = 0, bottom, width, sidebar = 0, height;
     if (browser->closing || browser->layouting) return;
-    browser->layouting = TRUE;
     GetClientRect(browser->window, &rect); width = rect.right; bottom = rect.bottom;
+    if (browser->layoutValid && browser->layoutClient.right == rect.right && browser->layoutClient.bottom == rect.bottom &&
+        browser->layoutToolbar == browser->toolbar && browser->layoutView == NativeViewWindow(browser->native) &&
+        browser->layoutConcealed == browser->concealed && SameLayoutOptions(&browser->options, &browser->layoutOptions)) return;
+    browser->layouting = TRUE;
     EnvShowControl(browser->toolbar, browser->options.toolbar);
     if (browser->options.toolbar && browser->toolbar) {
         GetWindowRect(browser->toolbar, &previous);
@@ -203,7 +224,8 @@ void BrowserLayout(Browser *browser)
     if (browser->tree) EnvShowControl(browser->tree, browser->options.pane == BROWSER_PANE_FOLDERS);
     if (browser->options.pane != BROWSER_PANE_NONE) {
         sidebar = browser->options.treeWidth; if (sidebar > width - 180) sidebar = width - 180; if (sidebar < 100) sidebar = 100;
-        SetWindowTextA(browser->treeLabel, browser->options.pane == BROWSER_PANE_SEARCH ? "Search" : browser->options.pane == BROWSER_PANE_HISTORY ? "History" : "Folders");
+        { char label[32]; const char *wanted = browser->options.pane == BROWSER_PANE_SEARCH ? "Search" : browser->options.pane == BROWSER_PANE_HISTORY ? "History" : "Folders";
+          GetWindowTextA(browser->treeLabel, label, sizeof(label)); if (lstrcmpA(label, wanted)) SetWindowTextA(browser->treeLabel, wanted); }
         EnvMoveControl(browser->treeLabel, 3, top + 3, sidebar - 28, 22);
         EnvMoveControl(browser->treeClose, sidebar - 23, top + 2, 22, 21);
         if (browser->options.pane == BROWSER_PANE_FOLDERS) EnvMoveControl(browser->tree, 2, top + 27, sidebar - 3, bottom - top > 30 ? bottom - top - 28 : 1);
@@ -224,7 +246,10 @@ void BrowserLayout(Browser *browser)
         EnvMoveControl(browser->reveal, sidebar + 14, top + 104, 160, 28);
     }
     if (toolbarSized) InvalidateRect(browser->toolbar, NULL, FALSE);
-    InvalidateRect(browser->window, NULL, FALSE); browser->layouting = FALSE;
+    InvalidateRect(browser->window, NULL, FALSE);
+    browser->layoutClient = rect; browser->layoutOptions = browser->options;
+    browser->layoutToolbar = browser->toolbar; browser->layoutView = NativeViewWindow(browser->native);
+    browser->layoutConcealed = browser->concealed; browser->layoutValid = TRUE; browser->layouting = FALSE;
 }
 static BOOL NavigateNative(HWND window, LPCITEMIDLIST pidl)
 {
@@ -285,6 +310,7 @@ BOOL BrowserNavigate(Browser *browser, const char *requested, LPCITEMIDLIST pidl
     if (browser->watch) FindCloseChangeNotification(browser->watch);
     browser->watch = watch;
     browser->native = native;
+    browser->layoutValid = FALSE;
     ListView_DeleteAllItems(browser->files); BrowserFilesFree(browser->entries); browser->entries = entries;
     EnvFree(browser->pidl); browser->pidl = absolute; lstrcpyA(browser->path, path);
     browser->recycleBin = browser->computerFolder = browser->concealed = FALSE;
@@ -500,7 +526,7 @@ static void Command(Browser *browser, int command)
             }
             AppendMenuA(menu, MF_STRING, i + 1, label);
         }
-        i = (int)SendMessageA(browser->toolbar, TB_COMMANDTOINDEX, command, 0);
+        i = (int)SendMessageA(browser->toolbar, TB_COMMANDTOINDEX, command == ID_BACK_HISTORY ? ID_BACK : ID_FORWARD, 0);
         if (i >= 0 && SendMessageA(browser->toolbar, TB_GETITEMRECT, i, (LPARAM)&rect)) {
             point.x = rect.left; point.y = rect.bottom; ClientToScreen(browser->toolbar, &point);
         } else GetCursorPos(&point);
@@ -584,7 +610,7 @@ static LRESULT CALLBACK BrowserProc(HWND window, UINT message, WPARAM wp, LPARAM
         browser->status = BrowserControl(window, STATUSCLASSNAMEA, "", CCS_BOTTOM | CCS_NOPARENTALIGN | CCS_NORESIZE, ID_BROWSER_STATUS);
         BrowserFilesImages(browser); ZeroMemory(&column, sizeof(column)); column.mask = LVCF_TEXT | LVCF_WIDTH;
         for (i = 0; i < 4; ++i) { column.pszText = i == 0 ? "Name" : i == 1 ? "Type" : i == 2 ? "Size" : "Date Modified"; column.cx = i ? 120 : 230; ListView_InsertColumn(browser->files, i, &column); }
-        BrowserSidebarCreate(browser);
+        if (!BrowserSidebarCreate(browser)) return -1;
         BuildMenu(browser); BrowserBuildToolbar(browser); SetTimer(window, 10, 800, NULL); return 0;
     }
     case WM_SYSCOLORCHANGE:
@@ -622,11 +648,15 @@ static LRESULT CALLBACK BrowserProc(HWND window, UINT message, WPARAM wp, LPARAM
         if (browser) {
             NMHDR *header = (NMHDR *)lp;
             if (header->idFrom == ID_FOLDERTREE) return BrowserTreeNotify(browser, header);
+            if (header->idFrom == ID_TOOLBAR && header->code == TBN_DROPDOWN) {
+                NMTOOLBARA *dropdown = (NMTOOLBARA *)lp;
+                Command(browser, dropdown->iItem == ID_BACK ? ID_BACK_HISTORY : dropdown->iItem == ID_FORWARD ? ID_FORWARD_HISTORY : ID_VIEWS); return 0;
+            }
             if (header->code == TTN_NEEDTEXTA) {
                 NMTTDISPINFOA *tip = (NMTTDISPINFOA *)lp; int i;
-                static const int ids[] = {ID_BACK, ID_FORWARD, ID_UP, ID_SEARCH, ID_FOLDERS, ID_VIEWS};
-                static const char *names[] = {"Back", "Forward", "Up", "Find Files or Folders", "Folders", "Views"};
-                for (i = 0; i < 6; ++i) if ((int)header->idFrom == ids[i]) tip->lpszText = (LPSTR)names[i];
+                static const int ids[] = {ID_BACK, ID_FORWARD, ID_UP, ID_SEARCH, ID_FOLDERS, ID_REFRESH, ID_VIEWS};
+                static const char *names[] = {"Back (right-click for history)", "Forward (right-click for history)", "Up", "Search", "Folders", "Refresh", "Views"};
+                for (i = 0; i < 7; ++i) if ((int)header->idFrom == ids[i]) tip->lpszText = (LPSTR)names[i];
                 for (i = 0; i < BROWSER_EXTRA_TOOLS; ++i) if ((int)header->idFrom == extraCommands[i]) tip->lpszText = (LPSTR)extraNames[i];
             }
             return BrowserFilesNotify(browser, header);
@@ -639,6 +669,16 @@ static LRESULT CALLBACK BrowserProc(HWND window, UINT message, WPARAM wp, LPARAM
     case WM_CONTEXTMENU:
         if (browser && ((HWND)wp == browser->toolbar || (HWND)wp == window)) {
             HMENU menu = CreatePopupMenu(); POINT point; int command;
+            if ((HWND)wp == browser->toolbar) {
+                int i; GetCursorPos(&point); ScreenToClient(browser->toolbar, &point);
+                for (i = 0; i < (int)SendMessageA(browser->toolbar, TB_BUTTONCOUNT, 0, 0); ++i) {
+                    RECT rect; TBBUTTON button;
+                    if (SendMessageA(browser->toolbar, TB_GETITEMRECT, i, (LPARAM)&rect) && PtInRect(&rect, point) &&
+                        SendMessageA(browser->toolbar, TB_GETBUTTON, i, (LPARAM)&button) && (button.idCommand == ID_BACK || button.idCommand == ID_FORWARD)) {
+                        DestroyMenu(menu); Command(browser, button.idCommand == ID_BACK ? ID_BACK_HISTORY : ID_FORWARD_HISTORY); return 0;
+                    }
+                }
+            }
             AppendMenuA(menu, MF_STRING, ID_CUSTOMIZE_TOOLBAR, "Customize Toolbar..."); AppendMenuA(menu, MF_STRING, ID_BROWSER_OPTIONS, "Folder Options...");
             GetCursorPos(&point); command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, 0, window, NULL); DestroyMenu(menu);
             if (command) Command(browser, command);
@@ -666,6 +706,8 @@ static LRESULT CALLBACK BrowserProc(HWND window, UINT message, WPARAM wp, LPARAM
         if (browser) {
             int i; browser->closing = TRUE; KillTimer(window, 10);
             BrowserSearchDestroy(browser); BrowserSidebarDestroy(browser);
+            if (browser->toolbar) DestroyWindow(browser->toolbar);
+            if (browser->toolbarImages) DeleteObject(browser->toolbarImages);
             if (browser->watch) FindCloseChangeNotification(browser->watch);
             if (browser->optionsWindow) DestroyWindow(browser->optionsWindow);
             if (browser->native) NativeViewDestroy(browser->native);
@@ -864,6 +906,9 @@ BOOL BrowserTranslate(MSG *message)
             if (message->wParam == VK_ESCAPE && browser->options.pane == BROWSER_PANE_SEARCH) { BrowserSearchStop(browser, FALSE); return TRUE; }
             if (message->wParam == VK_RETURN && (GetDlgCtrlID(message->hwnd) == ID_SEARCH_NAME || GetDlgCtrlID(message->hwnd) == ID_SEARCH_SCOPE)) {
                 BrowserSearchCommand(browser, ID_SEARCH_START, BN_CLICKED); return TRUE;
+            }
+            if (message->wParam == VK_RETURN && GetDlgCtrlID(message->hwnd) == ID_SEARCH_RESULTS) {
+                BrowserSearchCommand(browser, ID_SEARCH_RESULTS, LBN_DBLCLK); return TRUE;
             }
             return IsDialogMessageA(sidebar, message);
         }

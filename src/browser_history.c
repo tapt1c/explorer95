@@ -5,7 +5,18 @@
 static BrowserVisit visits[BROWSER_HISTORY];
 static int visitCount;
 static BOOL loaded;
+static BOOL saveWarning;
 static DWORD generation = 1;
+static BOOL CALLBACK NotifyHistoryWindow(HWND window, LPARAM unused)
+{
+    DWORD process; (void)unused;
+    if (BrowserIsWindow(window)) {
+        GetWindowThreadProcessId(window, &process);
+        if (process == GetCurrentProcessId()) PostMessageA(window, WM_BROWSER_STATE, 0, 0);
+    }
+    return TRUE;
+}
+static void Changed(void) { ++generation; EnumWindows(NotifyHistoryWindow, 0); }
 
 BOOL BrowserHistoryEnabled(void)
 { return !!GetPrivateProfileIntA("Explorer", "RememberHistory", TRUE, env.ini); }
@@ -33,31 +44,29 @@ static void LoadVisits(void)
         ++visitCount;
     }
 }
-static void SaveVisits(void)
+static BOOL SaveVisits(void)
 {
-    int i; char key[32], value[MAX_PATH + 2];
-    /* Count is committed last; disabling removes the entire section. Prefix
-     * string values so the INI API cannot strip meaningful enclosing quotes. */
-    WritePrivateProfileStringA("ExplorerHistory", NULL, NULL, env.ini);
+    int i; BOOL saved; char *section = EnvAlloc(BROWSER_HISTORY * (MAX_PATH * 2 + 64) + 64), *next = section;
+    if (!section) return FALSE;
+    /* One bounded section write avoids rewriting the profile dozens of times
+     * per navigation. The native profile API preserves unrelated sections. */
     for (i = 0; i < visitCount; ++i) {
-        wsprintfA(key, "Target%d", i); value[0] = '!'; lstrcpyA(value + 1, visits[i].target);
-        WritePrivateProfileStringA("ExplorerHistory", key, value, env.ini);
-        wsprintfA(key, "Label%d", i); value[0] = '!'; lstrcpyA(value + 1, visits[i].label);
-        WritePrivateProfileStringA("ExplorerHistory", key, value, env.ini);
+        wsprintfA(next, "Target%d=!%s", i, visits[i].target); next += lstrlenA(next) + 1;
+        wsprintfA(next, "Label%d=!%s", i, visits[i].label); next += lstrlenA(next) + 1;
     }
-    wsprintfA(value, "%d", visitCount);
-    WritePrivateProfileStringA("ExplorerHistory", "Count", value, env.ini);
+    wsprintfA(next, "Count=%d", visitCount);
+    saved = WritePrivateProfileSectionA("ExplorerHistory", section, env.ini); EnvFree(section); return saved;
 }
 BOOL BrowserHistoryClear(void)
 {
     if (!WritePrivateProfileStringA("ExplorerHistory", NULL, NULL, env.ini)) return FALSE;
-    ZeroMemory(visits, sizeof(visits)); visitCount = 0; loaded = TRUE; ++generation; return TRUE;
+    ZeroMemory(visits, sizeof(visits)); visitCount = 0; loaded = TRUE; Changed(); return TRUE;
 }
 BOOL BrowserHistorySetEnabled(BOOL enabled)
 {
     if (!WritePrivateProfileStringA("Explorer", "RememberHistory", enabled ? "1" : "0", env.ini)) return FALSE;
-    ++generation;
-    return enabled || BrowserHistoryClear();
+    if (!enabled) return BrowserHistoryClear();
+    Changed(); return TRUE;
 }
 DWORD BrowserHistoryGeneration(void) { return generation; }
 int BrowserHistoryRead(BrowserVisit *result)
@@ -103,5 +112,12 @@ void BrowserHistoryRecord(Browser *browser)
     if (i == visitCount && visitCount < BROWSER_HISTORY) ++visitCount;
     if (i >= BROWSER_HISTORY) i = BROWSER_HISTORY - 1;
     while (i > 0) { visits[i] = visits[i - 1]; --i; }
-    visits[0] = next; ++generation; SaveVisits();
+    visits[0] = next;
+    if (!SaveVisits()) {
+        if (!saveWarning) {
+            saveWarning = TRUE;
+            MessageBoxA(browser->window, "Windows could not save the folder history.\r\nCheck the settings file permissions, or disable history in Folder Options.\r\nNavigation remains available.", "Explorer95", MB_OK | MB_ICONEXCLAMATION);
+        }
+    } else saveWarning = FALSE;
+    Changed();
 }

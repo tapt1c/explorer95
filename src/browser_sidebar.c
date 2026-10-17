@@ -23,6 +23,9 @@ struct BrowserSidebar {
     TaskRow rows[TASK_ROWS];
     int count, scroll, contentHeight, mode;
     BOOL collapsed[4], layouting, shared, share, publish, mail;
+    BOOL tasksDirty, lastConcealed;
+    int lastCount, lastIndex;
+    RECT groups[4];
     char actionKey[MAX_PATH + 40], drive[4], driveDetails[384];
     BrowserVisit visits[BROWSER_HISTORY]; int visitCount;
     DWORD historyGeneration;
@@ -39,21 +42,29 @@ static void SetText(HWND window, const char *text)
 }
 static void Row(Browser *browser, int kind, int group, int command, int icon, const char *text)
 {
-    BrowserSidebar *s = browser->sidebar; TaskRow *row;
+    BrowserSidebar *s = browser->sidebar; TaskRow *row; int index;
     if (s->count == TASK_ROWS || (kind != ROW_HEADER && s->collapsed[group])) return;
-    row = &s->rows[s->count];
+    index = s->count; row = &s->rows[index];
     if (row->window && row->kind != kind) { DestroyWindow(row->window); row->window = NULL; }
     row->kind = kind; row->group = group; row->command = command; row->icon = icon;
+    lstrcpynA(row->text, text, sizeof(row->text));
+    /* Native controls can request owner drawing during creation or WM_SETTEXT.
+     * Publish the complete row before either operation. */
+    ++s->count;
     if (!row->window) row->window = BrowserControl(s->content, kind == ROW_DETAILS ? "STATIC" : "BUTTON", "",
-        kind == ROW_DETAILS ? SS_OWNERDRAW : WS_TABSTOP | BS_OWNERDRAW | BS_NOTIFY, TASK_ROW_BASE + s->count);
-    lstrcpynA(row->text, text, sizeof(row->text)); SetText(row->window, text);
-    EnvShowControl(row->window, TRUE); ++s->count;
+        kind == ROW_DETAILS ? SS_OWNERDRAW : WS_TABSTOP | BS_OWNERDRAW | BS_NOTIFY, TASK_ROW_BASE + index);
+    SetText(row->window, text); EnvShowControl(row->window, TRUE);
+    InvalidateRect(row->window, NULL, FALSE);
 }
 static void Header(Browser *browser, int group, const char *text) { Row(browser, ROW_HEADER, group, 0, -1, text); }
 static void Link(Browser *browser, int group, int command, int icon, const char *text) { Row(browser, ROW_LINK, group, command, icon, text); }
 static void DriveDetails(BrowserSidebar *s, const char *root)
 {
+    typedef BOOL (WINAPI *DiskSpaceEx)(LPCSTR, PULARGE_INTEGER, PULARGE_INTEGER, PULARGE_INTEGER);
     DWORD sectors, bytes, freeClusters, clusters, serial, maxName, flags;
+    ULARGE_INTEGER available, total, freeBytes;
+    DiskSpaceEx extended = (DiskSpaceEx)(void *)GetProcAddress(GetModuleHandleA("kernel32.dll"), "GetDiskFreeSpaceExA");
+    BOOL haveSpace;
     char label[96], filesystem[32];
     if (!lstrcmpiA(s->drive, root)) return;
     lstrcpynA(s->drive, root, sizeof(s->drive));
@@ -61,17 +72,24 @@ static void DriveDetails(BrowserSidebar *s, const char *root)
     if (GetVolumeInformationA(root, label, sizeof(label), &serial, &maxName, &flags, filesystem, sizeof(filesystem)))
         wsprintfA(s->driveDetails, "%s%s%s\r\nLocal Disk\r\nFile system: %s", label[0] ? label : root, label[0] ? " " : "", label[0] ? root : "", filesystem);
     else wsprintfA(s->driveDetails, "%s\r\nDrive", root);
-    if (GetDiskFreeSpaceA(root, &sectors, &bytes, &freeClusters, &clusters)) {
+    /* Win95 RTM uses cluster counts; OSR2/newer may report FAT32 volumes
+     * accurately through the optional extended export. No static dependency. */
+    haveSpace = extended && extended(root, &available, &total, &freeBytes);
+    if (!haveSpace && GetDiskFreeSpaceA(root, &sectors, &bytes, &freeClusters, &clusters)) {
+        freeBytes.QuadPart = (ULONGLONG)sectors * bytes * freeClusters;
+        total.QuadPart = (ULONGLONG)sectors * bytes * clusters; haveSpace = TRUE;
+    }
+    if (haveSpace) {
         char space[120];
-        DWORD freeMB = (DWORD)(((ULONGLONG)sectors * bytes * freeClusters) >> 20);
-        DWORD totalMB = (DWORD)(((ULONGLONG)sectors * bytes * clusters) >> 20);
+        DWORD freeMB = (DWORD)(freeBytes.QuadPart >> 20);
+        DWORD totalMB = (DWORD)(total.QuadPart >> 20);
         wsprintfA(space, "\r\nFree space: %lu MB\r\nTotal size: %lu MB", freeMB, totalMB);
         lstrcatA(s->driveDetails, space);
     }
 }
 void BrowserSidebarLocationChanged(Browser *browser)
 {
-    if (browser->sidebar) { browser->sidebar->drive[0] = 0; browser->sidebar->actionKey[0] = 0; }
+    if (browser->sidebar) { browser->sidebar->drive[0] = 0; browser->sidebar->actionKey[0] = 0; browser->sidebar->tasksDirty = TRUE; }
 }
 static void BuildTasks(Browser *browser)
 {
@@ -104,7 +122,7 @@ static void BuildTasks(Browser *browser)
             s->share = BrowserFilesInvokeVerb(browser, "sharing", !selected.count, FALSE);
             s->publish = BrowserFilesInvokeVerb(browser, "publish", !selected.count, FALSE);
         }
-        if (selected.count) s->mail = BrowserFilesInvokeVerb(browser, "sendmail", FALSE, FALSE);
+        if (selected.count && selected.path[0]) s->mail = BrowserFilesInvokeVerb(browser, "sendmail", FALSE, FALSE);
     }
     s->count = 0;
     if (browser->computerFolder || root) {
@@ -156,36 +174,64 @@ static void BuildTasks(Browser *browser)
 }
 static void HistoryUpdate(Browser *browser)
 {
-    BrowserSidebar *s = browser->sidebar; int i;
+    BrowserSidebar *s = browser->sidebar; int i, extent = 0; HDC dc; HGDIOBJ old;
     if (s->historyGeneration == BrowserHistoryGeneration()) return;
     s->historyGeneration = BrowserHistoryGeneration();
     s->visitCount = BrowserHistoryRead(s->visits);
     SendMessageA(s->history, LB_RESETCONTENT, 0, 0);
-    for (i = 0; i < s->visitCount; ++i) SendMessageA(s->history, LB_ADDSTRING, 0, (LPARAM)s->visits[i].label);
+    dc = GetDC(s->history); old = SelectObject(dc, browserFont);
+    for (i = 0; i < s->visitCount; ++i) {
+        SIZE size;
+        SendMessageA(s->history, LB_ADDSTRING, 0, (LPARAM)s->visits[i].label);
+        if (GetTextExtentPoint32A(dc, s->visits[i].label, lstrlenA(s->visits[i].label), &size) && size.cx + 4 > extent) extent = size.cx + 4;
+    }
+    SelectObject(dc, old); ReleaseDC(s->history, dc);
+    SendMessageA(s->history, LB_SETHORIZONTALEXTENT, extent, 0);
     SetText(s->historyNote, BrowserHistoryEnabled() ? "Recently visited folders\r\nSelect a place to return to it." : "History recording is disabled.\r\nEnable it in Folder Options.");
     EnableWindow(s->clear, s->visitCount > 0);
 }
+static int LayoutTasks(Browser *browser, int width, BOOL place)
+{
+    BrowserSidebar *s = browser->sidebar; int i, y = 10;
+    HDC dc = GetDC(s->content); HGDIOBJ old = SelectObject(dc, browserFont);
+    ZeroMemory(s->groups, sizeof(s->groups));
+    for (i = 0; i < s->count; ++i) {
+        TaskRow *row = &s->rows[i]; RECT measure = {0, 0, width - 36, 0}; int h;
+        if (row->kind == ROW_HEADER) {
+            if (i) y += 14;
+            h = 24;
+            SetRect(&s->groups[row->group], 9, y - 1, width - 9, y + h + 4);
+        } else {
+            /* Match DrawRow's margins and icon width exactly; even four
+             * extra pixels can hide the final wrapped line of a task. */
+            if (row->icon >= 0 && row->icon < 10) measure.right -= 22;
+            if (measure.right < 1) measure.right = 1;
+            DrawTextA(dc, row->text, -1, &measure, DT_WORDBREAK | DT_CALCRECT | DT_NOPREFIX);
+            h = measure.bottom + (row->kind == ROW_DETAILS ? 12 : 8); if (h < 24) h = 24;
+        }
+        SetRect(&row->bounds, 10, y, width - 10, y + h);
+        if (place) EnvMoveControl(row->window, row->bounds.left, y, width - 20, h);
+        y += h;
+        s->groups[row->group].bottom = y + 4;
+    }
+    SelectObject(dc, old); ReleaseDC(s->content, dc); return y + 12;
+}
 static void Reflow(Browser *browser)
 {
-    BrowserSidebar *s = browser->sidebar; RECT client; SCROLLINFO scroll; int width, height, i, y = 10;
-    if (!s || s->layouting) return;
-    s->layouting = TRUE; GetClientRect(s->window, &client); width = client.right; height = client.bottom;
+    BrowserSidebar *s = browser->sidebar; RECT client, outer; SCROLLINFO scroll; int width, height;
+    if (!s || !s->window || !s->content || s->layouting) return;
+    s->layouting = TRUE; GetWindowRect(s->window, &outer); GetClientRect(s->window, &client);
+    width = outer.right - outer.left; height = client.bottom;
     if (width < 30) { s->layouting = FALSE; return; }
-    if (browser->options.pane == BROWSER_PANE_TASKS) {
-        HDC dc = GetDC(s->content); HGDIOBJ old = SelectObject(dc, browserFont);
-        for (i = 0; i < s->count; ++i) {
-            TaskRow *row = &s->rows[i]; RECT measure = {0, 0, width > 54 ? width - 54 : 1, 0}; int h;
-            if (row->kind == ROW_HEADER) { if (i) y += 14; h = 24; }
-            else {
-                if (row->kind == ROW_DETAILS) measure.right = width - 36;
-                DrawTextA(dc, row->text, -1, &measure, DT_WORDBREAK | DT_CALCRECT | DT_NOPREFIX);
-                h = measure.bottom + (row->kind == ROW_DETAILS ? 12 : 8); if (h < 24) h = 24;
-            }
-            SetRect(&row->bounds, 10, y, width - 10, y + h);
-            EnvMoveControl(row->window, row->bounds.left, y, width - 20, h); y += h;
-        }
-        SelectObject(dc, old); ReleaseDC(s->content, dc); s->contentHeight = y + 12;
-    } else if (browser->options.pane == BROWSER_PANE_SEARCH) {
+    /* Measure without a scrollbar first. A stale reduced client width must
+     * not keep a scrollbar alive after content shrinks or groups collapse. */
+    if (browser->options.pane == BROWSER_PANE_TASKS) s->contentHeight = LayoutTasks(browser, width, FALSE);
+    else if (browser->options.pane == BROWSER_PANE_SEARCH) s->contentHeight = height < 310 ? 310 : height;
+    else if (browser->options.pane == BROWSER_PANE_HISTORY) s->contentHeight = height < 180 ? 180 : height;
+    else s->contentHeight = height;
+    if (s->contentHeight > height) width -= GetSystemMetrics(SM_CXVSCROLL);
+    if (browser->options.pane == BROWSER_PANE_TASKS) s->contentHeight = LayoutTasks(browser, width, TRUE);
+    else if (browser->options.pane == BROWSER_PANE_SEARCH) {
         s->contentHeight = height < 310 ? 310 : height;
         BrowserSearchLayout(browser, width, s->contentHeight, TRUE);
     } else if (browser->options.pane == BROWSER_PANE_HISTORY) {
@@ -196,7 +242,7 @@ static void Reflow(Browser *browser)
     } else s->contentHeight = height;
     if (s->scroll > s->contentHeight - height) s->scroll = s->contentHeight - height;
     if (s->scroll < 0) s->scroll = 0;
-    ZeroMemory(&scroll, sizeof(scroll)); scroll.cbSize = sizeof(scroll); scroll.fMask = SIF_RANGE | SIF_PAGE | SIF_POS | SIF_DISABLENOSCROLL;
+    ZeroMemory(&scroll, sizeof(scroll)); scroll.cbSize = sizeof(scroll); scroll.fMask = SIF_RANGE | SIF_PAGE | SIF_POS;
     scroll.nMax = s->contentHeight - 1; scroll.nPage = height; scroll.nPos = s->scroll;
     SetScrollInfo(s->window, SB_VERT, &scroll, TRUE);
     EnvMoveControl(s->content, 0, -s->scroll, width, s->contentHeight);
@@ -206,7 +252,14 @@ void BrowserSidebarUpdate(Browser *browser)
 {
     BrowserSidebar *s = browser->sidebar;
     if (!s || browser->closing) return;
-    if (browser->options.pane == BROWSER_PANE_TASKS) { BuildTasks(browser); Reflow(browser); }
+    if (browser->options.pane == BROWSER_PANE_TASKS) {
+        HWND list = browser->native ? NativeViewList(browser->native) : browser->files;
+        int count = ListView_GetSelectedCount(list), index = ListView_GetNextItem(list, -1, LVNI_SELECTED);
+        if (s->tasksDirty || count != s->lastCount || index != s->lastIndex || browser->concealed != s->lastConcealed) {
+            s->tasksDirty = FALSE; s->lastCount = count; s->lastIndex = index; s->lastConcealed = browser->concealed;
+            BuildTasks(browser); Reflow(browser);
+        }
+    }
     else if (browser->options.pane == BROWSER_PANE_HISTORY) { HistoryUpdate(browser); Reflow(browser); }
 }
 void BrowserSidebarLayout(Browser *browser, int x, int y, int width, int height)
@@ -214,25 +267,37 @@ void BrowserSidebarLayout(Browser *browser, int x, int y, int width, int height)
     BrowserSidebar *s = browser->sidebar; int i, pane = browser->options.pane;
     BOOL show = pane != BROWSER_PANE_NONE && pane != BROWSER_PANE_FOLDERS;
     if (!s) return;
-    if (pane != s->mode) { s->mode = pane; s->scroll = 0; s->historyGeneration = 0; }
+    if (pane != BROWSER_PANE_TASKS) { y += 27; height -= 27; }
+    if (height < 1) height = 1;
+    if (pane == s->mode) {
+        RECT previous; POINT point;
+        if (!show) return;
+        GetWindowRect(s->window, &previous); point.x = previous.left; point.y = previous.top; ScreenToClient(browser->window, &point);
+        /* SetScrollInfo and visibility changes can repaint sibling shell
+         * controls on Win95/Wine. An unchanged viewport needs no mutation. */
+        if (point.x == x && point.y == y && previous.right - previous.left == width && previous.bottom - previous.top == height) return;
+    }
+    if (pane != s->mode) { s->mode = pane; s->scroll = 0; s->historyGeneration = 0; s->tasksDirty = TRUE; }
     EnvShowControl(s->window, show);
     for (i = 0; i < s->count; ++i) EnvShowControl(s->rows[i].window, pane == BROWSER_PANE_TASKS);
     EnvShowControl(s->history, pane == BROWSER_PANE_HISTORY); EnvShowControl(s->clear, pane == BROWSER_PANE_HISTORY); EnvShowControl(s->historyNote, pane == BROWSER_PANE_HISTORY);
-    if (pane == BROWSER_PANE_SEARCH && !browser->search) BrowserSearchCreate(browser, s->content);
+    if (pane == BROWSER_PANE_SEARCH && !browser->search && !BrowserSearchCreate(browser, s->content))
+        BrowserError(browser->window, "Cannot create the Search bar.", ERROR_NOT_ENOUGH_MEMORY);
     BrowserSearchLayout(browser, width, height, pane == BROWSER_PANE_SEARCH);
     if (!show) return;
-    if (pane != BROWSER_PANE_TASKS) { y += 27; height -= 27; }
-    EnvMoveControl(s->window, x, y, width, height > 1 ? height : 1);
+    EnvMoveControl(s->window, x, y, width, height);
     Reflow(browser);
 }
 static void TaskCommand(Browser *browser, int command)
 {
     if (command == TASK_SYSTEM || command == TASK_PROGRAMS) {
-        char control[MAX_PATH];
-        if (GetSystemDirectoryA(control, MAX_PATH)) {
-            char executable[MAX_PATH];
-            if (EnvJoin(executable, control, "control.exe")) EnvironmentLaunch(browser->window, executable, command == TASK_SYSTEM ? "sysdm.cpl" : "appwiz.cpl", NULL);
+        char directory[MAX_PATH], executable[MAX_PATH];
+        GetSystemDirectoryA(directory, MAX_PATH);
+        if (!EnvJoin(executable, directory, "control.exe")) return;
+        if (GetFileAttributesA(executable) == INVALID_FILE_ATTRIBUTES) {
+            GetWindowsDirectoryA(directory, MAX_PATH); if (!EnvJoin(executable, directory, "control.exe")) return;
         }
+        EnvironmentLaunch(browser->window, executable, command == TASK_SYSTEM ? "sysdm.cpl" : "appwiz.cpl", NULL);
     } else if (command == TASK_CONTROL || command == TASK_NETWORK || command == TASK_SHARED)
         BrowserSpecial(browser, command == TASK_CONTROL ? CSIDL_CONTROLS : command == TASK_NETWORK ? CSIDL_NETWORK : CSIDL_COMMON_DOCUMENTS);
     else if (command == TASK_SHARE || command == TASK_PUBLISH || command == TASK_MAIL) {
@@ -244,11 +309,13 @@ static void TaskCommand(Browser *browser, int command)
 static void DrawRow(Browser *browser, const DRAWITEMSTRUCT *draw)
 {
     BrowserSidebar *s = browser->sidebar; int index = (int)draw->CtlID - TASK_ROW_BASE; TaskRow *row; RECT text = draw->rcItem;
-    HGDIOBJ old; BOOL header, down = !!(draw->itemState & ODS_SELECTED);
+    HGDIOBJ old; BOOL header, activeHeader, down = !!(draw->itemState & ODS_SELECTED);
+    FillRect(draw->hDC, &draw->rcItem, (HBRUSH)(COLOR_WINDOW + 1));
     if (index < 0 || index >= s->count) return;
     row = &s->rows[index]; header = row->kind == ROW_HEADER;
-    FillRect(draw->hDC, &draw->rcItem, (HBRUSH)(INT_PTR)((header ? COLOR_BTNFACE : COLOR_WINDOW) + 1));
-    SetBkMode(draw->hDC, TRANSPARENT); SetTextColor(draw->hDC, GetSysColor(header ? COLOR_BTNTEXT : COLOR_WINDOWTEXT));
+    activeHeader = header && row->group == 0 && browser->path[0] && lstrlenA(browser->path) == 3;
+    FillRect(draw->hDC, &draw->rcItem, (HBRUSH)(INT_PTR)((activeHeader ? COLOR_ACTIVECAPTION : header ? COLOR_BTNFACE : COLOR_WINDOW) + 1));
+    SetBkMode(draw->hDC, TRANSPARENT); SetTextColor(draw->hDC, GetSysColor(activeHeader ? COLOR_CAPTIONTEXT : header ? COLOR_BTNTEXT : COLOR_WINDOWTEXT));
     old = SelectObject(draw->hDC, header && s->bold ? s->bold : browserFont);
     text.left += 8; text.right -= 8; text.top += down ? 1 : 0;
     if (header) {
@@ -318,7 +385,14 @@ static LRESULT CALLBACK SidebarProc(HWND window, UINT message, WPARAM wp, LPARAM
     case WM_PAINT: {
         PAINTSTRUCT paint; RECT rect; HDC target = BeginPaint(window, &paint), dc;
         GetClientRect(window, &rect); dc = PaintBufferBegin(&s->background, target, &rect);
-        FillRect(dc, &rect, (HBRUSH)(COLOR_BTNFACE + 1)); PaintBufferEnd(&s->background, target, &rect); EndPaint(window, &paint); return 0;
+        FillRect(dc, &rect, (HBRUSH)(COLOR_BTNFACE + 1));
+        if (window == s->content && browser->options.pane == BROWSER_PANE_TASKS) {
+            int i;
+            for (i = 0; i < 4; ++i) if (s->groups[i].bottom > s->groups[i].top) {
+                RECT group = s->groups[i]; FillRect(dc, &group, (HBRUSH)(COLOR_WINDOW + 1)); DrawEdge(dc, &group, BDR_SUNKENOUTER, BF_RECT);
+            }
+        }
+        PaintBufferEnd(&s->background, target, &rect); EndPaint(window, &paint); return 0;
     }
     case WM_SYSCOLORCHANGE: InvalidateRect(window, NULL, TRUE); return 0;
     }
@@ -330,11 +404,11 @@ BOOL BrowserSidebarRegister(void)
     cls.lpfnWndProc = SidebarProc; cls.lpszClassName = SIDEBAR_CLASS;
     return RegisterClassA(&cls) != 0;
 }
-void BrowserSidebarCreate(Browser *browser)
+BOOL BrowserSidebarCreate(Browser *browser)
 {
     BrowserSidebar *s = EnvAlloc(sizeof(*s)); int i; LOGFONTA font; LPITEMIDLIST shared;
     static const int resources[] = {16, 1, 22, 23, 4, 2, 18, 32, 4, 1};
-    if (!s) return;
+    if (!s) return FALSE;
     browser->sidebar = s; s->mode = -1;
     GetObjectA(browserFont, sizeof(font), &font); font.lfWeight = FW_BOLD; s->bold = CreateFontIndirectA(&font);
     for (i = 0; i < 10; ++i) s->icons[i] = EnvSystemIcon(resources[i]);
@@ -346,8 +420,9 @@ void BrowserSidebarCreate(Browser *browser)
         0, 0, 0, 0, s->window, NULL, browserInstance, browser);
     s->historyNote = BrowserControl(s->content, "STATIC", "", 0, 0);
     s->history = BrowserControl(s->content, "LISTBOX", "", WS_TABSTOP | WS_BORDER | WS_VSCROLL | WS_HSCROLL | LBS_NOTIFY | LBS_NOINTEGRALHEIGHT, ID_HISTORY_LIST);
-    SendMessageA(s->history, LB_SETHORIZONTALEXTENT, 1600, 0);
     s->clear = BrowserControl(s->content, "BUTTON", "Clear history", WS_TABSTOP, ID_HISTORY_CLEAR);
+    if (!s->window || !s->content || !s->historyNote || !s->history || !s->clear) { BrowserSidebarDestroy(browser); return FALSE; }
+    return TRUE;
 }
 void BrowserSidebarDestroy(Browser *browser)
 {
