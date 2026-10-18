@@ -685,6 +685,7 @@ void NativeViewRefresh(NativeView *view)
     if (view->icons && !DesktopIconsBeginRefresh(view->icons)) return;
     if (view->desktop) ReadWallpaper(view);
     IShellView_Refresh(view->view);
+    if (view->recycleBin) RenderTraceShell("recycle.refresh", S_OK, ListView_GetItemCount(view->list), ListView_GetSelectedCount(view->list));
     DesktopIconsEndRefresh(view->icons);
     InvalidateRect(view->list, NULL, TRUE);
     NotifyState(view);
@@ -709,19 +710,71 @@ HWND NativeViewWindow(NativeView *view) { return view ? view->window : NULL; }
 
 HWND NativeViewList(NativeView *view) { return view ? view->list : NULL; }
 void NativeViewSetNavigator(NativeView *view, BOOL (*navigate)(HWND, LPCITEMIDLIST)) { if (view) view->navigate = navigate; }
+/* Invoke the selected object's real menu command. A successful string verb
+ * is not proof of an action on old shell extensions. Only fall back BEFORE
+ * invoking a command; cancellation or an InvokeCommand error is final. */
+HRESULT NativeShellDelete(IShellView *shellView, HWND owner, HWND list)
+{
+    IContextMenu *context = NULL; HMENU menu; MSG key; HRESULT result;
+    if (!shellView || !IsWindow(list)) return E_INVALIDARG;
+    result = IShellView_GetItemObject(shellView, SVGIO_SELECTION, &IID_IContextMenu, (void **)&context);
+    RenderTraceShell("recycle.get-context", result, ListView_GetItemCount(list), ListView_GetSelectedCount(list));
+    if (SUCCEEDED(result) && context) {
+        menu = CreatePopupMenu();
+        if (!menu) { IContextMenu_Release(context); return E_OUTOFMEMORY; }
+        result = IContextMenu_QueryContextMenu(context, menu, 0, 1, 0x6fff, CMF_NORMAL);
+        RenderTraceShell("recycle.query-menu", result, GetMenuItemCount(menu), 0);
+        if (SUCCEEDED(result)) {
+            int i;
+            for (i = 0; i < GetMenuItemCount(menu); ++i) {
+                UINT id = GetMenuItemID(menu, i); char verb[128]; HRESULT named;
+                if (!id || id > 0x6fff || (GetMenuState(menu, id, MF_BYCOMMAND) & (MF_DISABLED | MF_GRAYED))) continue;
+                ZeroMemory(verb, sizeof(verb));
+                named = IContextMenu_GetCommandString(context, id - 1, GCS_VERBA, NULL, verb, sizeof(verb) - 1);
+                RenderTraceShell("recycle.menu-verb", named, id, SUCCEEDED(named) && !lstrcmpiA(verb, "delete"));
+                if (SUCCEEDED(named) && !lstrcmpiA(verb, "delete")) {
+                    CMINVOKECOMMANDINFO action;
+                    ZeroMemory(&action, sizeof(action)); action.cbSize = sizeof(action);
+                    action.hwnd = owner; action.lpVerb = MAKEINTRESOURCEA(id - 1); action.nShow = SW_SHOWNORMAL;
+                    result = IContextMenu_InvokeCommand(context, &action);
+                    RenderTraceShell("recycle.invoke-delete", result, ListView_GetItemCount(list), ListView_GetSelectedCount(list));
+                    DestroyMenu(menu); IContextMenu_Release(context); return result;
+                }
+            }
+        }
+        DestroyMenu(menu); IContextMenu_Release(context);
+    }
+    /* Win95 processes some view commands through its COM accelerator. Wine's
+     * implementation returns S_FALSE here and handles LVN_KEYDOWN instead. */
+    ZeroMemory(&key, sizeof(key)); key.hwnd = list; key.message = WM_KEYDOWN;
+    key.wParam = VK_DELETE; key.lParam = 1; key.time = GetTickCount(); GetCursorPos(&key.pt);
+    result = IShellView_TranslateAccelerator(shellView, &key);
+    RenderTraceShell("recycle.accelerator", result, ListView_GetItemCount(list), ListView_GetSelectedCount(list));
+    if (result != S_FALSE) return result;
+    SendMessageA(list, WM_KEYDOWN, VK_DELETE, 1);
+    RenderTraceShell("recycle.list-delete", S_OK, ListView_GetItemCount(list), ListView_GetSelectedCount(list));
+    return S_OK;
+}
+static HRESULT DeleteRecycleSelection(NativeView *view)
+{
+    HRESULT result; HWND focus;
+    if (view->deleting || view->operationDepth) return HRESULT_FROM_WIN32(ERROR_BUSY);
+    if (!ListView_GetSelectedCount(view->list)) return S_FALSE;
+    view->deleting = TRUE; ++view->operationDepth;
+    focus = GetFocus(); SetFocus(view->list);
+    result = NativeShellDelete(view->view, view->parent, view->list);
+    if (IsWindow(focus)) SetFocus(focus);
+    --view->operationDepth; view->deleting = FALSE;
+    BrowserRecycleBinsChanged();
+    return result;
+}
 BOOL NativeViewInvoke(NativeView *view, const char *verb, BOOL background)
 {
     IContextMenu *context; CMINVOKECOMMANDINFO action; HRESULT result; HMENU menu;
     if (!view) return FALSE;
     if (view->recycleBin && !background && !lstrcmpiA(verb, "delete")) {
-        /* Old shell extensions need numeric verbs and may silently accept
-         * unsupported strings. Let their own ListView choose the real Delete
-         * command, exactly as for a physical keypress, with native confirmation. */
-        if (view->deleting || !ListView_GetSelectedCount(view->list)) return FALSE;
-        view->deleting = TRUE;
-        SendMessageA(view->list, WM_KEYDOWN, VK_DELETE, 1);
-        view->deleting = FALSE;
-        return TRUE;
+        if (!ListView_GetSelectedCount(view->list)) return FALSE;
+        return SUCCEEDED(DeleteRecycleSelection(view));
     }
     result = IShellView_GetItemObject(view->view, background ? SVGIO_BACKGROUND : SVGIO_SELECTION, &IID_IContextMenu, (void **)&context);
     if (FAILED(result)) return FALSE;
@@ -732,7 +785,7 @@ BOOL NativeViewInvoke(NativeView *view, const char *verb, BOOL background)
 }
 HRESULT NativeEmptyRecycleBin(NativeView *view)
 {
-    UINT *saved; int i, count; HWND focus;
+    UINT *saved; int i, count; HRESULT result;
     if (!view || !view->recycleBin || !view->list) return E_INVALIDARG;
     if (view->deleting) return HRESULT_FROM_WIN32(ERROR_BUSY);
     count = ListView_GetItemCount(view->list);
@@ -741,17 +794,15 @@ HRESULT NativeEmptyRecycleBin(NativeView *view)
     saved = HeapAlloc(GetProcessHeap(), 0, (SIZE_T)count * sizeof(*saved));
     if (!saved) return E_OUTOFMEMORY;
     for (i = 0; i < count; ++i) saved[i] = ListView_GetItemState(view->list, i, LVIS_SELECTED | LVIS_FOCUSED);
-    focus = GetFocus();
     ListView_SetItemState(view->list, -1, LVIS_SELECTED, LVIS_SELECTED);
-    SetFocus(view->list);
-    NativeViewInvoke(view, "delete", FALSE);
+    result = DeleteRecycleSelection(view);
     /* Cancellation leaves the list intact. Restore its original selection;
      * do not try a second API/verb when the user declined the native dialog. */
     if (ListView_GetItemCount(view->list) == count)
         for (i = 0; i < count; ++i) ListView_SetItemState(view->list, i, saved[i], LVIS_SELECTED | LVIS_FOCUSED);
     HeapFree(GetProcessHeap(), 0, saved);
-    if (IsWindow(focus)) SetFocus(focus);
-    return S_OK;
+    RenderTraceShell("recycle.empty-return", result, count, ListView_GetItemCount(view->list));
+    return result;
 }
 HWND OpenNativeFolder(LPCITEMIDLIST absolute) { return BrowserOpenNamespace(absolute); }
 void NativeViewSetHost(const EnvironmentHost *callbacks) { host = *callbacks; }

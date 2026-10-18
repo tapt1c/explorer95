@@ -7,5 +7,6 @@ void RenderTraceOpen(void);
 void RenderTraceClose(void);
 void RenderTraceEvent(const char *surface, HWND window, UINT message, WPARAM wp, LPARAM lp);
 void RenderTraceTray(DWORD stage, DWORD error, DWORD value);
+void RenderTraceShell(const char *stage, HRESULT result, DWORD first, DWORD second);
 void RenderTraceTrayDetail(DWORD stage, DWORD error, DWORD detail, DWORD value);
 #endif

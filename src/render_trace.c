@@ -31,6 +31,14 @@ void RenderTraceClose(void)
     if (traceFile != INVALID_HANDLE_VALUE) CloseHandle(traceFile);
     traceFile = INVALID_HANDLE_VALUE;
 }
+void RenderTraceShell(const char *stage, HRESULT result, DWORD first, DWORD second)
+{
+    char text[180];
+    if (traceFile == INVALID_HANDLE_VALUE) return;
+    wsprintfA(text, "%lu shell stage=%s result=%08lx a=%lu b=%lu\r\n",
+        GetTickCount(), stage, (DWORD)result, first, second);
+    WriteTrace(text);
+}
 void RenderTraceTray(DWORD stage, DWORD error, DWORD value)
 {
     char text[120];
@@ -59,7 +67,7 @@ void RenderTraceOpen(void)
         MessageBoxA(NULL, "Cannot create EX95REND.LOG beside Explorer95. Rendering trace is disabled.", "Explorer95 diagnostics", MB_OK | MB_ICONEXCLAMATION); return;
     }
     traceBytes = 0; dc = GetDC(NULL);
-    wsprintfA(text, "Explorer95 render trace 1; desktop bottom guard; OS=%08lx screen=%dx%d bpp=%d start=%lu\r\n",
+    wsprintfA(text, "Explorer95 render trace 2; shell COM delete; desktop bottom guard; OS=%08lx screen=%dx%d bpp=%d start=%lu\r\n",
         GetVersion(), GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN), GetDeviceCaps(dc, BITSPIXEL) * GetDeviceCaps(dc, PLANES), GetTickCount());
     ReleaseDC(NULL, dc); WriteTrace(text);
 }

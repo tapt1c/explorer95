@@ -47,6 +47,89 @@ static LRESULT CALLBACK NativePositionProc(HWND window, UINT message, WPARAM wp,
     return CallWindowProcA(nativePositionOriginal, window, message, wp, lp);
 }
 
+/* Wine translates no shell accelerators and its recycled-item context does
+ * not expose canonical verbs. Exercise the alternate COM contracts explicitly
+ * with a non-destructive view: no filesystem or Recycle Bin is touched. */
+static struct {
+    HRESULT object, name, invoke, accelerator;
+    int refs, invoked, translated, keys;
+    BOOL valid;
+} deleteProbe;
+static IContextMenu deleteContext;
+static WNDPROC deleteListOriginal;
+static ULONG STDMETHODCALLTYPE DeleteProbeRelease(IContextMenu *self)
+{ (void)self; return --deleteProbe.refs; }
+static HRESULT STDMETHODCALLTYPE DeleteProbeMenu(IContextMenu *self, HMENU menu, UINT index, UINT first, UINT last, UINT flags)
+{
+    (void)self; (void)index; (void)last; (void)flags;
+    AppendMenuA(menu, MF_STRING, first + 3, "Open");
+    AppendMenuA(menu, MF_STRING, first + 23, "Delete");
+    return MAKE_HRESULT(SEVERITY_SUCCESS, 0, 24);
+}
+static HRESULT STDMETHODCALLTYPE DeleteProbeName(IContextMenu *self, UINT_PTR id, UINT flags, UINT *reserved, LPSTR text, UINT size)
+{
+    (void)self; (void)reserved;
+    deleteProbe.valid &= flags == GCS_VERBA && (id == 3 || id == 23);
+    if (FAILED(deleteProbe.name)) return deleteProbe.name;
+    lstrcpynA(text, id == 23 ? "delete" : "open", size); return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE DeleteProbeInvoke(IContextMenu *self, CMINVOKECOMMANDINFO *action)
+{
+    (void)self; ++deleteProbe.invoked;
+    deleteProbe.valid &= (UINT_PTR)action->lpVerb == 23 && action->cbSize == sizeof(*action);
+    return deleteProbe.invoke;
+}
+static HRESULT STDMETHODCALLTYPE DeleteProbeObject(IShellView *self, UINT scope, REFIID iid, void **object)
+{
+    (void)self; (void)iid; deleteProbe.valid &= scope == SVGIO_SELECTION;
+    *object = NULL;
+    if (SUCCEEDED(deleteProbe.object)) { *object = &deleteContext; ++deleteProbe.refs; }
+    return deleteProbe.object;
+}
+static HRESULT STDMETHODCALLTYPE DeleteProbeAccelerator(IShellView *self, MSG *key)
+{
+    (void)self; ++deleteProbe.translated;
+    deleteProbe.valid &= key->message == WM_KEYDOWN && key->wParam == VK_DELETE && IsWindow(key->hwnd);
+    return deleteProbe.accelerator;
+}
+static LRESULT CALLBACK DeleteProbeList(HWND window, UINT message, WPARAM wp, LPARAM lp)
+{
+    if (message == WM_KEYDOWN && wp == VK_DELETE) { ++deleteProbe.keys; return 0; }
+    return CallWindowProcA(deleteListOriginal, window, message, wp, lp);
+}
+static void DeleteProbeReset(HRESULT object, HRESULT name, HRESULT invoke, HRESULT accelerator)
+{
+    ZeroMemory(&deleteProbe, sizeof(deleteProbe)); deleteProbe.valid = TRUE;
+    deleteProbe.object = object; deleteProbe.name = name; deleteProbe.invoke = invoke; deleteProbe.accelerator = accelerator;
+}
+static void NativeShellCommandTests(HWND parent)
+{
+    IShellView view; IShellViewVtbl viewTable; IContextMenuVtbl contextTable; HWND list; HRESULT result;
+    ZeroMemory(&viewTable, sizeof(viewTable)); ZeroMemory(&contextTable, sizeof(contextTable));
+    viewTable.GetItemObject = DeleteProbeObject; viewTable.TranslateAccelerator = DeleteProbeAccelerator; view.lpVtbl = &viewTable;
+    contextTable.Release = DeleteProbeRelease; contextTable.QueryContextMenu = DeleteProbeMenu;
+    contextTable.GetCommandString = DeleteProbeName; contextTable.InvokeCommand = DeleteProbeInvoke; deleteContext.lpVtbl = &contextTable;
+    list = CreateWindowExA(0, WC_LISTVIEWA, "", WS_CHILD, 0, 0, 20, 20, parent, NULL, GetModuleHandleA(NULL), NULL);
+    Check(list != NULL, "create a non-destructive shell-command message sink");
+    deleteListOriginal = (WNDPROC)SetWindowLongPtrA(list, GWLP_WNDPROC, (LONG_PTR)DeleteProbeList);
+    DeleteProbeReset(S_OK, S_OK, S_OK, S_OK); result = NativeShellDelete(&view, parent, list);
+    Check(result == S_OK && deleteProbe.valid && !deleteProbe.refs && deleteProbe.invoked == 1 && !deleteProbe.translated && !deleteProbe.keys,
+        "legacy context dispatch uses the discovered numeric Delete offset rather than a string or the first menu item");
+    DeleteProbeReset(S_OK, S_OK, E_ABORT, S_OK); result = NativeShellDelete(&view, parent, list);
+    Check(result == E_ABORT && deleteProbe.valid && !deleteProbe.refs && deleteProbe.invoked == 1 && !deleteProbe.translated && !deleteProbe.keys,
+        "native cancellation is final: no accelerator or ListView retry after InvokeCommand");
+    DeleteProbeReset(S_OK, E_NOTIMPL, S_OK, S_OK); result = NativeShellDelete(&view, parent, list);
+    Check(result == S_OK && deleteProbe.valid && !deleteProbe.refs && !deleteProbe.invoked && deleteProbe.translated == 1 && !deleteProbe.keys,
+        "a Win95-style view that consumes Delete in TranslateAccelerator receives no duplicate ListView key");
+    DeleteProbeReset(E_NOINTERFACE, S_OK, S_OK, S_FALSE); result = NativeShellDelete(&view, parent, list);
+    Check(result == S_OK && deleteProbe.valid && !deleteProbe.refs && !deleteProbe.invoked && deleteProbe.translated == 1 && deleteProbe.keys == 1,
+        "an unhandled accelerator falls back to exactly one native ListView Delete");
+    DeleteProbeReset(E_NOINTERFACE, S_OK, S_OK, E_ABORT); result = NativeShellDelete(&view, parent, list);
+    Check(result == E_ABORT && deleteProbe.valid && !deleteProbe.invoked && deleteProbe.translated == 1 && !deleteProbe.keys,
+        "accelerator cancellation or failure is never retried as another Delete");
+    DestroyWindow(list);
+}
+
 static void NativeViewMessageTests(void)
 {
     HRESULT ole = OleInitialize(NULL); HWND parent, list; NativeView *view; RECT rect = {0, 0, 320, 200};
@@ -55,6 +138,7 @@ static void NativeViewMessageTests(void)
     parent = CreateWindowExA(0, "STATIC", "Native message probe", WS_OVERLAPPED | WS_CLIPCHILDREN,
         0, 0, 320, 200, NULL, NULL, GetModuleHandleA(NULL), NULL);
     Check(parent != NULL, "create hidden parent for native message probe");
+    NativeShellCommandTests(parent);
     view = NativeViewCreateEx(parent, NULL, FALSE, 0, &rect);
     Check(view != NULL && NativeViewList(view) != NULL, "host the actual Shell32 ListView in the test process");
     Check(!NativeViewIsRecycleBin(view) && NativeEmptyRecycleBin(view) == E_INVALIDARG,

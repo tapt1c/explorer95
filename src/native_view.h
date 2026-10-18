@@ -30,6 +30,8 @@ void NativeViewStateHandled(NativeView *view);
 BOOL NativeViewTakeRefresh(NativeView *view);
 void NativeViewRequestRefresh(NativeView *view);
 HRESULT NativeEmptyRecycleBin(NativeView *view);
+/* Legacy shell command dispatch, separate from the host/selection lifetime. */
+HRESULT NativeShellDelete(IShellView *view, HWND owner, HWND list);
 void NativeViewSetHost(const EnvironmentHost *host);
 void DesktopBackgroundMenu(NativeView *view, POINT point, HWND owner);
 BOOL NativeViewMenuMessage(NativeView *view, UINT message, WPARAM wp, LPARAM lp);
