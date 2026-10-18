@@ -41,13 +41,34 @@ def image(dll="user32.dll", function="EndPaint"):
     return data
 
 
+def hook_image(function="EndPaint"):
+    data = image(function=function)
+    struct.pack_into("<H", data, 0x96, 0x2002)
+    data[0x178:0x180] = b".shared\0"
+    struct.pack_into("<I", data, 0x19c, 0xd0000040)
+    return data
+
+
+def embedded_image(payload):
+    data = image()
+    data.extend(bytes(256) + payload)
+    struct.pack_into("<II", data, 0x108, 0x1200, 256 + len(payload))
+    struct.pack_into("<IIII", data, 0x180, len(data) - 512, 0x1000, len(data) - 512, 512)
+    root = 1024
+    for directory, name, target in ((0, 10, 0x80000018), (24, 201, 0x80000030), (48, 1033, 72)):
+        struct.pack_into("<HH", data, root + directory + 12, 0, 1)
+        struct.pack_into("<II", data, root + directory + 16, name, target)
+    struct.pack_into("<IIII", data, root + 72, 0x1300, len(payload), 0, 0)
+    return data
+
+
 class LoaderGateTests(unittest.TestCase):
-    def run_gate(self, data):
+    def run_gate(self, data, **options):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "fixture.exe"
             path.write_bytes(data)
             with contextlib.redirect_stdout(io.StringIO()):
-                check(path)
+                check(path, **options)
 
     def test_legacy_import_is_accepted(self):
         self.run_gate(image())
@@ -87,6 +108,43 @@ class LoaderGateTests(unittest.TestCase):
         struct.pack_into("<II", data, 0x140, 0x1100, 24)
         with self.assertRaisesRegex(ValueError, "TLS directory"):
             self.run_gate(data)
+
+    def test_dll_does_not_replace_executable(self):
+        with self.assertRaisesRegex(ValueError, "must be an executable"):
+            self.run_gate(hook_image())
+
+    def test_dll_mode_requires_dll(self):
+        with self.assertRaisesRegex(ValueError, "must be a DLL"):
+            self.run_gate(image(), dll=True)
+
+    def test_dll_shared_handles_are_required(self):
+        data = hook_image()
+        struct.pack_into("<I", data, 0x19c, 0xc0000040)
+        with self.assertRaisesRegex(ValueError, "shared handle section"):
+            self.run_gate(data, dll=True)
+
+    def test_required_hook_cannot_be_omitted(self):
+        with self.assertRaisesRegex(ValueError, "missing embedded tray hook"):
+            self.run_gate(image(), require_hook=True)
+
+    def test_embedded_hook_is_checked(self):
+        self.run_gate(embedded_image(hook_image()), require_hook=True)
+
+    def test_embedded_hook_loader_regression_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "user32.dll!EndMenu"):
+            self.run_gate(embedded_image(hook_image(function="EndMenu")), require_hook=True)
+
+    def test_embedded_hook_wrong_architecture_is_rejected(self):
+        payload = hook_image()
+        struct.pack_into("<H", payload, 0x84, 0x8664)
+        with self.assertRaisesRegex(ValueError, "32-bit x86"):
+            self.run_gate(embedded_image(payload), require_hook=True)
+
+    def test_truncated_embedded_hook_is_rejected(self):
+        data = embedded_image(hook_image())
+        struct.pack_into("<I", data, 1024 + 76, 0xffffffff)
+        with self.assertRaisesRegex(ValueError, "truncated embedded tray hook"):
+            self.run_gate(data, require_hook=True)
 
 
 if __name__ == "__main__":

@@ -183,7 +183,10 @@ static void Navigate(HWND browser, const char *path)
 
 static LRESULT CALLBACK ChildProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam)
 {
-    if (message == WM_APP + 33) { SetWindowTextA(window, "Explorer95 tray callback received"); return 0; }
+    if (message == WM_APP + 33) {
+        if (lParam == WM_LBUTTONDBLCLK) SetPropA(window,"Explorer95.TrayDoubleClick",(HANDLE)1);
+        SetWindowTextA(window,"Explorer95 tray callback received"); return 0;
+    }
     if (message == WM_APP + 34) {
         CreateWindowA("Explorer95.SmokeChild", "Explorer95 second task", WS_OVERLAPPEDWINDOW | WS_VISIBLE,
             120, 120, 320, 200, NULL, NULL, GetModuleHandleA(NULL), NULL);
@@ -1311,6 +1314,21 @@ static void EnvironmentTests(HWND bar, HWND browser, HWND childWindow, HWND menu
     do { Sleep(50); GetWindowTextA(childWindow, title, sizeof(title)); }
     while (lstrcmpA(title, "Explorer95 tray callback received") && GetTickCount() - started < 3000);
     Check(!lstrcmpA(title, "Explorer95 tray callback received"), "tray forwards mouse callbacks with the application message");
+    {
+        RECT icon; int click;
+        SetForegroundWindow(childWindow); started = GetTickCount();
+        while (GetForegroundWindow() != childWindow && GetTickCount() - started < 3000) PumpFor(20);
+        Check(GetForegroundWindow() == childWindow,"notification callback fixture is active before clicking its tray icon");
+        GetWindowRect(notification,&icon); SetCursorPos((icon.left + icon.right) / 2,(icon.top + icon.bottom) / 2); PumpFor(30);
+        for (click = 0; click < 2; ++click) {
+            mouse_event(MOUSEEVENTF_LEFTDOWN,0,0,0,0); mouse_event(MOUSEEVENTF_LEFTUP,0,0,0,0); PumpFor(30);
+        }
+        started = GetTickCount();
+        while (!GetPropA(childWindow,"Explorer95.TrayDoubleClick") && GetTickCount() - started < 3000) PumpFor(20);
+        Check(GetPropA(childWindow,"Explorer95.TrayDoubleClick") && GetForegroundWindow() == childWindow,
+            "actual tray double-click reaches its owner without taking focus from the active application");
+        SetCursorPos(GetSystemMetrics(SM_CXSCREEN) - 2,2); PumpFor(30);
+    }
     packet.operation = NIM_MODIFY; packet.icon.uFlags = NIF_TIP;
     lstrcpyA(packet.icon.szTip, "Updated tooltip");
     Check(SendMessageA(bar, WM_COPYDATA, (WPARAM)childWindow, (LPARAM)&copy), "tray accepts NIM_MODIFY");
@@ -1487,6 +1505,7 @@ void start(void)
     command[0] = 0;
     lstrcpynA(command, GetCommandLineA(), sizeof(command));
     length = lstrlenA(command);
+    if (length >= 13 && !lstrcmpA(command + length - 13, "--tray-source")) TrayMirrorSourceMode();
     if ((length >= 7 && !lstrcmpA(command + length - 7, "--child")) ||
         (length >= 9 && !lstrcmpA(command + length - 9, "\"--child\"")) ||
         (lstrlenA(module) >= 15 && !lstrcmpiA(module + lstrlenA(module) - 15, "quick-child.exe"))) {
@@ -1538,7 +1557,7 @@ void start(void)
     Check(CreateDirectoryA(settingsDir, NULL), "create isolated settings directory");
     wsprintfA(settings, "%s\\settings.ini", settingsDir);
     if (group != GROUP_BROWSER) { LayoutTests(); HistoryTests(settingsDir, module, settings); ShellFeatureTests(); }
-    if (group == GROUP_FULL || group == GROUP_CORE) { PaintTests(); ConfigTests(settingsDir); DesktopIconTests(settingsDir); FolderHandlerTests(module,settings); FolderSelectionTests(); NativeViewMessageTests(); TrayMirrorTests(); }
+    if (group == GROUP_FULL || group == GROUP_CORE) { PaintTests(); ConfigTests(settingsDir); DesktopIconTests(settingsDir); FolderHandlerTests(module,settings); FolderSelectionTests(); NativeViewMessageTests(); TrayMirrorTests(); TrayMirrorCrossProcessTests(); }
     if (group == GROUP_CORE) goto cleanup;
     wsprintfA(command, "\"%s\" --settings=\"%s\"", executable, settings);
     if (group != GROUP_MENU) wsprintfA(command,"\"%s\" --settings=\"%s\" --open=\"%s\"",executable,settings,fixture);

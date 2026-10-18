@@ -912,6 +912,7 @@ static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
         }
         return TrayCopyData(copy);
     }
+    case TRAY_MIRROR_RESYNC: TrayMirrorResync((HWND)wp); return 0;
     case WM_APP + 34: {
         if (folderCount) {
             FolderRequest request = folderRequests[folderHead];

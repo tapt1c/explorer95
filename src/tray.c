@@ -29,10 +29,13 @@ static char mirrorPath[MAX_PATH];
 static DWORD mirrorRetry;
 static DWORD mirrorFault;
 static BOOL mirrorWarned;
+static BOOL mirrorPending;
+static DWORD mirrorNext, mirrorTotal;
 
 static void MirrorClose(void)
 {
     mirrorShell = NULL;
+    mirrorPending = FALSE; mirrorNext = mirrorTotal = 0;
     if (mirrorStop) mirrorStop();
     mirrorStop = NULL;
     if (mirrorModule) FreeLibrary(mirrorModule);
@@ -42,7 +45,7 @@ static void MirrorClose(void)
 }
 static BOOL MirrorOpen(HWND shell)
 {
-    HRSRC resource; HGLOBAL loaded; DWORD size, written = 0; HANDLE file; TrayMirrorStartProc start;
+    HRSRC resource; HGLOBAL loaded; DWORD size, written = 0; DWORD_PTR result; HANDLE file; TrayMirrorStartProc start;
     resource = FindResourceA(env.host.instance, MAKEINTRESOURCEA(TRAY_MIRROR_RESOURCE), RT_RCDATA);
     if (!resource || !(size = SizeofResource(env.host.instance, resource)) ||
         !(loaded = LoadResource(env.host.instance, resource)) || !LockResource(loaded) ||
@@ -56,7 +59,10 @@ static BOOL MirrorOpen(HWND shell)
     mirrorStop = (TrayMirrorStopProc)(UINT_PTR)GetProcAddress(mirrorModule, "TrayMirrorStop");
     if (!start || !mirrorStop || !start(env.bar, shell)) goto fail;
     mirrorShell = shell;
-    if (!PostMessageA(shell, RegisterWindowMessageA(TRAY_MIRROR_REFRESH), 0, 0)) goto fail;
+    /* WH_CALLWNDPROCRET observes sent messages, not posted queue entries.
+     * The wait must allow the hook's synchronous WM_COPYDATA reply. */
+    if (!SendMessageTimeoutA(shell, RegisterWindowMessageA(TRAY_MIRROR_REFRESH), 0, 0,
+        SMTO_ABORTIFHUNG, 1000, &result)) goto fail;
     return TRUE;
 fail:
     { DWORD error = GetLastError(); MirrorClose(); SetLastError(error ? error : ERROR_NOT_SUPPORTED); return FALSE; }
@@ -147,6 +153,8 @@ static void Tip(HWND window, const char *text)
 static LRESULT CALLBACK IconProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
 {
     TrayIcon *icon = (TrayIcon *)GetWindowLongPtrA(window, GWLP_USERDATA);
+    /* Language indicators act on the application that was already active. */
+    if (message == WM_MOUSEACTIVATE) return MA_NOACTIVATE;
     if (message == WM_PAINT) {
         PAINTSTRUCT paint; HDC dc = BeginPaint(window, &paint);
         FillRect(dc, &paint.rcPaint, (HBRUSH)(COLOR_BTNFACE + 1));
@@ -253,7 +261,7 @@ static LRESULT Receive(const COPYDATASTRUCT *copy, BOOL mirrored)
         DeleteIcon(icon); EnvLayoutBar(); return TRUE;
     }
     if (data->uFlags & ~(NIF_MESSAGE | NIF_ICON | NIF_TIP)) return FALSE;
-    if ((data->uFlags & NIF_MESSAGE) && data->uCallbackMessage < WM_USER) return FALSE;
+    if ((data->uFlags & NIF_MESSAGE) && data->uCallbackMessage < WM_USER && (!mirrored || data->uCallbackMessage)) return FALSE;
     if (!mirrored && ((packet->operation == NIM_MODIFY && !icon) || (packet->operation == NIM_ADD && icon))) return FALSE;
     if ((data->uFlags & NIF_ICON) && data->hIcon) {
         image = CopyIcon(data->hIcon); if (!image) return FALSE;
@@ -280,30 +288,50 @@ static LRESULT Receive(const COPYDATASTRUCT *copy, BOOL mirrored)
     return TRUE;
 }
 LRESULT TrayCopyData(const COPYDATASTRUCT *copy) { return Receive(copy, FALSE); }
+static BOOL MirrorItemValid(const TrayMirrorItem *item, DWORD flags)
+{
+    return IsWindow(item->owner) && (!(flags & NIF_MESSAGE) || !item->callback || item->callback >= WM_USER) && item->image.present <= 1;
+}
+static LRESULT MirrorReceive(DWORD operation, DWORD flags, const TrayMirrorItem *item)
+{
+    TrayPacket packet; COPYDATASTRUCT copy; HICON image = NULL; LRESULT result;
+    if (operation > NIM_DELETE || (flags & ~7u) || !MirrorItemValid(item,flags)) return FALSE;
+    if (operation != NIM_DELETE && (flags & NIF_ICON) && item->image.present) {
+        image = TrayMirrorUnpack(&item->image); if (!image) return FALSE;
+    }
+    ZeroMemory(&packet,sizeof(packet)); packet.signature = TRAY_SIGNATURE; packet.operation = operation;
+    packet.icon.cbSize = offsetof(NOTIFYICONDATAA,szTip) + 64; packet.icon.hWnd = item->owner;
+    packet.icon.uID = item->id; packet.icon.uFlags = flags; packet.icon.uCallbackMessage = item->callback;
+    packet.icon.hIcon = image; lstrcpynA(packet.icon.szTip,item->tip,64);
+    copy.dwData = 1; copy.cbData = offsetof(TrayPacket,icon) + packet.icon.cbSize; copy.lpData = &packet;
+    result = Receive(&copy,TRUE); if (image) DestroyIcon(image); return result;
+}
 LRESULT TrayMirrorCopyData(HWND source, const COPYDATASTRUCT *copy)
 {
-    COPYDATASTRUCT local;
     if (!mirrorShell || source != mirrorShell || !copy) return FALSE;
-    if (copy->dwData == TRAY_MIRROR_EVENT) { local = *copy; local.dwData = 1; return Receive(&local, TRUE); }
+    if (copy->dwData == TRAY_MIRROR_EVENT && copy->lpData && copy->cbData == sizeof(TrayMirrorEvent)) {
+        const TrayMirrorEvent *event = copy->lpData;
+        return MirrorReceive(event->operation,event->flags,&event->item);
+    }
     if (copy->dwData == TRAY_MIRROR_SNAPSHOT) {
         const TrayMirrorSnapshot *snapshot = copy->lpData; DWORD i;
-        TrayPacket packet;
-        if (!snapshot || copy->cbData < offsetof(TrayMirrorSnapshot, items) || snapshot->count > ICON_LIMIT ||
-            copy->cbData != offsetof(TrayMirrorSnapshot, items) + snapshot->count * sizeof(TrayMirrorItem)) return FALSE;
-        for (i = 0; i < snapshot->count; ++i)
-            if (!IsWindow(snapshot->items[i].owner) || (snapshot->items[i].callback && snapshot->items[i].callback < WM_USER)) return FALSE;
-        for (i = 0; i < ICON_LIMIT; ++i) icons[i].snapshotSeen = FALSE;
-        ZeroMemory(&packet, sizeof(packet)); packet.signature = TRAY_SIGNATURE; packet.operation = NIM_ADD;
-        packet.icon.cbSize = offsetof(NOTIFYICONDATAA, szTip) + 64;
-        local.dwData = 1; local.cbData = offsetof(TrayPacket, icon) + packet.icon.cbSize; local.lpData = &packet;
-        for (i = 0; i < snapshot->count; ++i) {
-            const TrayMirrorItem *item = &snapshot->items[i];
-            packet.icon.hWnd = item->owner; packet.icon.uID = item->id; packet.icon.hIcon = item->image;
-            packet.icon.uCallbackMessage = item->callback; packet.icon.uFlags = NIF_ICON | NIF_TIP | (item->callback ? NIF_MESSAGE : 0);
-            lstrcpynA(packet.icon.szTip, item->tip, 64);
-            if (!Receive(&local, TRUE)) return FALSE;
+        if (!snapshot || copy->cbData < offsetof(TrayMirrorSnapshot,items) || snapshot->total > ICON_LIMIT ||
+            snapshot->offset > snapshot->total || snapshot->count > TRAY_MIRROR_BATCH ||
+            snapshot->count > snapshot->total - snapshot->offset || (!snapshot->count && snapshot->total) ||
+            copy->cbData != offsetof(TrayMirrorSnapshot,items) + snapshot->count * sizeof(TrayMirrorItem)) return FALSE;
+        if (snapshot->offset && (snapshot->offset != mirrorNext || snapshot->total != mirrorTotal)) return FALSE;
+        for (i = 0; i < snapshot->count; ++i) if (!MirrorItemValid(&snapshot->items[i],NIF_MESSAGE)) return FALSE;
+        if (!snapshot->offset) {
+            mirrorNext = 0; mirrorTotal = snapshot->total;
+            for (i = 0; i < ICON_LIMIT; ++i) icons[i].snapshotSeen = FALSE;
         }
-        for (i = 0; i < ICON_LIMIT; ++i) if (icons[i].mirrored && !icons[i].snapshotSeen) DeleteIcon(&icons[i]);
+        for (i = 0; i < snapshot->count; ++i)
+            if (!MirrorReceive(NIM_ADD,NIF_ICON | NIF_TIP | NIF_MESSAGE,&snapshot->items[i])) return FALSE;
+        mirrorNext += snapshot->count;
+        if (mirrorNext == mirrorTotal) {
+            for (i = 0; i < ICON_LIMIT; ++i) if (icons[i].mirrored && !icons[i].snapshotSeen) DeleteIcon(&icons[i]);
+            mirrorNext = mirrorTotal = 0;
+        }
         EnvLayoutBar(); return TRUE;
     }
     if (copy->dwData == TRAY_MIRROR_STATUS && copy->lpData && copy->cbData == sizeof(DWORD)) {
@@ -311,6 +339,7 @@ LRESULT TrayMirrorCopyData(HWND source, const COPYDATASTRUCT *copy)
     }
     return FALSE;
 }
+void TrayMirrorResync(HWND source) { if (mirrorShell && source == mirrorShell) mirrorPending = TRUE; }
 
 void TrayPrune(void)
 {
@@ -324,6 +353,11 @@ void TrayPrune(void)
         if (!mirrorShell && shell && (DWORD)(GetTickCount() - mirrorRetry) >= 5000) {
             mirrorRetry = GetTickCount();
             if (!MirrorOpen(shell) && !mirrorWarned) mirrorFault = GetLastError();
+        }
+        if (mirrorShell && mirrorPending && (DWORD)(GetTickCount() - mirrorRetry) >= 1000) {
+            DWORD_PTR result; mirrorRetry = GetTickCount(); mirrorPending = FALSE;
+            if (!SendMessageTimeoutA(mirrorShell,RegisterWindowMessageA(TRAY_MIRROR_REFRESH),0,0,
+                SMTO_ABORTIFHUNG,1000,&result)) mirrorPending = TRUE;
         }
     }
     if (mirrorFault && !mirrorWarned) {
@@ -352,7 +386,7 @@ static LRESULT CALLBACK TrayProc(HWND window, UINT message, WPARAM wp, LPARAM lp
 BOOL TrayCreate(void)
 {
     LoadPolicies();
-    if (!EnvRegister("Explorer95.TrayIcon", IconProc, (HBRUSH)(COLOR_BTNFACE + 1), 0) ||
+    if (!EnvRegister("Explorer95.TrayIcon", IconProc, (HBRUSH)(COLOR_BTNFACE + 1), CS_DBLCLKS) ||
         !EnvRegister("TrayNotifyWnd", TrayProc, (HBRUSH)(COLOR_BTNFACE + 1), 0)) return FALSE;
     env.tray = CreateWindowExA(WS_EX_STATICEDGE, "TrayNotifyWnd", "Notification area", WS_CHILD | WS_VISIBLE,
         0, 0, 100, 24, env.bar, NULL, env.host.instance, NULL);
