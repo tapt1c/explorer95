@@ -132,17 +132,31 @@ static void NativeShellCommandTests(HWND parent)
 
 static WNDPROC nativeDesktopOriginal;
 static int nativeBackgroundClicks;
-static LRESULT CALLBACK NativeDesktopObserver(HWND window, UINT message, WPARAM wp, LPARAM lp)
-{
-    if(message==WM_NOTIFY && ((NMHDR *)lp)->code==NM_DBLCLK) ++nativeBackgroundClicks;
-    return CallWindowProcA(nativeDesktopOriginal,window,message,wp,lp);
-}
+static BOOL nativeDeletePaint, nativeDeleteFrameRetained;
+static HWND nativeDesktopList;
+static RECT nativeDesktopItem;
+static DWORD nativeDesktopFrame;
 static DWORD NativeDesktopPixels(HWND list, const RECT *area)
 {
     HDC dc=GetDC(list); DWORD hash=2166136261U; int x,y;
     for(y=area->top;y<area->bottom;y+=2) for(x=area->left;x<area->right;x+=2)
         hash=(hash^GetPixel(dc,x,y))*16777619U;
     ReleaseDC(list,dc); return hash;
+}
+/* LVN_DELETEITEM reaches Shell32 before Common Controls has removed the
+ * item's own storage. A nested paint after that callback must wait rather
+ * than query a PIDL that the shell has just released. No file is deleted. */
+static LRESULT CALLBACK NativeDesktopObserver(HWND window, UINT message, WPARAM wp, LPARAM lp)
+{
+    LRESULT result;
+    if(message==WM_NOTIFY && ((NMHDR *)lp)->code==NM_DBLCLK) ++nativeBackgroundClicks;
+    result=CallWindowProcA(nativeDesktopOriginal,window,message,wp,lp);
+    if(nativeDeletePaint && message==WM_NOTIFY && ((NMHDR *)lp)->code==LVN_DELETEITEM) {
+        nativeDeletePaint=FALSE;
+        RedrawWindow(nativeDesktopList,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_UPDATENOW);
+        nativeDeleteFrameRetained=NativeDesktopPixels(nativeDesktopList,&nativeDesktopItem)==nativeDesktopFrame;
+    }
+    return result;
 }
 static void NativeDesktopPaintTests(HWND parent)
 {
@@ -191,6 +205,12 @@ static void NativeDesktopPaintTests(HWND parent)
     SendMessageA(list,WM_SETREDRAW,TRUE,0); RedrawWindow(list,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_UPDATENOW);
     Check(NativeDesktopPixels(list,&item)==pixels,"resuming native redraw reconstructs the complete desktop frame");
     SaveScreen("build/desktop-native-frame.bmp");
+    nativeDesktopList=list; nativeDesktopItem=item; nativeDesktopFrame=pixels;
+    nativeDeletePaint=TRUE; nativeDeleteFrameRetained=FALSE;
+    { int count=ListView_GetItemCount(list);
+      Check(ListView_DeleteItem(list,0) && ListView_GetItemCount(list)==count-1,"remove one namespace item only from the disposable native view"); }
+    Check(!nativeDeletePaint && nativeDeleteFrameRetained,"reentrant paint during native item deletion retains the completed frame without querying released shell data");
+    RedrawWindow(list,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_UPDATENOW);
     SetWindowLongPtrA(NativeViewWindow(view),GWLP_WNDPROC,(LONG_PTR)nativeDesktopOriginal);
     NativeViewDestroy(view); ShowWindow(parent,SW_HIDE);
 }

@@ -577,6 +577,17 @@ explorer95.exe --settings="C:\EX95TEST\Explorer95.ini"
   invalidated-область. Обычная Win95 GDI рисует чёрную тень до штатного белого текста.
   Прямой путь при нехватке буфера сохраняется; память кадра освобождается при
   уничтожении view. WM_PAINT с переданным HDC не запускает новый BeginPaint.
+  Не вызывайте штатное рисование во время WM_SETREDRAW(FALSE), изменения
+  элементов/сортировки/геометрии native ListView или исходящего OLE drag.
+  Shell32 может уже освободить PIDL в LVN_DELETEITEM, пока Common Controls
+  ещё держит запись. desktopMutationDepth и desktopFramePending откладывают
+  кадр до возврата исходной процедуры; завершение drag тоже инвалидирует
+  отложенный кадр, в том числе после отмены. Нельзя обходить это через
+  безусловный WM_PRINTCLIENT, который не всегда учитывает native redraw hold.
+  Canary в NativeDesktopPaintTests вызывает вложенную перерисовку после
+  штатного LVN_DELETEITEM и проверяет сохранность прежнего кадра; он удаляет
+  только элемент временного view, не файл. Интеграционный browser/full
+  дополнительно проверяет desktop drag, следующий F5, Delete и Корзину.
   WS_CLIPCHILDREN у desktop ListView защищает нативный редактор имени. Не требуйте NM_CUSTOMDRAW
   или DrawShadowText из более новых Common Controls и не накладывайте собственный
   белый текст поверх готовых native glyphs. Выделенные подписи пропускаются,

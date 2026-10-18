@@ -34,7 +34,8 @@ struct NativeView {
     HBITMAP wallpaper;
     BOOL tiled, backgroundDirty, sized;
     PaintBuffer background, desktopFrame;
-    BOOL paintingDesktop, desktopRedrawDisabled;
+    BOOL paintingDesktop, desktopRedrawDisabled, desktopFramePending;
+    int desktopMutationDepth;
     DesktopIcons *icons;
 };
 
@@ -278,7 +279,13 @@ static void PaintDesktopFrame(NativeView *view, HWND window)
 {
     PAINTSTRUCT paint; RECT area; HDC target=BeginPaint(window,&paint),dc; int saved;
     if(!target) { EndPaint(window,&paint); return; }
-    if(view->paintingDesktop || view->desktopRedrawDisabled) { EndPaint(window,&paint); return; }
+    /* Shell callbacks can pump messages after releasing an item's PIDL but
+     * before Common Controls removes the item. Preserve the completed frame
+     * until mutations and a source OLE drag have fully returned. */
+    if(view->paintingDesktop || view->desktopRedrawDisabled || view->desktopMutationDepth || view->fileDragging) {
+        view->desktopFramePending=TRUE; EndPaint(window,&paint); return;
+    }
+    view->desktopFramePending=FALSE;
     view->paintingDesktop=TRUE; GetClientRect(window,&area);
     dc=PaintBufferBegin(&view->desktopFrame,target,&area); saved=SaveDC(dc);
     if(saved) IntersectClipRect(dc,paint.rcPaint.left,paint.rcPaint.top,paint.rcPaint.right,paint.rcPaint.bottom);
@@ -290,6 +297,7 @@ static void PaintDesktopFrame(NativeView *view, HWND window)
     if(saved) RestoreDC(dc,saved);
     if(dc!=target) PaintBufferEnd(&view->desktopFrame,target,&paint.rcPaint);
     view->paintingDesktop=FALSE; EndPaint(window,&paint);
+    if(view->desktopFramePending) InvalidateRect(window,NULL,TRUE);
 }
 
 /* Route filesystem and virtual folders through our browser. Shell IDList Array
@@ -517,10 +525,17 @@ static LRESULT CALLBACK Subclass(HWND window, UINT message, WPARAM wp, LPARAM lp
             (((NMHDR *)lp)->code == LVN_BEGINDRAG || ((NMHDR *)lp)->code == LVN_BEGINRDRAG);
         BOOL refresh = view->recycleBin && (message == WM_CONTEXTMENU ||
             (window == view->list && message == WM_KEYDOWN && wp == VK_DELETE));
+        BOOL desktopMutation=view->desktop && window==view->list &&
+            (message==LVM_INSERTITEMA || message==LVM_INSERTITEMW || message==LVM_DELETEITEM || message==LVM_DELETEALLITEMS ||
+             message==LVM_SORTITEMS || message==LVM_SETITEMA || message==LVM_SETITEMW ||
+             message==LVM_SETITEMTEXTA || message==LVM_SETITEMTEXTW || message==LVM_ARRANGE || message==WM_SIZE);
         BOOL desktopRedraw=view->desktop && window==view->list && message==WM_SETREDRAW;
+        if(desktopMutation) ++view->desktopMutationDepth;
         if(desktopRedraw && !wp) view->desktopRedrawDisabled=TRUE;
         if (refresh) ++view->operationDepth;
         LRESULT result = CallWindowProcA(original, window, message, wp, lp);
+        if(desktopMutation && !--view->desktopMutationDepth && view->desktopFramePending)
+            InvalidateRect(window,NULL,TRUE);
         if(desktopRedraw && wp) {
             view->desktopRedrawDisabled=FALSE; InvalidateRect(window,NULL,TRUE);
         }
@@ -789,6 +804,7 @@ static void DesktopFileDrag(void *context)
     view->fileDragging=TRUE; ++view->operationDepth;
     result=FileDragStart(data,FALSE,&effect); IDataObject_Release(data);
     --view->operationDepth; view->fileDragging=FALSE; view->fileHover=-1;
+    if(view->desktopFramePending) InvalidateRect(view->list,NULL,TRUE);
     if(result==DRAGDROP_S_DROP && effect) { PostMessageA(view->list,WM_KEYDOWN,VK_F5,0); BrowserRecycleBinsChanged(); }
 }
 static void DesktopDropLeave(void *context)
