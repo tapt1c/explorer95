@@ -1766,7 +1766,7 @@ shutdown:
     Check(WaitForGuiProcess(process.hProcess, 5000) == WAIT_OBJECT_0, "restarted shell exits cleanly");
     CloseHandle(process.hThread); CloseHandle(process.hProcess);
     {
-        const char prefix[] = "Explorer95 render trace 1;";
+        const char prefix[] = "Explorer95 render trace 2; shell COM delete;";
         char header[80]; DWORD read = 0, size = 0; int end = lstrlenA(executable);
         while (end && executable[end - 1] != '\\') --end;
         lstrcpynA(path, executable, end + 1); lstrcatA(path, "EX95REND.LOG");
