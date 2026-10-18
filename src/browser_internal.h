@@ -57,6 +57,9 @@ typedef struct TreeNode {
 typedef struct Browser {
     HWND window, address, files, status, toolbar, tree, optionsWindow;
     HWND treeLabel, treeClose, addressLabel, go;
+    HFONT captionFont;
+    int captionHeight, updateDepth;
+    BOOL captionActive, redrawPaused;
     FileEntry *entries;
     BrowserPlace history[BROWSER_HISTORY]; int historyCount, historyIndex;
     char path[MAX_PATH];
@@ -69,7 +72,7 @@ typedef struct Browser {
     BrowserOptions options;
     BrowserOptions layoutOptions;
     RECT layoutClient;
-    RECT splitter, toolbarLine, addressLine;
+    RECT splitter, toolbarLine, addressLine, paneCaption;
     int dragWidth, dragOffset;
     HWND layoutToolbar, layoutView;
     BOOL layoutValid, layoutConcealed;

@@ -155,6 +155,64 @@ static void BrowserRepaintTests(HWND browser, HWND sidebar)
     MoveWindow(browser, original.left, original.top, original.right - original.left, original.bottom - original.top, TRUE);
     ShowWindow(browser, SW_MAXIMIZE); PumpFor(100);
 }
+static COLORREF PanePixel(HWND window, int x, int y)
+{
+    POINT point = {x,y}; HDC dc; COLORREF pixel;
+    ClientToScreen(window, &point); dc = GetDC(NULL);
+    pixel = GetPixel(dc, point.x, point.y); ReleaseDC(NULL, dc); return pixel;
+}
+static void PoisonPaneControl(HWND window)
+{
+    RECT patch = {5,5,11,11}; HBRUSH marker = CreateSolidBrush(RGB(251,3,239)); HDC dc = GetDC(window);
+    FillRect(dc, &patch, marker); GetPixel(dc, 7, 7); ReleaseDC(window, dc); DeleteObject(marker);
+}
+static void BrowserTransitionTests(HWND browser, BOOL native)
+{
+    static const int commands[] = {ID_SEARCH, ID_FOLDERS_CLOSE, ID_HISTORY, ID_FOLDERS, ID_FOLDERS_CLOSE, ID_TASKS, ID_TASKS};
+    static const char *titles[] = {"Search",NULL,"History","Folders",NULL,NULL,NULL};
+    HWND go = GetDlgItem(browser, ID_GO), caption = GetDlgItem(browser, 472), close = GetDlgItem(browser, ID_FOLDERS_CLOSE);
+    HWND files = GetDlgItem(browser, ID_FILES), toolbar = GetDlgItem(browser, 470), list = files;
+    int i, count; RECT label, button, body; char title[32]; DWORD started; HWND other;
+    if (native) list = FindWindowExA(FindWindowExA(browser, NULL, "SHELLDLL_DefView", NULL), NULL, WC_LISTVIEWA, NULL);
+    count = (int)SendMessageA(list, LVM_GETITEMCOUNT, 0, 0);
+    SetForegroundWindow(browser); PumpFor(80);
+    for (i = 0; i < (int)(sizeof(commands) / sizeof(commands[0])); ++i) {
+        PoisonPaneControl(go); PoisonPaneControl(list);
+        /* Observe actual screen paints without forcing a repair. X11/Wine
+         * can present the other process's completed GDI batch asynchronously. */
+        SendMessageA(browser, WM_COMMAND, commands[i], 0);
+        started = GetTickCount();
+        while ((PanePixel(go,7,7) == RGB(251,3,239) || PanePixel(list,7,7) == RGB(251,3,239)) && GetTickCount() - started < 1000) PumpFor(10);
+        Check(PanePixel(go,7,7) != RGB(251,3,239) && PanePixel(list,7,7) != RGB(251,3,239),
+            "pane switching repaints the complete Go and file-view image without a forced repair");
+        Check(IsWindowVisible(browser) && IsWindowVisible(list) && IsWindow(toolbar) &&
+            SendMessageA(list,LVM_GETITEMCOUNT,0,0) == count && GetDlgItem(browser,ID_FILES) == files,
+            "pane switching retains the browser, file controls and folder items");
+        if (titles[i]) {
+            HWND content = commands[i] == ID_FOLDERS ? GetDlgItem(browser, ID_FOLDERTREE) : GetDlgItem(browser, ID_BROWSER_SIDEBAR);
+            GetWindowTextA(caption,title,sizeof(title)); GetWindowRect(caption,&label); GetWindowRect(close,&button); GetWindowRect(content,&body);
+            Check(IsWindowVisible(caption) && IsWindowVisible(close) && !lstrcmpA(title,titles[i]) &&
+                button.top >= label.top && button.bottom <= label.bottom && button.left >= label.right && body.top >= label.bottom,
+                "Search, History and Folders share a fixed caption with an inset close button above their content");
+            Check(PanePixel(caption,1,1) == GetSysColor(COLOR_ACTIVECAPTION), "active Explorer bar uses the system active-caption color");
+            Check(PanePixel(close,2,2) == GetSysColor(COLOR_BTNFACE), "the caption background cannot cover its close button");
+            SaveScreen(commands[i] == ID_SEARCH ? "build\\browser-search-caption.bmp" : commands[i] == ID_HISTORY ?
+                "build\\browser-history-caption.bmp" : "build\\browser-folders-caption.bmp");
+        } else Check(!IsWindowVisible(caption) && !IsWindowVisible(close), "Tasks and no-pane layouts hide the named bar caption and close button");
+    }
+    SendMessageA(browser, WM_COMMAND, ID_SEARCH, 0); PumpFor(40);
+    other = CreateWindowExA(WS_EX_TOOLWINDOW,"STATIC","Caption activation fixture",WS_POPUP | WS_CAPTION | WS_VISIBLE,
+        GetSystemMetrics(SM_CXSCREEN) - 90,200,80,80,NULL,NULL,GetModuleHandleA(NULL),NULL);
+    Check(other != NULL,"create an independent activation fixture away from the Explorer bar");
+    SetForegroundWindow(other); started = GetTickCount();
+    while ((GetForegroundWindow() != other || PanePixel(caption,1,1) != GetSysColor(COLOR_INACTIVECAPTION)) && GetTickCount() - started < 3000) PumpFor(20);
+    Check(PanePixel(caption,1,1) == GetSysColor(COLOR_INACTIVECAPTION), "inactive Explorer bar follows the system inactive-caption color");
+    DestroyWindow(other);
+    SetForegroundWindow(browser); PumpFor(80);
+    PaneClick(close);
+    Check(!IsWindowVisible(caption) && IsWindowVisible(GetDlgItem(browser,ID_BROWSER_SIDEBAR)) &&
+        PaneText(browser,"Other Places"), "the caption close button returns to Common Tasks");
+}
 static void BrowserAddressTests(HWND browser, const char *fixture)
 {
     HWND address = GetDlgItem(browser, ID_ADDRESS), edit = FindWindowExA(address, NULL, "EDIT", NULL), icon = GetDlgItem(edit, 475);
@@ -244,6 +302,7 @@ static void BrowserPaneTests(HWND browser, const char *fixture, const char *sett
     Check(PaneText(sidebar, "System Tasks") && PaneText(sidebar, "View system information") && PaneText(sidebar, "Change a setting"),
         "My Computer exposes system tasks and other places around the native shell view");
     BrowserRepaintTests(browser, sidebar);
+    BrowserTransitionTests(browser, TRUE);
     {
         HWND header = PaneText(sidebar, "System Tasks"); HDC dc = GetDC(header); COLORREF pixel = GetPixel(dc, 2, 2);
         ReleaseDC(header, dc);
@@ -283,6 +342,7 @@ static void BrowserPaneTests(HWND browser, const char *fixture, const char *sett
     Check(PaneText(sidebar, "Copy this folder") && PaneText(sidebar, "Delete this folder"), "folder selection changes the task links to selected-object actions");
     SaveScreen("build\\browser-selection.bmp");
     Navigate(browser, fixture);
+    BrowserTransitionTests(browser, FALSE);
     wsprintfA(path, "%s\\sub\\needle-search.txt", fixture);
     file = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
     Check(file != INVALID_HANDLE_VALUE, "create an isolated nested search fixture"); CloseHandle(file);

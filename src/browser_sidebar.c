@@ -270,7 +270,6 @@ void BrowserSidebarLayout(Browser *browser, int x, int y, int width, int height)
     BrowserSidebar *s = browser->sidebar; int i, pane = browser->options.pane;
     BOOL show = pane != BROWSER_PANE_NONE && pane != BROWSER_PANE_FOLDERS;
     if (!s) return;
-    if (pane != BROWSER_PANE_TASKS) { y += 27; height -= 27; }
     if (height < 1) height = 1;
     if (pane == s->mode) {
         RECT previous; POINT point;
@@ -417,7 +416,7 @@ BOOL BrowserSidebarCreate(Browser *browser)
     for (i = 0; i < 10; ++i) s->icons[i] = EnvSystemIcon(resources[i]);
     s->shared = SUCCEEDED(SHGetSpecialFolderLocation(browser->window, CSIDL_COMMON_DOCUMENTS, &shared));
     if (s->shared) CoTaskMemFree(shared);
-    s->window = CreateWindowExA(WS_EX_CONTROLPARENT, SIDEBAR_CLASS, "Explorer Bar", WS_CHILD | WS_VSCROLL | WS_CLIPCHILDREN,
+    s->window = CreateWindowExA(WS_EX_CONTROLPARENT, SIDEBAR_CLASS, "Explorer Bar", WS_CHILD | WS_VSCROLL | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
         0, 0, 0, 0, browser->window, (HMENU)(INT_PTR)ID_BROWSER_SIDEBAR, browserInstance, browser);
     s->content = CreateWindowExA(WS_EX_CONTROLPARENT, SIDEBAR_CLASS, "", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,
         0, 0, 0, 0, s->window, NULL, browserInstance, browser);
