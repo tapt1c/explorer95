@@ -12,7 +12,9 @@ typedef struct NotifyPacket { DWORD signature, operation; NOTIFYICONDATAA icon; 
 static struct { HWND sink, shell; HHOOK query, changes; UINT refresh; } shared __attribute__((section(".shared"), shared)) = {0};
 static HINSTANCE instance;
 static BOOL busy, dirty;
-static DWORD snapshotStage;
+static DWORD snapshotStage, snapshotDetail, snapshotValue;
+static BOOL reportedStorage;
+static DWORD reportedStale;
 /* This separate freestanding DLL also needs the header's ZeroMemory helper. */
 void *memset(void *destination, int value, size_t count)
 {
@@ -47,27 +49,47 @@ static BOOL Snapshot(void)
     ClassicTray tray; PointerArray array; static ClassicItem records[TRAY_MIRROR_LIMIT];
     void *pointers[TRAY_MIRROR_LIMIT]; static TrayMirrorSnapshot snapshot;
     HWND notify = FindWindowExA(shared.shell, NULL, "TrayNotifyWnd", NULL);
-    int i, j, count; BYTE imageHeader[32];
+    int i, j, count, live = 0, stale = 0; BYTE imageHeader[32];
+    snapshotDetail = snapshotValue = 0;
     snapshotStage = 1;
     if (!notify || !Read((void *)GetWindowLongPtrA(notify, 0), &tray, sizeof(tray))) return FALSE;
     snapshotStage = 2;
     if (!Read(tray.items, &array, sizeof(array)) || array.count < 0 || array.count > TRAY_MIRROR_LIMIT ||
         (array.count && !Read(array.items, pointers, array.count * sizeof(*pointers)))) return FALSE;
-    /* Validate the complete model before calling the image-list API. A foreign
-     * shell with an incompatible layout must not produce a partial snapshot. */
+    /* Stored rows are not incoming Shell_NotifyIcon packets. cbSize/uFlags
+     * describe that input contract; neither field is consumed by this reader.
+     * Validate every byte we read and every handle/index we actually use.
+     * Stock Explorer can retain ghost icons after their owner exits. */
     snapshotStage = 3;
     for (i = 0; i < array.count; ++i) {
-        ClassicItem *item = &records[i];
-        if (!Read(pointers[i], item, sizeof(*item)) || item->cbSize != offsetof(NOTIFYICONDATAA, szTip) + 64 ||
-            !IsWindow(item->owner) || (item->flags & ~7u) || (item->callback && item->callback < WM_USER) || item->image < -1) return FALSE;
+        ClassicItem *item = &records[live];
+        snapshotDetail = 1; snapshotValue = i;
+        if (!Read(pointers[i],item,sizeof(*item))) return FALSE;
+        if (!reportedStorage && (item->cbSize != offsetof(NOTIFYICONDATAA,szTip) + 64 || (item->flags & ~7u))) {
+            TrayMirrorStatus size = {30,0,5,item->cbSize}, flags = {30,0,6,item->flags};
+            Deliver(TRAY_MIRROR_STATUS,&size,sizeof(size)); Deliver(TRAY_MIRROR_STATUS,&flags,sizeof(flags));
+            reportedStorage = TRUE;
+        }
+        if (!IsWindow(item->owner)) { ++stale; continue; }
+        snapshotDetail = 3; snapshotValue = item->callback;
+        if (item->callback > 0xffffu) return FALSE;
+        snapshotDetail = 4; snapshotValue = item->image;
+        if (item->image < -1) return FALSE;
+        ++live;
     }
+    if ((DWORD)stale != reportedStale) {
+        TrayMirrorStatus status = {30,0,2,stale}; Deliver(TRAY_MIRROR_STATUS,&status,sizeof(status)); reportedStale = stale;
+    }
+    snapshotDetail = snapshotValue = 0;
     snapshotStage = 4;
-    if (array.count && !Read(tray.images,imageHeader,sizeof(imageHeader))) return FALSE;
-    count = array.count ? ImageList_GetImageCount(tray.images) : 0;
-    for (i = 0; i < array.count; ++i) if (records[i].image >= count) return FALSE;
+    if (live && !Read(tray.images,imageHeader,sizeof(imageHeader))) return FALSE;
+    count = live ? ImageList_GetImageCount(tray.images) : 0;
+    for (i = 0; i < live; ++i) if (records[i].image >= count) {
+        snapshotDetail = 4; snapshotValue = records[i].image; return FALSE;
+    }
     /* Small frames stay below Win95's shared USER-buffer limits. Only the
      * final frame authorizes removal of old icons at the receiver. */
-    snapshot.total = array.count; snapshot.offset = 0;
+    snapshot.total = live; snapshot.offset = 0;
     do {
         snapshot.count = snapshot.total - snapshot.offset;
         if (snapshot.count > TRAY_MIRROR_BATCH) snapshot.count = TRAY_MIRROR_BATCH;
@@ -100,7 +122,7 @@ static LRESULT CALLBACK Query(int code, WPARAM wp, LPARAM lp)
             else {
                 busy = TRUE;
                 if (!Snapshot() && !dirty) {
-                    TrayMirrorStatus status = {snapshotStage, ERROR_NOT_SUPPORTED};
+                    TrayMirrorStatus status = {snapshotStage, ERROR_NOT_SUPPORTED, snapshotDetail, snapshotValue};
                     Deliver(TRAY_MIRROR_STATUS,&status,sizeof(status));
                 }
                 busy = FALSE;

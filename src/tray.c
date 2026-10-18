@@ -285,7 +285,7 @@ static LRESULT Receive(const COPYDATASTRUCT *copy, BOOL mirrored)
         DeleteIcon(icon); EnvLayoutBar(); return TRUE;
     }
     if (data->uFlags & ~(NIF_MESSAGE | NIF_ICON | NIF_TIP)) return FALSE;
-    if ((data->uFlags & NIF_MESSAGE) && data->uCallbackMessage < WM_USER && (!mirrored || data->uCallbackMessage)) return FALSE;
+    if ((data->uFlags & NIF_MESSAGE) && data->uCallbackMessage > 0xffffu) return FALSE;
     if (!mirrored && ((packet->operation == NIM_MODIFY && !icon) || (packet->operation == NIM_ADD && icon))) return FALSE;
     if ((data->uFlags & NIF_ICON) && data->hIcon) {
         image = CopyIcon(data->hIcon); if (!image) return FALSE;
@@ -320,7 +320,7 @@ static BOOL MirrorItemValid(const TrayMirrorItem *item, DWORD flags)
         for (i = 0; i < 64 && item->tip[i]; ++i) {}
         if (i == 64) return FALSE;
     }
-    return IsWindow(item->owner) && (!(flags & NIF_MESSAGE) || !item->callback || item->callback >= WM_USER) && item->image.present <= 1;
+    return IsWindow(item->owner) && (!(flags & NIF_MESSAGE) || item->callback <= 0xffffu) && item->image.present <= 1;
 }
 static LRESULT MirrorReceive(DWORD operation, DWORD flags, const TrayMirrorItem *item)
 {
@@ -364,7 +364,7 @@ LRESULT TrayMirrorCopyData(HWND source, const COPYDATASTRUCT *copy)
             snapshot->count > snapshot->total - snapshot->offset || (!snapshot->count && snapshot->total) ||
             copy->cbData != offsetof(TrayMirrorSnapshot,items) + snapshot->count * sizeof(TrayMirrorItem)) return FALSE;
         if (snapshot->offset && (snapshot->offset != mirrorNext || snapshot->total != mirrorTotal)) return FALSE;
-        for (i = 0; i < snapshot->count; ++i) if (!MirrorItemValid(&snapshot->items[i],NIF_MESSAGE)) return FALSE;
+        for (i = 0; i < snapshot->count; ++i) if (!MirrorItemValid(&snapshot->items[i],NIF_MESSAGE | NIF_ICON | NIF_TIP)) return FALSE;
         if (!snapshot->offset) {
             mirrorNext = 0; mirrorTotal = snapshot->total;
             for (i = 0; i < ICON_LIMIT; ++i) icons[i].snapshotSeen = FALSE;
@@ -382,8 +382,10 @@ LRESULT TrayMirrorCopyData(HWND source, const COPYDATASTRUCT *copy)
     }
     if (copy->dwData == TRAY_MIRROR_STATUS && copy->lpData && copy->cbData == sizeof(TrayMirrorStatus)) {
         const TrayMirrorStatus *status = copy->lpData;
+        RenderTraceTrayDetail(status->stage,status->error,status->detail,status->value);
+        if (status->stage == 30 && !status->error) return TRUE;
         mirrorWaiting = FALSE; mirrorFault = status->error; mirrorStage = status->stage;
-        RenderTraceTray(mirrorStage,mirrorFault,0); return TRUE;
+        return TRUE;
     }
     return FALSE;
 }

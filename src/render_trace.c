@@ -38,6 +38,13 @@ void RenderTraceTray(DWORD stage, DWORD error, DWORD value)
     wsprintfA(text, "%lu tray stage=%lu error=%lu value=%lu\r\n",GetTickCount(),stage,error,value);
     WriteTrace(text);
 }
+void RenderTraceTrayDetail(DWORD stage, DWORD error, DWORD detail, DWORD value)
+{
+    char text[150];
+    if (traceFile == INVALID_HANDLE_VALUE) return;
+    wsprintfA(text,"%lu tray stage=%lu error=%lu detail=%lu value=%lu\r\n",GetTickCount(),stage,error,detail,value);
+    WriteTrace(text);
+}
 void RenderTraceOpen(void)
 {
     char path[MAX_PATH], text[200]; DWORD length; int end; HDC dc;

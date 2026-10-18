@@ -9,8 +9,10 @@
 #define TRAY_MIRROR_RESYNC (WM_APP + 35)
 #define TRAY_MIRROR_BATCH 8
 #define TRAY_MIRROR_RESOURCE 201
-#define TRAY_MIRROR_REFRESH "Explorer95.TrayMirror.Refresh.4"
-typedef struct TrayMirrorStatus { DWORD stage, error; } TrayMirrorStatus;
+#define TRAY_MIRROR_REFRESH "Explorer95.TrayMirror.Refresh.5"
+/* detail: 1 unreadable row, 2 stale owner, 3 callback, 4 image index,
+ * 5 stored cbSize, 6 stored flags. Stage 30 is informational, not a reply. */
+typedef struct TrayMirrorStatus { DWORD stage, error, detail, value; } TrayMirrorStatus;
 typedef struct TrayMirrorImage {
     DWORD present, color[16 * 16]; BYTE mask[16 * 4];
 } TrayMirrorImage;

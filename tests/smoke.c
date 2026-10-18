@@ -183,6 +183,9 @@ static void Navigate(HWND browser, const char *path)
 
 static LRESULT CALLBACK ChildProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam)
 {
+    if (message == WM_COMMAND && wParam == 95 && lParam == WM_RBUTTONUP) {
+        SetPropA(window,"Explorer95.TrayCommandCallback",(HANDLE)1); return 0;
+    }
     if (message == WM_APP + 33) {
         if (lParam == WM_LBUTTONDBLCLK) SetPropA(window,"Explorer95.TrayDoubleClick",(HANDLE)1);
         SetWindowTextA(window,"Explorer95 tray callback received"); return 0;
@@ -1314,6 +1317,15 @@ static void EnvironmentTests(HWND bar, HWND browser, HWND childWindow, HWND menu
     do { Sleep(50); GetWindowTextA(childWindow, title, sizeof(title)); }
     while (lstrcmpA(title, "Explorer95 tray callback received") && GetTickCount() - started < 3000);
     Check(!lstrcmpA(title, "Explorer95 tray callback received"), "tray forwards mouse callbacks with the application message");
+    packet.operation = NIM_MODIFY; packet.icon.uFlags = NIF_MESSAGE; packet.icon.uCallbackMessage = 0x10000;
+    Check(!SendMessageA(bar,WM_COPYDATA,(WPARAM)childWindow,(LPARAM)&copy),"tray rejects callback IDs outside the Win32 message range");
+    packet.icon.uCallbackMessage = WM_COMMAND;
+    Check(SendMessageA(bar,WM_COPYDATA,(WPARAM)childWindow,(LPARAM)&copy),"tray preserves an explicitly selected system-message callback");
+    SendMessageA(notification,WM_RBUTTONUP,0,0); started = GetTickCount();
+    while (!GetPropA(childWindow,"Explorer95.TrayCommandCallback") && GetTickCount() - started < 3000) PumpFor(20);
+    Check(GetPropA(childWindow,"Explorer95.TrayCommandCallback") != NULL,"the exact WM_COMMAND callback reaches its original owner");
+    packet.icon.uCallbackMessage = WM_APP + 33;
+    Check(SendMessageA(bar,WM_COPYDATA,(WPARAM)childWindow,(LPARAM)&copy),"restore the fixture callback before double-click and focus checks");
     {
         RECT icon; int click;
         SetForegroundWindow(childWindow); started = GetTickCount();

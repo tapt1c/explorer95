@@ -7,6 +7,8 @@ typedef struct { DWORD unused[7]; void *array; HIMAGELIST images; } MirrorState;
 typedef struct { DWORD signature, operation; NOTIFYICONDATAA icon; } MirrorEvent;
 static int mirrorSnapshots, mirrorEvents, mirrorStatuses;
 static TrayMirrorStatus mirrorStatus;
+static TrayMirrorStatus mirrorNote;
+static int mirrorNotes;
 static int mirrorSnapshotsAtDispatch;
 static BOOL mirrorAccept = TRUE;
 static UINT mirrorOperation;
@@ -81,6 +83,9 @@ static LRESULT CALLBACK MirrorSinkProc(HWND window, UINT message, WPARAM wp, LPA
             }
         } else if (copy->dwData == TRAY_MIRROR_STATUS) {
             Check(copy->cbData == sizeof(mirrorStatus),"tray errors carry a bounded stage and error code");
+            if (((TrayMirrorStatus *)copy->lpData)->stage == 30 && !((TrayMirrorStatus *)copy->lpData)->error) {
+                CopyMemory(&mirrorNote,copy->lpData,sizeof(mirrorNote)); ++mirrorNotes; return TRUE;
+            }
             CopyMemory(&mirrorStatus,copy->lpData,sizeof(mirrorStatus)); ++mirrorStatuses;
         }
         return TRUE;
@@ -165,11 +170,41 @@ static void TrayMirrorTests(void)
     Check(mirrorStatuses == 2 && mirrorSnapshots == 1 && mirrorStatus.stage == 2 && mirrorStatus.error == ERROR_NOT_SUPPORTED,
         "invalid classic tray pointers report their failing stage without dereferencing them");
     array.items = &pointer;
-    record.size = 0; MirrorQuery(source,refresh);
-    Check(mirrorStatus.stage == 3 && mirrorSnapshots == 1,"incompatible classic icon records report a distinct ABI failure");
-    record.size = offsetof(NOTIFYICONDATAA,szTip) + 64;
+    {
+        int snapshots = mirrorSnapshots;
+        record.size = 0; record.flags = 0x80000000UL; MirrorQuery(source,refresh);
+        Check(mirrorSnapshots == snapshots + 1 && MirrorImageMatches(mirrorImage,FALSE) && mirrorNotes == 2 &&
+            mirrorNote.detail == 6 && mirrorNote.value == record.flags,
+            "stored rows do not need an input-packet cbSize or NIF flags; unused metadata is reported without rejecting valid pixels");
+        record.size = offsetof(NOTIFYICONDATAA,szTip) + 64; record.flags = 7;
+        record.callback = WM_COMMAND; MirrorQuery(source,refresh);
+        Check(mirrorSnapshots == snapshots + 2 && mirrorCallback == WM_COMMAND,
+            "stored callback messages in the native system-message range retain their exact value");
+        record.callback = 0x10000; MirrorQuery(source,refresh);
+        Check(mirrorSnapshots == snapshots + 2 && mirrorStatus.stage == 3 && mirrorStatus.detail == 3 && mirrorStatus.value == 0x10000,
+            "callbacks outside the Win32 message range are rejected with their precise reason and value");
+        record.callback = WM_APP + 89;
+        pointer = (void *)1; MirrorQuery(source,refresh);
+        Check(mirrorStatus.stage == 3 && mirrorStatus.detail == 1 && mirrorStatus.value == 0,
+            "an unreadable record reports its row index before accessing any field");
+        pointer = &record;
+    }
+    {
+        MirrorRecord ghost = record; void *rows[2]; HWND dead;
+        int snapshots = mirrorSnapshots;
+        dead = CreateWindowA("Explorer95.MirrorSourceFixture","",0,0,0,0,0,NULL,NULL,GetModuleHandleA(NULL),NULL);
+        Check(dead != NULL,"prepare a real owner window that exits before its tray entry is removed");
+        DestroyWindow(dead); ghost.owner = dead; ghost.image = 999;
+        rows[0] = &ghost; rows[1] = &record; array.count = 2; array.items = rows; MirrorQuery(source,refresh);
+        Check(mirrorSnapshots == snapshots + 1 && mirrorTotal == 1 && mirrorOwner == sink && MirrorImageMatches(mirrorImage,FALSE) &&
+            mirrorNote.detail == 2 && mirrorNote.value == 1,
+            "one dead owner does not block live icons or cause access to its stale image index");
+        array.count = 1; MirrorQuery(source,refresh);
+        Check(mirrorTotal == 0 && !mirrorImage,"a tray containing only ghost entries has an empty live snapshot");
+        array.items = &pointer;
+    }
     { HIMAGELIST images = state.images; state.images = (HIMAGELIST)1; MirrorQuery(source,refresh); state.images = images;
-      Check(mirrorStatus.stage == 4 && mirrorSnapshots == 1,"invalid image-list memory is rejected before invoking Common Controls"); }
+      Check(mirrorStatus.stage == 4,"invalid image-list memory is rejected before invoking Common Controls"); }
     ZeroMemory(&event, sizeof(event)); event.signature = 0x34753423UL; event.icon.cbSize = record.size;
     event.icon.hWnd = sink; event.icon.uID = 73; event.icon.uFlags = NIF_TIP; lstrcpyA(event.icon.szTip, "Changed volume fixture");
     copy.dwData = 1; copy.cbData = offsetof(MirrorEvent, icon) + event.icon.cbSize; copy.lpData = &event;
@@ -184,6 +219,10 @@ static void TrayMirrorTests(void)
         "an original tray rejection is preserved and is not mirrored");
     mirrorAccept = TRUE; event.signature = 0; SendMessageA(source, WM_COPYDATA, 0, (LPARAM)&copy);
     Check(mirrorEvents == before, "foreign or malformed notification formats are not relayed");
+    event.signature = 0x34753423UL; event.operation = NIM_MODIFY; event.icon.cbSize = 0;
+    SendMessageA(source,WM_COPYDATA,0,(LPARAM)&copy);
+    Check(mirrorEvents == before,"incoming notification packets still require the exact ANSI v1 cbSize");
+    event.icon.cbSize = offsetof(NOTIFYICONDATAA,szTip) + 64;
     {
         MirrorRecord rows[TRAY_MIRROR_BATCH + 1]; void *rowPointers[TRAY_MIRROR_BATCH + 1]; int i, snapshots = mirrorSnapshots;
         for (i = 0; i < TRAY_MIRROR_BATCH + 1; ++i) { rows[i] = record; rows[i].id += i; rowPointers[i] = &rows[i]; }
