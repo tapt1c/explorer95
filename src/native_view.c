@@ -447,7 +447,7 @@ static LRESULT CALLBACK Subclass(HWND window, UINT message, WPARAM wp, LPARAM lp
         if (message == LVM_INSERTITEMA || message == LVM_INSERTITEMW || message == LVM_DELETEITEM ||
             message == LVM_DELETEALLITEMS || message == LVM_SETITEMTEXTA || message == LVM_SETITEMTEXTW || message == WM_SIZE)
             DesktopIconsChanged(view->icons);
-        if (message == WM_ERASEBKGND) { PaintBackground(view, (HDC)wp, window); return TRUE; }
+        if (message == WM_ERASEBKGND) { PaintBackground(view, (HDC)wp, window); PaintDesktopLabelShadows(window, (HDC)wp); return TRUE; }
         if (message == WM_CONTEXTMENU) {
             POINT point;
             LVHITTESTINFO hit;
@@ -473,6 +473,12 @@ static LRESULT CALLBACK Subclass(HWND window, UINT message, WPARAM wp, LPARAM lp
         UINT code = ((NMHDR *)lp)->code;
         if (code == LVN_ITEMCHANGED || code == LVN_INSERTITEM || code == LVN_DELETEITEM || code == LVN_DELETEALLITEMS)
             NotifyState(view);
+        if (view->desktop && code == LVN_ITEMCHANGED) {
+            NMLISTVIEW *change = (NMLISTVIEW *)lp; RECT label;
+            if ((change->uChanged & LVIF_STATE) && ((change->uOldState ^ change->uNewState) & LVIS_SELECTED) &&
+                ListView_GetItemRect(view->list, change->iItem, &label, LVIR_LABEL))
+                InvalidateRect(view->list, &label, TRUE);
+        }
     }
     {
         BOOL shellDrag = view->desktop && window == view->window && message == WM_NOTIFY &&

@@ -73,7 +73,7 @@ Explorer95 — любительская нативная оболочка для
 | `src/tray_hook.c`, `src/tray_mirror.h` | Встроенная DLL наблюдения за потоком штатного трея и ограниченный протокол зеркала. |
 | `src/tray_image.c` | Передача 16×16 XOR/AND-плоскостей без дескрипторов чужого процесса. |
 | `src/render_trace.c`, `src/render_trace.h` | Ограниченная opt-in трассировка `--trace-render`, EX95REND.LOG рядом с EXE; события активации, Z-order и рисования. |
-| `src/paint.c`, `src/paint.h` | Сохраняемые GDI-буферы, TransparentBlt с Win95-совместимым запасным путём и флажок Start. |
+| `src/paint.c`, `src/paint.h` | Сохраняемые GDI-буферы, тени подписей рабочего стола, TransparentBlt с Win95-совместимым запасным путём и флажок Start. |
 | `src/shutdown.c` | Модальный выбор Stand By / Hibernate / Turn Off / Restart, GDI-затемнение снимка и необязательные API питания. |
 | `src/explorer95.rc` | Ресурсы EXE; bitmap кнопки Start имеет ID `143`. |
 | `resources/Bitmap143.bmp` | Предоставленный пользователем исходный флажок 16×16. |
@@ -535,6 +535,18 @@ explorer95.exe --settings="C:\EX95TEST\Explorer95.ini"
   с `DesktopIcons`, а `desktop_icons` отвечает за перенос, сетку и файл позиций.
   Не переносите эту логику в файловый Проводник и не заменяйте системные значки
   собственным списком файлов: должны сохраниться виртуальные объекты Shell32.
+- Подписи desktop остаются текстом системного ListView. В его WM_ERASEBKGND
+  сначала копируйте сохранённый фон, затем PaintDesktopLabelShadows: обычная
+  Win95 GDI рисует чёрную тень до штатного белого текста. Не требуйте NM_CUSTOMDRAW
+  или DrawShadowText из более новых Common Controls и не накладывайте собственный
+  белый текст поверх готовых native glyphs. Выделенные подписи пропускаются,
+  изменение LVIS_SELECTED инвалидирует только их LVIR_LABEL с erase.
+  PaintTextShadow ограничен исходным LVIR_LABEL, сохраняет DC/clip/color/font
+  и не меняет кэш обоев. Та же тень используется в прозрачном образе drag.
+  ApplyPlan после смены координат инвалидирует старый и новый LVIR_BOUNDS,
+  без UpdateWindow внутри цикла и без полного desktop Refresh: CLR_NONE
+  ListView может иначе оставить старые пиксели текста. Проверки светлого фона,
+  native highlight, deselection и очистки только label-footprint — в PaintTests.
 - `Desktop.ShowIcons` скрывает представление, сохраняя обои и сам view. Desktop
   parent использует существующий PaintBuffer фона. Не пересоздавайте view ради
   скрытия значков, изменения сетки или применения параметров.
@@ -878,6 +890,11 @@ Rename со скрытым расширением, системные Properties
   числовой offset, ветку S_OK, S_FALSE и отсутствие повтора после E_ABORT.
   Весь вызов, включая COM-ветки, удерживает operationDepth, чтобы отложенный
   Refresh другого окна не сработал внутри native InvokeCommand/подтверждения.
+  После Empty/Delete оставляйте NativeViewRequestRefresh в очереди. Не вызывайте
+  BrowserRefresh синхронно в этих командах: NativeViewRefresh сбросит pending,
+  а отложенное сообщение уже не выполнит обновление после native операции.
+  BrowserUpdate может сразу восстановить состояние кнопок; перечисление списка
+  выполняет WM_BROWSER_NATIVE_REFRESH после возврата в цикл сообщений.
   Не полагайтесь на успешный HRESULT строкового verb: старый IContextMenu может
   принять неизвестную строку без действия; Wine также не реализует
   GetCommandString для объектов Корзины. Не удаляйте содержимое RECYCLER/RECYCLED

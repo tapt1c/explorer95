@@ -465,7 +465,7 @@ void BrowserFilesCommand(Browser *browser, int command)
             browser->busy = TRUE;
             NativeViewInvoke(browser->native, verb, command == ID_PASTE);
             browser->busy = FALSE;
-            if (browser->recycleBin && command == ID_DELETE) BrowserRefresh(browser);
+            if (browser->recycleBin && command == ID_DELETE) NativeViewRequestRefresh(browser->native);
         }
         else if (command == ID_SELECTALL) ListView_SetItemState(NativeViewList(browser->native), -1, LVIS_SELECTED, LVIS_SELECTED);
         BrowserUpdate(browser); return;

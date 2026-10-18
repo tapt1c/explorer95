@@ -2,6 +2,7 @@
  * Coordinates belong to Explorer95, independently of Explorer's registry. */
 #define WIN32_LEAN_AND_MEAN
 #include "desktop_icons.h"
+#include "paint.h"
 
 #define ICON_LIMIT 1024
 #define RESTORE_TIMER 0x95d1
@@ -377,8 +378,15 @@ static BOOL ResolvePositions(DesktopIcons *icons, Placement *plan, int count)
 static void ApplyPlan(DesktopIcons *icons, const Placement *plan, int count)
 {
     int i; BOOL restoring = icons->restoring; icons->restoring = TRUE;
-    for (i = 0; i < count; ++i) if (plan[i].from.x != plan[i].to.x || plan[i].from.y != plan[i].to.y)
+    for (i = 0; i < count; ++i) if (plan[i].from.x != plan[i].to.x || plan[i].from.y != plan[i].to.y) {
+        RECT before, after; BOOL hadBounds = ListView_GetItemRect(icons->list,i,&before,LVIR_BOUNDS);
         ListView_SetItemPosition(icons->list,i,plan[i].to.x,plan[i].to.y);
+        /* CLR_NONE controls can leave their old text pixels behind when moved.
+         * Invalidate only the two footprints, after the final position is set;
+         * all moved items still share one subsequent paint. */
+        if (hadBounds) InvalidateRect(icons->list,&before,TRUE);
+        if (ListView_GetItemRect(icons->list,i,&after,LVIR_BOUNDS)) InvalidateRect(icons->list,&after,TRUE);
+    }
     icons->restoring = restoring;
 }
 static HIMAGELIST CreateGhost(DesktopIcons *icons, POINT *origin)
@@ -415,7 +423,10 @@ static HIMAGELIST CreateGhost(DesktopIcons *icons, POINT *origin)
             !ListView_GetItemRect(icons->list,index,&iconRect,LVIR_ICON) || !ListView_GetItemRect(icons->list,index,&label,LVIR_LABEL)) goto done;
         if (!ImageList_Draw(native,item.iImage,colorDC,iconRect.left-bounds.left,iconRect.top-bounds.top,ILD_TRANSPARENT | (item.state & LVIS_OVERLAYMASK))) goto done;
         label.left -= bounds.left; label.right -= bounds.left; label.top -= bounds.top; label.bottom -= bounds.top;
-        if (Name(icons->list,index,text)) DrawTextA(colorDC,text,-1,&label,DT_CENTER | DT_WORDBREAK | DT_NOPREFIX);
+        if (Name(icons->list,index,text)) {
+            PaintTextShadow(colorDC,text,&label,DT_CENTER | DT_WORDBREAK | DT_NOPREFIX);
+            DrawTextA(colorDC,text,-1,&label,DT_CENTER | DT_WORDBREAK | DT_NOPREFIX);
+        }
     }
     /* The Win95 shell's LVM_CREATEDRAGIMAGE can include an opaque selection
      * rectangle on CLR_NONE desktops. Build our own AND mask instead: original

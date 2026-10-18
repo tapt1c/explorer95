@@ -1,5 +1,6 @@
 #define WIN32_LEAN_AND_MEAN
 #include "paint.h"
+#include <commctrl.h>
 
 typedef BOOL (WINAPI *TransparentBltProc)(HDC, int, int, int, int, HDC, int, int, int, int, UINT);
 static HMODULE extension;
@@ -81,6 +82,42 @@ void PaintDialogBackground(HWND window, HDC dc)
     GetClientRect(window, &rect); FillRect(dc, &rect, (HBRUSH)(COLOR_BTNFACE + 1));
     if (saved) RestoreDC(dc, saved);
 }
+void PaintTextShadow(HDC dc, const char *text, const RECT *bounds, UINT flags)
+{
+    RECT shadow; int saved = SaveDC(dc), i;
+    if (!saved) return;
+    /* Stay inside the native label's invalidation/hit rectangle: moved or
+     * removed icons must not leave shadow pixels outside their old bounds. */
+    IntersectClipRect(dc, bounds->left, bounds->top, bounds->right, bounds->bottom);
+    SetBkMode(dc, TRANSPARENT); SetTextColor(dc, RGB(0,0,0));
+    for (i = 0; i < 3; ++i) {
+        shadow = *bounds; OffsetRect(&shadow, i != 1, i != 0);
+        DrawTextA(dc, text, -1, &shadow, flags);
+    }
+    RestoreDC(dc, saved);
+}
+/* Draw behind the real ListView text during its existing erase/paint pass.
+ * NM_CUSTOMDRAW requires newer Common Controls than stock Win95. Painting
+ * after the native text would damage its glyphs and selected/editing labels. */
+void PaintDesktopLabelShadows(HWND list, HDC dc)
+{
+    RECT clip, label; int i, count, saved; HFONT font;
+    if (GetClipBox(dc, &clip) == NULLREGION) return;
+    saved = SaveDC(dc); if (!saved) return;
+    font = (HFONT)SendMessageA(list, WM_GETFONT, 0, 0);
+    if (font) SelectObject(dc, font);
+    count = ListView_GetItemCount(list);
+    for (i = 0; i < count; ++i) {
+        char text[MAX_PATH];
+        if ((ListView_GetItemState(list, i, LVIS_SELECTED) & LVIS_SELECTED) ||
+            !ListView_GetItemRect(list, i, &label, LVIR_LABEL) || label.right <= clip.left || label.left >= clip.right ||
+            label.bottom <= clip.top || label.top >= clip.bottom) continue;
+        ListView_GetItemText(list, i, 0, text, sizeof(text));
+        if (text[0]) PaintTextShadow(dc, text, &label, DT_CENTER | DT_WORDBREAK | DT_NOPREFIX);
+    }
+    RestoreDC(dc, saved);
+}
+
 static void FindExtension(void)
 {
     char path[MAX_PATH]; UINT length;

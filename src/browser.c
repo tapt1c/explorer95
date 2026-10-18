@@ -612,7 +612,10 @@ static void Command(Browser *browser, int command)
         browser->busy = FALSE;
         if (FAILED(result) && result != E_ABORT && result != HRESULT_FROM_WIN32(ERROR_CANCELLED))
             MessageBoxA(browser->window, "Windows could not empty the Recycle Bin. You can also use its system context menu.", "Explorer95", MB_OK | MB_ICONEXCLAMATION);
-        BrowserRefresh(browser);
+        /* Refresh after the native command and its queued shell changes have
+         * returned to the browser loop. An inline Refresh clears refreshPending
+         * before that message can run and can still see Win95's old contents. */
+        BrowserUpdate(browser); NativeViewRequestRefresh(browser->native);
     }
     else if (command == ID_SEARCH || command == ID_HISTORY || command == ID_TASKS || command == ID_FOLDERS || command == ID_FOLDERS_CLOSE) {
         int pane = command == ID_SEARCH ? BROWSER_PANE_SEARCH : command == ID_HISTORY ? BROWSER_PANE_HISTORY : command == ID_FOLDERS ? BROWSER_PANE_FOLDERS : BROWSER_PANE_TASKS;

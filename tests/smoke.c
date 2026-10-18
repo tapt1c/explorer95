@@ -205,8 +205,71 @@ static LRESULT CALLBACK ChildProc(HWND window, UINT message, WPARAM wParam, LPAR
     return DefWindowProcA(window, message, wParam, lParam);
 }
 
+static WNDPROC shadowListOriginal;
+static HBRUSH shadowTestBrush;
+static LRESULT CALLBACK ShadowListProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
+{
+    if (message == WM_ERASEBKGND) {
+        RECT area; GetClientRect(window, &area); FillRect((HDC)wp, &area, shadowTestBrush);
+        PaintDesktopLabelShadows(window, (HDC)wp); return TRUE;
+    }
+    return CallWindowProcA(shadowListOriginal, window, message, wp, lp);
+}
+static int ShadowPixels(HWND list, const RECT *rect, COLORREF color)
+{
+    int x, y, count = 0; HDC dc = GetDC(list);
+    for (y = rect->top; y < rect->bottom; ++y) for (x = rect->left; x < rect->right; ++x)
+        if (GetPixel(dc, x, y) == color) ++count;
+    ReleaseDC(list, dc); return count;
+}
+static void DesktopLabelPaintTests(void)
+{
+    HWND parent, list; LVITEMA item; RECT label, oldLabel; COLORREF backdrop = RGB(240,240,240);
+    InitCommonControls(); shadowTestBrush = CreateSolidBrush(backdrop);
+    parent = CreateWindowExA(0, "STATIC", "Desktop label paint", WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CLIPCHILDREN,
+        10, 10, 340, 230, NULL, NULL, GetModuleHandleA(NULL), NULL);
+    list = CreateWindowExA(0, WC_LISTVIEWA, "", WS_CHILD | WS_VISIBLE | LVS_ICON | LVS_SHOWSELALWAYS,
+        0, 0, 320, 190, parent, NULL, GetModuleHandleA(NULL), NULL);
+    Check(parent && list && shadowTestBrush, "create a native ListView on a cloud-light background without touching the desktop");
+    shadowListOriginal = (WNDPROC)SetWindowLongPtrA(list, GWLP_WNDPROC, (LONG_PTR)ShadowListProc);
+    ListView_SetBkColor(list, CLR_NONE); ListView_SetTextBkColor(list, CLR_NONE); ListView_SetTextColor(list, RGB(255,255,255));
+    SendMessageA(list, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), FALSE);
+    ZeroMemory(&item, sizeof(item)); item.mask = LVIF_TEXT; item.pszText = "Clouds & Desktop";
+    Check(ListView_InsertItem(list, &item) == 0, "insert an isolated label fixture, including a literal ampersand");
+    ListView_SetItemPosition(list, 0, 16, 16);
+    RedrawWindow(list, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
+    Check(ListView_GetItemRect(list, 0, &label, LVIR_LABEL) && ShadowPixels(list, &label, RGB(0,0,0)) > 5 &&
+        ShadowPixels(list, &label, RGB(255,255,255)) > 5,
+        "the real native label retains its white foreground and gains dark contrast on a light background");
+    SetForegroundWindow(parent); SetFocus(list); ListView_SetItemState(list, 0, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+    RedrawWindow(list, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
+    Check(ShadowPixels(list, &label, GetSysColor(COLOR_HIGHLIGHT)) > 5,
+        "shadow drawing leaves the native selection highlight intact");
+    ListView_SetItemState(list, 0, 0, LVIS_SELECTED | LVIS_FOCUSED);
+    RedrawWindow(list, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
+    Check(ShadowPixels(list, &label, RGB(0,0,0)) > 5, "the label shadow returns after deselection");
+    oldLabel = label; ListView_SetItemPosition(list, 0, 160, 100);
+    /* The placement controller invalidates native footprints after moving.
+     * Repair only that old label, then inspect an extra pixel around it too:
+     * a shadow outside the native footprint would survive this repair. */
+    InvalidateRect(list, &oldLabel, TRUE); UpdateWindow(list);
+    if (oldLabel.left) --oldLabel.left;
+    --oldLabel.top; ++oldLabel.right; ++oldLabel.bottom;
+    if (ShadowPixels(list, &oldLabel, backdrop) != (oldLabel.right-oldLabel.left)*(oldLabel.bottom-oldLabel.top)) {
+        char note[200]; RECT next; ListView_GetItemRect(list, 0, &next, LVIR_LABEL);
+        wsprintfA(note, "Shadow move: old=%d,%d,%d,%d new=%d,%d,%d,%d gray=%d black=%d white=%d\r\n",
+            oldLabel.left,oldLabel.top,oldLabel.right,oldLabel.bottom,next.left,next.top,next.right,next.bottom,
+            ShadowPixels(list,&oldLabel,backdrop),ShadowPixels(list,&oldLabel,RGB(0,0,0)),ShadowPixels(list,&oldLabel,RGB(255,255,255))); Log(note);
+        SaveScreen("build\\smoke-failure.bmp");
+    }
+    Check(ShadowPixels(list, &oldLabel, backdrop) == (oldLabel.right-oldLabel.left)*(oldLabel.bottom-oldLabel.top),
+        "invalidating only the moved label footprint removes its text and shadow, including the surrounding pixels");
+    DestroyWindow(parent); DeleteObject(shadowTestBrush);
+}
+
 static void PaintTests(void)
 {
+    DesktopLabelPaintTests();
     HDC screen = GetDC(NULL), source = CreateCompatibleDC(screen);
     HBITMAP logo = (HBITMAP)LoadImageA(GetModuleHandleA(NULL), MAKEINTRESOURCEA(143), IMAGE_BITMAP, 0, 0, 0);
     HGDIOBJ old = SelectObject(source, logo);

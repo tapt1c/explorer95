@@ -20,6 +20,9 @@ void PaintBufferEnd(PaintBuffer *buffer, HDC target, const RECT *rect);
 void PaintBufferFree(PaintBuffer *buffer);
 BOOL PaintColorKey(HDC target, int x, int y, HBITMAP bitmap, COLORREF key, BOOL allowExtension);
 void PaintStartLogo(HDC target, int x, int y);
+/* Paint only the shadow; the native control still owns its foreground text. */
+void PaintTextShadow(HDC dc, const char *text, const RECT *bounds, UINT flags);
+void PaintDesktopLabelShadows(HWND list, HDC dc);
 void PaintDialogBackground(HWND window, HDC dc);
 void PaintShutdown(void);
 #endif
