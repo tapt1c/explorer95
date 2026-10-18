@@ -144,10 +144,17 @@ static void BrowserNewContextTests(HWND browser, const char *directory)
     ListView_SetItemState(list, 0, LVIS_SELECTED, LVIS_SELECTED);
     GetClientRect(list, &rect); point.x = rect.right - 8; point.y = rect.bottom - 8; ClientToScreen(list, &point);
     SetForegroundWindow(browser);
-    PostMessageA(browser, WM_CONTEXTMENU, (WPARAM)list, MAKELPARAM(point.x, point.y));
+    /* Activate by real input too: an asynchronous synthetic WM_CONTEXTMENU
+     * can start tracking before X11/Wine has transferred focus from Start. */
+    SetCursorPos(point.x,point.y);
+    mouse_event(MOUSEEVENTF_RIGHTDOWN,0,0,0,0); mouse_event(MOUSEEVENTF_RIGHTUP,0,0,0,0);
     started = GetTickCount();
     do { PumpFor(20); popup = FindWindowA("#32768", NULL); } while ((!popup || !IsWindowVisible(popup)) && GetTickCount() - started < 3000);
-    Check(popup != NULL, "empty-space context menu opens with an existing file selection");
+    Check(popup && IsWindowVisible(popup), "empty-space context menu opens with an existing file selection");
+    /* A popup that fits below the click can put Views under the cursor.
+     * Let its queued mouse movement settle away from all menu items before
+     * selecting New with the keyboard. */
+    SetCursorPos(GetSystemMetrics(SM_CXSCREEN)-3,2); PumpFor(80);
     /* HMENU inspection does not cross process boundaries on every shell;
      * select the real submenu with input and verify its filesystem effect. */
     NewTestKey(VK_END); NewTestKey(VK_UP); NewTestKey(VK_RIGHT); NewTestKey(VK_HOME); NewTestKey(VK_RETURN);

@@ -23,8 +23,8 @@ struct BrowserSidebar {
     TaskRow rows[TASK_ROWS];
     int count, scroll, contentHeight, mode;
     BOOL collapsed[4], layouting, shared, share, publish, mail;
-    BOOL tasksDirty, lastConcealed;
-    int lastCount, lastIndex;
+    BOOL tasksDirty, lastConcealed, redrawPaused;
+    int lastCount, lastIndex, updateDepth;
     RECT groups[4];
     char actionKey[MAX_PATH + 40], drive[4], driveDetails[384];
     BrowserVisit visits[BROWSER_HISTORY]; int visitCount;
@@ -33,6 +33,25 @@ struct BrowserSidebar {
 };
 static void Reflow(Browser *browser);
 static void BuildTasks(Browser *browser);
+
+/* Win95's nonclient scrollbar loop can defer child WM_PAINT until the mouse
+ * is released. Keep the previous complete viewport during changes and paint
+ * every row before returning to that loop, rather than just invalidating it. */
+static void BeginSidebarUpdate(BrowserSidebar *s)
+{
+    if (!s->updateDepth++) {
+        s->redrawPaused = IsWindowVisible(s->window);
+        if (s->redrawPaused) SendMessageA(s->window, WM_SETREDRAW, FALSE, 0);
+    }
+}
+static void EndSidebarUpdate(BrowserSidebar *s)
+{
+    if (!--s->updateDepth && s->redrawPaused) {
+        s->redrawPaused = FALSE;
+        SendMessageA(s->window, WM_SETREDRAW, TRUE, 0);
+        RedrawWindow(s->window, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN | RDW_UPDATENOW);
+    }
+}
 
 HWND BrowserSidebarWindow(Browser *browser) { return browser->sidebar ? browser->sidebar->window : NULL; }
 static void SetText(HWND window, const char *text)
@@ -223,6 +242,7 @@ static void Reflow(Browser *browser)
     s->layouting = TRUE; GetWindowRect(s->window, &outer); GetClientRect(s->window, &client);
     width = outer.right - outer.left; height = client.bottom;
     if (width < 30) { s->layouting = FALSE; return; }
+    BeginSidebarUpdate(s);
     /* Measure without a scrollbar first. A stale reduced client width must
      * not keep a scrollbar alive after content shrinks or groups collapse. */
     if (browser->options.pane == BROWSER_PANE_TASKS) s->contentHeight = LayoutTasks(browser, width, FALSE);
@@ -246,10 +266,31 @@ static void Reflow(Browser *browser)
     scroll.nMax = s->contentHeight - 1; scroll.nPage = height; scroll.nPos = s->scroll;
     SetScrollInfo(s->window, SB_VERT, &scroll, TRUE);
     EnvMoveControl(s->content, 0, -s->scroll, width, s->contentHeight);
-    /* Moving the content viewport can discard the pixels of unchanged row
-     * HWNDs too. Repaint the hierarchy once, after every row has its final rect. */
-    RedrawWindow(s->window, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+    EndSidebarUpdate(s);
     s->layouting = FALSE;
+}
+static void ScrollTo(BrowserSidebar *s, int position)
+{
+    RECT viewport, content; SCROLLINFO scroll; int maximum;
+    GetClientRect(s->window, &viewport); maximum = s->contentHeight - viewport.bottom;
+    if (maximum < 0) maximum = 0;
+    if (position > maximum) position = maximum;
+    if (position < 0) position = 0;
+    if (position == s->scroll) return;
+    BeginSidebarUpdate(s);
+    s->scroll = position;
+    ZeroMemory(&scroll, sizeof(scroll)); scroll.cbSize = sizeof(scroll); scroll.fMask = SIF_POS; scroll.nPos = position;
+    SetScrollInfo(s->window, SB_VERT, &scroll, TRUE);
+    /* Scrolling changes only the viewport origin. Do not remeasure tasks,
+     * resize rows or change the scrollbar range on every thumb movement. */
+    GetClientRect(s->content, &content);
+    EnvMoveControl(s->content, 0, -position, content.right, content.bottom);
+    EndSidebarUpdate(s);
+}
+static void RebuildTasks(Browser *browser)
+{
+    BrowserSidebar *s = browser->sidebar;
+    BeginSidebarUpdate(s); BuildTasks(browser); Reflow(browser); EndSidebarUpdate(s);
 }
 void BrowserSidebarUpdate(Browser *browser)
 {
@@ -260,7 +301,7 @@ void BrowserSidebarUpdate(Browser *browser)
         int count = ListView_GetSelectedCount(list), index = ListView_GetNextItem(list, -1, LVNI_SELECTED);
         if (s->tasksDirty || count != s->lastCount || index != s->lastIndex || browser->concealed != s->lastConcealed) {
             s->tasksDirty = FALSE; s->lastCount = count; s->lastIndex = index; s->lastConcealed = browser->concealed;
-            BuildTasks(browser); Reflow(browser);
+            RebuildTasks(browser);
         }
     }
     else if (browser->options.pane == BROWSER_PANE_HISTORY) { HistoryUpdate(browser); Reflow(browser); }
@@ -340,16 +381,16 @@ static LRESULT CALLBACK SidebarProc(HWND window, UINT message, WPARAM wp, LPARAM
     switch (message) {
     case WM_SIZE: if (window == s->window) Reflow(browser); return 0;
     case WM_VSCROLL: case WM_MOUSEWHEEL: {
-        RECT rect; GetClientRect(s->window, &rect);
-        if (message == WM_MOUSEWHEEL) s->scroll -= (short)HIWORD(wp) / 3;
-        else if (LOWORD(wp) == SB_LINEUP) s->scroll -= 24;
-        else if (LOWORD(wp) == SB_LINEDOWN) s->scroll += 24;
-        else if (LOWORD(wp) == SB_PAGEUP) s->scroll -= rect.bottom;
-        else if (LOWORD(wp) == SB_PAGEDOWN) s->scroll += rect.bottom;
-        else if (LOWORD(wp) == SB_THUMBTRACK || LOWORD(wp) == SB_THUMBPOSITION) s->scroll = HIWORD(wp);
-        else if (LOWORD(wp) == SB_TOP) s->scroll = 0;
-        else if (LOWORD(wp) == SB_BOTTOM) s->scroll = s->contentHeight;
-        Reflow(browser); return 0;
+        RECT rect; int position = s->scroll; GetClientRect(s->window, &rect);
+        if (message == WM_MOUSEWHEEL) position -= (short)HIWORD(wp) / 3;
+        else if (LOWORD(wp) == SB_LINEUP) position -= 24;
+        else if (LOWORD(wp) == SB_LINEDOWN) position += 24;
+        else if (LOWORD(wp) == SB_PAGEUP) position -= rect.bottom;
+        else if (LOWORD(wp) == SB_PAGEDOWN) position += rect.bottom;
+        else if (LOWORD(wp) == SB_THUMBTRACK || LOWORD(wp) == SB_THUMBPOSITION) position = HIWORD(wp);
+        else if (LOWORD(wp) == SB_TOP) position = 0;
+        else if (LOWORD(wp) == SB_BOTTOM) position = s->contentHeight;
+        ScrollTo(s, position); return 0;
     }
     case WM_COMMAND: {
         int id = LOWORD(wp), code = HIWORD(wp);
@@ -367,11 +408,10 @@ static LRESULT CALLBACK SidebarProc(HWND window, UINT message, WPARAM wp, LPARAM
             TaskRow *row = &s->rows[id - TASK_ROW_BASE];
             if (code == BN_SETFOCUS) {
                 RECT rect; GetClientRect(s->window, &rect);
-                if (row->bounds.top < s->scroll) s->scroll = row->bounds.top;
-                else if (row->bounds.bottom > s->scroll + rect.bottom) s->scroll = row->bounds.bottom - rect.bottom;
-                Reflow(browser);
+                if (row->bounds.top < s->scroll) ScrollTo(s, row->bounds.top);
+                else if (row->bounds.bottom > s->scroll + rect.bottom) ScrollTo(s, row->bounds.bottom - rect.bottom);
             } else if (code == BN_CLICKED) {
-                if (row->kind == ROW_HEADER) { s->collapsed[row->group] = !s->collapsed[row->group]; BuildTasks(browser); Reflow(browser); InvalidateRect(row->window, NULL, FALSE); }
+                if (row->kind == ROW_HEADER) { s->collapsed[row->group] = !s->collapsed[row->group]; RebuildTasks(browser); }
                 else if (row->kind == ROW_LINK) TaskCommand(browser, row->command);
             }
             return 0;

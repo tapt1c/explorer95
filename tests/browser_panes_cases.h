@@ -166,6 +166,84 @@ static void PoisonPaneControl(HWND window)
     RECT patch = {5,5,11,11}; HBRUSH marker = CreateSolidBrush(RGB(251,3,239)); HDC dc = GetDC(window);
     FillRect(dc, &patch, marker); GetPixel(dc, 7, 7); ReleaseDC(window, dc); DeleteObject(marker);
 }
+static int SidebarPendingRows(HWND sidebar)
+{
+    HWND content = GetWindow(sidebar, GW_CHILD), row; RECT viewport, rect; int pending = 0;
+    GetWindowRect(sidebar, &viewport);
+    for (row = GetWindow(content, GW_CHILD); row; row = GetWindow(row, GW_HWNDNEXT)) {
+        int id = GetDlgCtrlID(row);
+        if (id < 6100 || id >= 6132 || !IsWindowVisible(row)) continue;
+        GetWindowRect(row, &rect);
+        if (rect.top >= viewport.top && rect.bottom <= viewport.bottom && GetUpdateRect(row, NULL, FALSE)) ++pending;
+    }
+    return pending;
+}
+static BOOL SidebarLinksPainted(HWND sidebar, int *samples)
+{
+    HWND content = GetWindow(sidebar, GW_CHILD), row; RECT viewport, rect; char text[640];
+    BOOL okay = TRUE; *samples = 0; GetWindowRect(sidebar, &viewport);
+    for (row = GetWindow(content, GW_CHILD); row; row = GetWindow(row, GW_HWNDNEXT)) {
+        int id = GetDlgCtrlID(row), y;
+        if (id < 6100 || id >= 6132 || !IsWindowVisible(row)) continue;
+        GetWindowTextA(row, text, sizeof(text));
+        if (!lstrcmpA(text,"System Tasks") || !lstrcmpA(text,"File and Folder Tasks") ||
+            !lstrcmpA(text,"Other Places") || !lstrcmpA(text,"Details") || !lstrcmpA(text,"Recycle Bin Tasks")) continue;
+        GetWindowRect(row, &rect); y = rect.top < viewport.top ? viewport.top - rect.top + 2 : 2;
+        if (rect.top + y >= viewport.bottom - 2 || y >= rect.bottom - rect.top - 2) continue;
+        ++*samples; if (PanePixel(row,2,y) != GetSysColor(COLOR_WINDOW)) okay = FALSE;
+    }
+    return okay;
+}
+static void SidebarScrollTests(HWND browser, HWND sidebar)
+{
+    static const int positions[] = {1,3,2,0,4,1,0};
+    RECT original, viewport; SCROLLINFO scroll; HWND content = GetWindow(sidebar, GW_CHILD), row;
+    POINT point; int i, maximum, samples, sampled = 0, thumb, track, initialTop; DWORD started;
+    BOOL moved = FALSE, maximized = !!(GetWindowLongA(browser,GWL_STYLE) & WS_MAXIMIZE);
+    SendMessageA(browser,WM_COMMAND,ID_FOLDERS_CLOSE,0); GetWindowRect(browser,&original);
+    ShowWindow(browser,SW_RESTORE); MoveWindow(browser,16,16,420,300,TRUE); SetForegroundWindow(browser); PumpFor(100);
+    ZeroMemory(&scroll,sizeof(scroll)); scroll.cbSize=sizeof(scroll); scroll.fMask=SIF_ALL;
+    GetScrollInfo(sidebar,SB_VERT,&scroll); maximum=scroll.nMax-(int)scroll.nPage+1;
+    Check(IsWindowVisible(sidebar) && maximum>0,"short task viewport has a real scrollbar and offscreen rows");
+    for (i=0;i<7;++i) {
+        SendMessageA(sidebar,WM_VSCROLL,MAKELONG(SB_THUMBTRACK,maximum*positions[i]/4),0);
+        /* No PumpFor/UpdateWindow here: the native scrollbar's modal loop
+         * must receive a completed viewport, not queued child WM_PAINT. */
+        Check(!SidebarPendingRows(sidebar),"thumb tracking finishes visible task-row painting inside the scroll handler");
+    }
+    SendMessageA(sidebar,WM_VSCROLL,SB_TOP,0); PumpFor(80);
+    { RECT rect; GetWindowRect(content,&rect); initialTop=rect.top; }
+    /* Exercise the real nonclient modal loop with the button held throughout. */
+    GetScrollInfo(sidebar,SB_VERT,&scroll); GetWindowRect(sidebar,&viewport);
+    track=viewport.bottom-viewport.top-2*GetSystemMetrics(SM_CYVSCROLL);
+    thumb=track*(int)scroll.nPage/(scroll.nMax-scroll.nMin+1);
+    if (thumb<GetSystemMetrics(SM_CYVTHUMB)) thumb=GetSystemMetrics(SM_CYVTHUMB);
+    point.x=viewport.right-GetSystemMetrics(SM_CXVSCROLL)/2;
+    point.y=viewport.top+GetSystemMetrics(SM_CYVSCROLL)+thumb/2;
+    SetCursorPos(point.x,point.y); mouse_event(MOUSEEVENTF_LEFTDOWN,0,0,0,0); PumpFor(50);
+    for(i=0;i<7;++i) {
+        int y=point.y+(track-thumb)*positions[i]/4;
+        SetCursorPos(point.x,y); started=GetTickCount();
+        do { PumpFor(20); } while (!SidebarLinksPainted(sidebar,&samples) && GetTickCount()-started<1000);
+        Check(SidebarLinksPainted(sidebar,&samples),"task links remain painted while the scrollbar mouse button is still held");
+        /* USER may retain nPos until tracking ends; the child origin records
+         * the actual viewport movement while the mouse remains captured. */
+        { RECT rect; GetWindowRect(content,&rect); if(rect.top!=initialTop) moved=TRUE; }
+        sampled+=samples;
+        if(i==2) SaveScreen("build\\browser-sidebar-tracking.bmp");
+    }
+    mouse_event(MOUSEEVENTF_LEFTUP,0,0,0,0); PumpFor(60);
+    Check(sampled>0,"live scrollbar samples cover visible task links rather than an empty viewport");
+    Check(moved,"the held mouse actually moves the native scrollbar thumb and task viewport");
+    SendMessageA(sidebar,WM_VSCROLL,SB_TOP,0); PumpFor(60);
+    /* Collapsing/rebuilding uses the same complete-paint transaction. */
+    row=PaneText(content,"System Tasks"); PaneClick(row);
+    Check(!SidebarPendingRows(sidebar),"collapsing task groups paints their new row layout before returning");
+    PaneClick(PaneText(content,"System Tasks"));
+    ShowWindow(browser,SW_RESTORE); MoveWindow(browser,original.left,original.top,original.right-original.left,original.bottom-original.top,TRUE);
+    if(maximized) ShowWindow(browser,SW_MAXIMIZE);
+    PumpFor(80);
+}
 static void BrowserTransitionTests(HWND browser, BOOL native)
 {
     static const int commands[] = {ID_SEARCH, ID_FOLDERS_CLOSE, ID_HISTORY, ID_FOLDERS, ID_FOLDERS_CLOSE, ID_TASKS, ID_TASKS};
@@ -303,6 +381,7 @@ static void BrowserPaneTests(HWND browser, const char *fixture, const char *sett
         "My Computer exposes system tasks and other places around the native shell view");
     BrowserRepaintTests(browser, sidebar);
     BrowserTransitionTests(browser, TRUE);
+    SidebarScrollTests(browser, sidebar);
     {
         HWND header = PaneText(sidebar, "System Tasks"); HDC dc = GetDC(header); COLORREF pixel = GetPixel(dc, 2, 2);
         ReleaseDC(header, dc);
