@@ -2,6 +2,7 @@
 #define EXPLORER95_BROWSER_INTERNAL_H
 #include "shell_internal.h"
 #include "browser.h"
+#include "shell_new.h"
 
 #define BROWSER_HISTORY 32
 #define BROWSER_EXTRA_TOOLS 6
@@ -69,6 +70,7 @@ typedef struct Browser {
     BrowserSearch *search;
     BrowserAddress *location;
     IContextMenu2 *context;
+    ShellNew *newMenu;
     BrowserOptions options;
     BrowserOptions layoutOptions;
     RECT layoutClient;

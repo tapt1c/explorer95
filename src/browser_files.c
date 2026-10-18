@@ -404,20 +404,37 @@ void BrowserFilesTransfer(Browser *browser, BOOL move)
 void BrowserFilesContext(Browser *browser, LPARAM coordinates)
 {
     POINT point; HMENU menu = CreatePopupMenu(); IContextMenu *context = NULL; UINT command;
+    int newPosition = -1; BOOL background = FALSE;
+    if (browser->busy || browser->newMenu) { DestroyMenu(menu); return; }
     if (coordinates == (LPARAM)-1) { RECT rect; GetWindowRect(browser->files, &rect); point.x = rect.left + 20; point.y = rect.top + 20; }
-    else { point.x = (short)LOWORD(coordinates); point.y = (short)HIWORD(coordinates); }
-    if (ListView_GetSelectedCount(browser->files)) context = SelectionContext(browser);
+    else {
+        LVHITTESTINFO hit;
+        point.x = (short)LOWORD(coordinates); point.y = (short)HIWORD(coordinates);
+        ZeroMemory(&hit, sizeof(hit)); hit.pt = point; ScreenToClient(browser->files, &hit.pt);
+        background = ListView_HitTest(browser->files, &hit) < 0;
+    }
+    if (!background && ListView_GetSelectedCount(browser->files)) context = SelectionContext(browser);
     if (context) {
         IContextMenu_QueryContextMenu(context, menu, 0, 1, 0x6fff, CMF_NORMAL | CMF_CANRENAME);
         IContextMenu_QueryInterface(context, &IID_IContextMenu2, (void **)&browser->context);
     } else {
         AppendMenuA(menu, MF_STRING, ID_VIEWS, "Views..."); AppendMenuA(menu, MF_STRING, ID_REFRESH, "Refresh");
         AppendMenuA(menu, MF_SEPARATOR, 0, NULL); AppendMenuA(menu, MF_STRING | (IsClipboardFormatAvailable(CF_HDROP) ? 0 : MF_GRAYED), ID_PASTE, "Paste");
-        AppendMenuA(menu, MF_STRING, ID_NEWFOLDER, "New Folder"); AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
+        /* This path is for filesystem folders only; namespace views keep
+         * their own installed shell background menus. */
+        browser->newMenu = ShellNewCreate(HKEY_CLASSES_ROOT, browser->path, 0x7100, 0x71ff);
+        if (browser->newMenu) {
+            newPosition = GetMenuItemCount(menu);
+            AppendMenuA(menu, MF_POPUP, (UINT_PTR)ShellNewPopup(browser->newMenu), "New");
+        }
+        AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
         AppendMenuA(menu, MF_STRING, ID_FILE_PROPERTIES, "Properties");
     }
+    browser->busy = TRUE;
     command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, 0, browser->window, NULL);
-    if (command && context) {
+    if (command && ShellNewInvoke(browser->newMenu, command, browser->window, NULL))
+        PostMessageA(browser->window, WM_BROWSER_REFRESH, 0, 0);
+    else if (command && context) {
         char verb[80]; CMINVOKECOMMANDINFO invoke; verb[0] = 0;
         IContextMenu_GetCommandString(context, command - 1, GCS_VERBA, NULL, verb, sizeof(verb));
         if (!lstrcmpiA(verb, "open") || !lstrcmpiA(verb, "explore")) BrowserFilesOpen(browser);
@@ -430,6 +447,9 @@ void BrowserFilesContext(Browser *browser, LPARAM coordinates)
     } else if (command) PostMessageA(browser->window, WM_COMMAND, command, 0);
     if (browser->context) { IContextMenu2_Release(browser->context); browser->context = NULL; }
     if (context) IContextMenu_Release(context);
+    if (newPosition >= 0) RemoveMenu(menu, newPosition, MF_BYPOSITION);
+    ShellNewDestroy(browser->newMenu); browser->newMenu = NULL;
+    browser->busy = FALSE;
     DestroyMenu(menu);
 }
 void BrowserFilesCommand(Browser *browser, int command)

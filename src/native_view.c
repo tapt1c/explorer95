@@ -12,6 +12,7 @@
 #include "browser.h"
 #include "desktop_icons.h"
 #include "folder_open.h"
+#include "shell_new.h"
 
 struct NativeView {
     IShellBrowser browser;
@@ -22,6 +23,7 @@ struct NativeView {
     IShellFolder *folder;
     IShellView *view;
     IContextMenu2 *context;
+    ShellNew *newMenu;
     LPITEMIDLIST absolute;
     BOOL desktop, deleting;
     BOOL (*navigate)(HWND, LPCITEMIDLIST);
@@ -444,34 +446,15 @@ static LRESULT CALLBACK Subclass(HWND window, UINT message, WPARAM wp, LPARAM lp
     }
 }
 
-static void NewDesktopItem(NativeView *view, BOOL folder)
-{
-    char directory[MAX_PATH], path[MAX_PATH], name[64];
-    int suffix; DWORD error = ERROR_FILE_EXISTS;
-    if (!host.specialPath(CSIDL_DESKTOPDIRECTORY, directory)) return;
-    for (suffix = 0; suffix < 100; ++suffix) {
-        if (suffix) wsprintfA(name, folder ? "New Folder (%d)" : "New Text Document (%d).txt", suffix);
-        else lstrcpyA(name, folder ? "New Folder" : "New Text Document.txt");
-        if (lstrlenA(directory) + lstrlenA(name) + 2 >= MAX_PATH) break;
-        lstrcpyA(path, directory); lstrcatA(path, "\\"); lstrcatA(path, name);
-        if (folder) {
-            if (CreateDirectoryA(path, NULL)) { NativeViewRefresh(view); return; }
-            error = GetLastError();
-        } else {
-            HANDLE file = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
-            if (file != INVALID_HANDLE_VALUE) { CloseHandle(file); NativeViewRefresh(view); return; }
-            error = GetLastError();
-        }
-        if (error != ERROR_ALREADY_EXISTS && error != ERROR_FILE_EXISTS) break;
-    }
-    MessageBoxA(view->parent, "The new desktop item could not be created. Existing files were preserved.",
-        "Explorer95", MB_OK | MB_ICONEXCLAMATION);
-}
-
-static BOOL HasNewMenu(HMENU menu)
+static BOOL HasNewMenu(HMENU menu, IContextMenu *context)
 {
     int i, j; char text[128], clean[128];
     for (i = 0; i < GetMenuItemCount(menu); ++i) {
+        UINT id = GetMenuItemID(menu, i);
+        /* Canonical verbs work with localized installed shell menus too. */
+        if (context && id && id < 0x7000 &&
+            SUCCEEDED(IContextMenu_GetCommandString(context, id - 1, GCS_VERBA, NULL, text, sizeof(text))) &&
+            !lstrcmpiA(text, "new")) return TRUE;
         GetMenuStringA(menu, i, text, sizeof(text), MF_BYPOSITION);
         for (j = 0; text[j] == '&' || text[j] == ' '; ++j) {}
         lstrcpynA(clean, text + j, sizeof(clean));
@@ -485,7 +468,8 @@ void DesktopBackgroundMenu(NativeView *view, POINT point, HWND owner)
     IContextMenu *context = NULL;
     HMENU menu = CreatePopupMenu(), extra = CreatePopupMenu();
     HMENU arrange = EnvironmentDesktopLayoutMenu();
-    int command;
+    int command, newPosition = -1;
+    if (!view || view->newMenu || view->context) { DestroyMenu(menu); DestroyMenu(extra); DestroyMenu(arrange); return; }
     if (view && SUCCEEDED(IShellView_GetItemObject(view->view, SVGIO_BACKGROUND, &IID_IContextMenu, (void **)&context))) {
         IContextMenu_QueryContextMenu(context, menu, 0, 1, 0x6fff, CMF_NORMAL);
         IContextMenu_QueryInterface(context, &IID_IContextMenu2, (void **)&view->context);
@@ -495,11 +479,14 @@ void DesktopBackgroundMenu(NativeView *view, POINT point, HWND owner)
     }
     AppendMenuA(menu, MF_STRING | (EnvironmentDesktopIconsVisible() ? MF_CHECKED : 0), 0x8009, "Show Desktop Icons");
     InsertMenuA(menu, 0, MF_BYPOSITION | MF_POPUP, (UINT_PTR)arrange, "Icon Layout");
-    if (!HasNewMenu(menu)) {
-        HMENU create = CreatePopupMenu();
-        AppendMenuA(create, MF_STRING, 0x8007, "Folder");
-        AppendMenuA(create, MF_STRING, 0x8008, "Text Document");
-        AppendMenuA(menu, MF_POPUP, (UINT_PTR)create, "New");
+    if (!HasNewMenu(menu, context)) {
+        char directory[MAX_PATH];
+        if (host.specialPath(CSIDL_DESKTOPDIRECTORY, directory))
+            view->newMenu = ShellNewCreate(HKEY_CLASSES_ROOT, directory, 0x7100, 0x71ff);
+        if (view->newMenu) {
+            newPosition = GetMenuItemCount(menu);
+            AppendMenuA(menu, MF_POPUP, (UINT_PTR)ShellNewPopup(view->newMenu), "New");
+        }
     }
     AppendMenuA(extra, MF_STRING, 0x8001, "Environment Properties...");
     AppendMenuA(extra, MF_STRING, 0x8002, "Open Desktop Folder");
@@ -530,9 +517,11 @@ void DesktopBackgroundMenu(NativeView *view, POINT point, HWND owner)
     if (command == 0x8004) EnvironmentLaunch(view->parent, "control.exe", "desk.cpl", NULL);
     EnvironmentDesktopLayoutCommand(command);
     if (command == 0x8009) EnvironmentToggleDesktopIcons();
-    if (command == 0x8007 || command == 0x8008) NewDesktopItem(view, command == 0x8007);
+    if (ShellNewInvoke(view->newMenu, command, owner, NULL)) NativeViewRefresh(view);
     if (view->context) { IContextMenu2_Release(view->context); view->context = NULL; }
     if (context) IContextMenu_Release(context);
+    if (newPosition >= 0) RemoveMenu(menu, newPosition, MF_BYPOSITION);
+    ShellNewDestroy(view->newMenu); view->newMenu = NULL;
     DestroyMenu(menu);
 }
 

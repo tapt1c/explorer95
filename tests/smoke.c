@@ -127,6 +127,7 @@ static void Check(BOOL okay, const char *description)
 #include "desktop_icons_cases.h"
 #include "shell_features_cases.h"
 #include "folder_handler_cases.h"
+#include "shell_new_cases.h"
 #include "folder_selection_cases.h"
 #include "native_view_cases.h"
 #include "tray_mirror_cases.h"
@@ -1513,6 +1514,7 @@ void start(void)
     TestGroup group = GROUP_FULL;
     DWORD started;
     GetModuleFileNameA(NULL, module, MAX_PATH);
+    if (ShellNewChildMode(GetCommandLineA())) ExitProcess(0);
     /* The helper mode supplies a real top-level task for taskbar/Run tests. */
     command[0] = 0;
     lstrcpynA(command, GetCommandLineA(), sizeof(command));
@@ -1568,6 +1570,7 @@ void start(void)
     wsprintfA(settingsDir, "%s profile", fixture);
     Check(CreateDirectoryA(settingsDir, NULL), "create isolated settings directory");
     wsprintfA(settings, "%s\\settings.ini", settingsDir);
+    if (group == GROUP_FULL || group == GROUP_CORE || group == GROUP_BROWSER) ShellNewTests(settingsDir, module);
     if (group != GROUP_BROWSER) { LayoutTests(); HistoryTests(settingsDir, module, settings); ShellFeatureTests(); }
     if (group == GROUP_FULL || group == GROUP_CORE) { PaintTests(); ConfigTests(settingsDir); DesktopIconTests(settingsDir); FolderHandlerTests(module,settings); FolderSelectionTests(); NativeViewMessageTests(); TrayMirrorTests(); TrayMirrorCrossProcessTests(); }
     if (group == GROUP_CORE) goto cleanup;
@@ -1672,6 +1675,7 @@ void start(void)
     SendMessageA(GetDlgItem(bar, 100), BM_CLICK, 0, 0);
     Check(!IsWindowVisible(menu), "Start button toggles the menu closed");
 
+    BrowserNewContextTests(browser, fixture);
     BrowserColorTests(browser);
     BrowserPaneTests(browser, fixture, settings);
     BrowserTests(browser, fixture, settingsDir, settings);

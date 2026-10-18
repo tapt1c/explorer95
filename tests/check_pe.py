@@ -73,6 +73,7 @@ ALLOWED = {
         SetFocus SetForegroundWindow SetMenu SetRect SetTimer SetWindowLongA SetWindowPos
         SetDlgItemTextA SendMessageTimeoutA SetWindowTextA ShowWindow SystemParametersInfoA TrackPopupMenu
         TranslateMessage UpdateWindow WindowFromDC WindowFromPoint wsprintfA
+        RemoveMenu
     """.split()),
 }
 

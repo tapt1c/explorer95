@@ -67,6 +67,7 @@ Explorer95 — любительская нативная оболочка для
 | `src/folder_open.c`, `src/folder_open.h` | ANSI-команды открытия, проверяемый протокол WM_COPYDATA и чтение Shell IDList Array с проверкой границ. |
 | `src/folder_handler.c`, `src/folder_handler.h` | Обратимые команды open/explore для Directory, Drive, My Computer и Recycle Bin; полные снимки команд и DDE в реестре. |
 | `src/native_view.c`, `src/native_view.h` | Хост `IShellBrowser`/`IShellView`, системные виртуальные папки, рабочий стол, обои и контекстные меню. |
+| `src/shell_new.c`, `src/shell_new.h` | Общий Win95-список ShellNew для файловых каталогов и запасного меню рабочего стола; шаблоны, данные и системные мастера. |
 | `src/desktop_icons.c`, `src/desktop_icons.h` | Ручной перенос групп значков, отмена/capture, собственная сетка и сохранение позиций в sidecar профиля `.DIP`. |
 | `src/tray.c` | Базовый ANSI-протокол уведомлений Win95, значки трея, подсказки и callbacks. |
 | `src/tray_hook.c`, `src/tray_mirror.h` | Встроенная DLL наблюдения за потоком штатного трея и ограниченный протокол зеркала. |
@@ -88,6 +89,7 @@ Explorer95 — любительская нативная оболочка для
 | `tests/quick_launch_cases.h` | Реальное изменение размера Quick Launch, блокировка, Escape, переполнение и запуск скрытой команды; menu/full. |
 | `tests/desktop_delete_cases.h` | Системный Delete на рабочем столе, отмена и очистка корзины только с собственным тестовым файлом; browser/full. |
 | `tests/native_view_cases.h` | Внутрипроцессный хост настоящего NativeView и canary над ListView: проверка повторного входа LVM_GETEDITCONTROL; core/full. |
+| `tests/shell_new_cases.h` | Регистрации ShellNew в отдельном HKCU-корне, реальные пустые файлы/данные/шаблоны, коллизии имён и запуск команды; core/browser/full. |
 | `Makefile` | Сборка целевого x86 EXE, ресурсов и тестовых x86/x64-вариантов. |
 | `.github/workflows/build.yml`, `.github/workflows/test-ui.yml` | Выбор проверок, сборка/PE, нативная геометрия и переиспользуемый Wine 10 job. |
 | `.github/workflows/release.yml` | Публикация prerelease по тегу `v*`: EXE, ZIP и SHA256. |
@@ -788,6 +790,20 @@ explorer95.exe --settings="C:\EX95TEST\Explorer95.ini"
   проверяйте наличие SysTabControl32: один класс #32770 может означать ошибку.
   Реальные пути сохраняют расширение,
   даже когда оно скрыто в надписи/редакторе.
+- Меню New обычных каталогов читает установленные `.extension\\ShellNew`
+  (также `.extension\\ProgID\\ShellNew`) из HKCR при каждом открытии. Общий
+  модуль используется и на Desktop, если его IShellView не предоставил New.
+  Не заменяйте этот список фиксированными «Folder/Text Document» и не добавляйте
+  его в CLSID-папки. Folder идёт первым, зарегистрированный Shortcut — вторым,
+  остальные пункты сортируются по имени типа. Чтение меню не открывает шаблоны
+  и не проверяет носители; FileName читается только после выбора команды.
+  NullFile/Data используют CREATE_NEW, шаблоны — CopyFile с fail-if-exists,
+  коллизии получают новое имя. Зарегистрированные Command запускает ShellExecuteEx;
+  сохраняйте кавычки вокруг подставленного пути. Не создавайте свою имитацию
+  мастера ярлыков. ShellNew владеет своим submenu: отделяйте его от родительского
+  меню через RemoveMenu перед ShellNewDestroy. Ограничение — 128 элементов за
+  одно открытие для сохранения USER/registry-ресурсов Win95. Тесты используют
+  отдельный корень классов, не меняют HKCR или пользовательские шаблоны.
 - Уведомление FindFirstChangeNotification отслеживает только открытый каталог,
   без рекурсии; таймер проверяет handle с нулевым ожиданием. При отключённом
   носителе уведомление закрывается до F5, диалог не должен повторяться в цикле.
