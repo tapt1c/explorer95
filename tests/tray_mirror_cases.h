@@ -93,11 +93,31 @@ static LRESULT CALLBACK MirrorSourceProc(HWND window, UINT message, WPARAM wp, L
     if (message == WM_COPYDATA) return mirrorAccept;
     return DefWindowProcA(window, message, wp, lp);
 }
+static void MirrorQuery(HWND source, UINT refresh)
+{
+    int before = mirrorSnapshots + mirrorStatuses + mirrorHints; DWORD started = GetTickCount();
+    Check(PostMessageA(source,refresh,0,0),"queue a pointer-free tray query without blocking its receiver");
+    do { PumpFor(10); }
+    while (mirrorSnapshots + mirrorStatuses + mirrorHints == before && GetTickCount() - started < 3000);
+    Check(mirrorSnapshots + mirrorStatuses + mirrorHints > before,"queued tray query produces a bounded reply or retry hint");
+}
 static void TrayMirrorTests(void)
 {
     WNDCLASSA cls; HWND source, sink, notify; HMODULE module;
     TrayMirrorStartProc start; TrayMirrorStopProc stop; MirrorRecord record; MirrorArray array; MirrorState state; void *pointer;
     MirrorEvent event; COPYDATASTRUCT copy; UINT refresh; int before;
+    {
+        static TrayMirrorImage left, right; HICON image = MirrorFixtureIcon(FALSE);
+        Check(image && TrayMirrorPack(image,&left),"pack an owned image for exact snapshot identity checks");
+        DestroyIcon(image); right = left;
+        Check(TrayMirrorSameImage(&left,&right),"identical snapshots keep their image identity without a lossy hash");
+        right.mask[2] ^= 255;
+        Check(TrayMirrorSameImage(&left,&right),"unused DIB mask padding does not make an unchanged icon active");
+        right.mask[0] ^= 128;
+        Check(!TrayMirrorSameImage(&left,&right),"a transparency-only change is a real image update");
+        right = left; right.color[255] ^= 1;
+        Check(!TrayMirrorSameImage(&left,&right),"a change in the final image pixel is retained by reconciliation");
+    }
     ZeroMemory(&cls, sizeof(cls)); cls.hInstance = GetModuleHandleA(NULL); cls.lpfnWndProc = MirrorSinkProc;
     cls.lpszClassName = "Explorer95.MirrorSinkFixture"; Check(RegisterClassA(&cls) != 0, "register the tray mirror receiver fixture");
     sink = CreateWindowA(cls.lpszClassName, "", 0, 0,0,0,0, NULL,NULL,cls.hInstance,NULL);
@@ -127,21 +147,28 @@ static void TrayMirrorTests(void)
     SetWindowLongPtrA(notify, 0, (LONG_PTR)&state);
     Check(start(sink, source), "install the read-only hook on the selected fixture thread");
     refresh = RegisterWindowMessageA(TRAY_MIRROR_REFRESH);
-    SendMessageA(source, refresh, 0, 0);
+    SendMessageA(source,refresh,0,0);
+    Check(!mirrorSnapshots && !mirrorStatuses,"a sent refresh cannot masquerade as execution of the posted-message hook");
+    {
+        MSG peek; PostMessageA(source,refresh,0,0);
+        Check(PeekMessageA(&peek,source,refresh,refresh,PM_NOREMOVE) && !mirrorSnapshots,
+            "peeking a queued query without removing it does not execute or duplicate the snapshot");
+        PumpFor(30);
+    }
     Check(mirrorSnapshots == 1 && !lstrcmpA(mirrorTip, "Existing volume fixture") && mirrorImage,
         "initial snapshot retrieves pre-existing notification text and an owned image without restarting its application");
-    Check(mirrorSnapshotsAtDispatch == 1,"explicit tray queries execute in the pre-dispatch hook before the original window procedure");
+    Check(mirrorSnapshotsAtDispatch == 1,"explicit tray queries execute when Explorer removes them from its own queue");
     Check(MirrorImageMatches(mirrorImage,FALSE), "initial notification pixels and transparency mask survive serialization");
-    array.count = TRAY_MIRROR_LIMIT + 1; SendMessageA(source, refresh, 0, 0);
+    array.count = TRAY_MIRROR_LIMIT + 1; MirrorQuery(source,refresh);
     Check(mirrorStatuses == 1 && mirrorSnapshots == 1, "oversized classic tray arrays report failure without publishing a partial snapshot");
-    array.count = 1; array.items = (void **)1; SendMessageA(source, refresh, 0, 0);
+    array.count = 1; array.items = (void **)1; MirrorQuery(source,refresh);
     Check(mirrorStatuses == 2 && mirrorSnapshots == 1 && mirrorStatus.stage == 2 && mirrorStatus.error == ERROR_NOT_SUPPORTED,
         "invalid classic tray pointers report their failing stage without dereferencing them");
     array.items = &pointer;
-    record.size = 0; SendMessageA(source,refresh,0,0);
+    record.size = 0; MirrorQuery(source,refresh);
     Check(mirrorStatus.stage == 3 && mirrorSnapshots == 1,"incompatible classic icon records report a distinct ABI failure");
     record.size = offsetof(NOTIFYICONDATAA,szTip) + 64;
-    { HIMAGELIST images = state.images; state.images = (HIMAGELIST)1; SendMessageA(source,refresh,0,0); state.images = images;
+    { HIMAGELIST images = state.images; state.images = (HIMAGELIST)1; MirrorQuery(source,refresh); state.images = images;
       Check(mirrorStatus.stage == 4 && mirrorSnapshots == 1,"invalid image-list memory is rejected before invoking Common Controls"); }
     ZeroMemory(&event, sizeof(event)); event.signature = 0x34753423UL; event.icon.cbSize = record.size;
     event.icon.hWnd = sink; event.icon.uID = 73; event.icon.uFlags = NIF_TIP; lstrcpyA(event.icon.szTip, "Changed volume fixture");
@@ -160,16 +187,16 @@ static void TrayMirrorTests(void)
     {
         MirrorRecord rows[TRAY_MIRROR_BATCH + 1]; void *rowPointers[TRAY_MIRROR_BATCH + 1]; int i, snapshots = mirrorSnapshots;
         for (i = 0; i < TRAY_MIRROR_BATCH + 1; ++i) { rows[i] = record; rows[i].id += i; rowPointers[i] = &rows[i]; }
-        array.count = TRAY_MIRROR_BATCH + 1; array.items = rowPointers; SendMessageA(source,refresh,0,0);
+        array.count = TRAY_MIRROR_BATCH + 1; array.items = rowPointers; MirrorQuery(source,refresh);
         Check(mirrorSnapshots == snapshots + 2 && mirrorOffset == TRAY_MIRROR_BATCH && mirrorTotal == TRAY_MIRROR_BATCH + 1 &&
             mirrorLargestFrame < 16384, "large initial trays transfer in ordered frames below the Win95 USER-buffer limit");
-        array.count = 0; SendMessageA(source,refresh,0,0);
+        array.count = 0; MirrorQuery(source,refresh);
         Check(mirrorSnapshots == snapshots + 3 && !mirrorTip[0] && !mirrorImage, "an empty initial tray snapshot clears its old mirrored entries");
     }
     {
         int hints = mirrorHints, events = mirrorEvents;
         array.count = 1; array.items = &pointer; mirrorReenter = source;
-        SendMessageA(source,refresh,0,0); PumpFor(30);
+        MirrorQuery(source,refresh); PumpFor(30);
         Check(mirrorHints == hints + 1 && mirrorEvents == events,
             "a reentrant accepted notification requests resynchronization instead of corrupting an active snapshot");
         event.signature = 0x34753423UL; event.operation = NIM_MODIFY;
@@ -186,6 +213,14 @@ static void TrayMirrorTests(void)
 }
 static LRESULT CALLBACK MirrorChildProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
 {
+    if (message == WM_APP + 91) {
+        HWND notify = FindWindowExA(window,NULL,"TrayNotifyWnd",NULL);
+        MirrorState *state = (MirrorState *)GetWindowLongPtrA(notify,0);
+        MirrorRecord *row = ((MirrorArray *)state->array)->items[0]; HICON image = MirrorFixtureIcon(TRUE); int index;
+        lstrcpyA(row->tip,"Changed without a notification event");
+        index = ImageList_ReplaceIcon(state->images,row->image,image); if (image) DestroyIcon(image);
+        return index == row->image;
+    }
     if (message == WM_APP + 89) {
         if (wp == 73 && lp == WM_LBUTTONUP) SetWindowTextA(window, "Mirror callback received");
         return 0;
@@ -235,7 +270,7 @@ static void TrayMirrorCrossProcessTests(void)
 {
     char modulePath[MAX_PATH], command[MAX_PATH + 32], title[80]; STARTUPINFOA startup; PROCESS_INFORMATION info;
     HWND sink, source = NULL; HMODULE module; TrayMirrorStartProc start; TrayMirrorStopProc stop;
-    DWORD started, owner; DWORD_PTR result; int snapshots = mirrorSnapshots, events = mirrorEvents, operation;
+    DWORD started, owner; int snapshots = mirrorSnapshots, events = mirrorEvents, operation;
     GetModuleFileNameA(NULL,modulePath,sizeof(modulePath)); wsprintfA(command,"\"%s\" --tray-source",modulePath);
     ZeroMemory(&startup,sizeof(startup)); startup.cb = sizeof(startup); ZeroMemory(&info,sizeof(info));
     Check(CreateProcessA(modulePath,command,NULL,NULL,FALSE,0,NULL,NULL,&startup,&info), "launch an isolated tray source in a second process");
@@ -257,12 +292,15 @@ static void TrayMirrorCrossProcessTests(void)
     start = (TrayMirrorStartProc)(UINT_PTR)GetProcAddress(module,"TrayMirrorStart");
     stop = (TrayMirrorStopProc)(UINT_PTR)GetProcAddress(module,"TrayMirrorStop");
     Check(start && stop && start(sink,source), "install the observer on only the helper's UI thread");
-    Check(SendMessageTimeoutA(source,RegisterWindowMessageA(TRAY_MIRROR_REFRESH),0,0,SMTO_ABORTIFHUNG,3000,&result),
-        "sent refresh permits the remote hook to send its synchronous snapshot reply");
+    MirrorQuery(source,RegisterWindowMessageA(TRAY_MIRROR_REFRESH));
     Check(mirrorSnapshots == snapshots + 1 && !lstrcmpA(mirrorTip,"Pre-existing remote notification") && mirrorOwner == source,
         "injected observer reads the initial model in its owning process and returns it through WM_COPYDATA");
     Check(mirrorImage != NULL, "the receiving process owns a copy of the existing notification image");
     Check(MirrorImageMatches(mirrorImage,FALSE), "pixels and transparent mask survive transfer from another process after the source icon is released");
+    Check(SendMessageA(source,WM_APP + 91,0,0),"change the source model without sending a notification event to the observer");
+    MirrorQuery(source,RegisterWindowMessageA(TRAY_MIRROR_REFRESH));
+    Check(!lstrcmpA(mirrorTip,"Changed without a notification event") && MirrorImageMatches(mirrorImage,TRUE) && mirrorEvents == events,
+        "periodic queued reconciliation retrieves metadata and pixels even when the sent-message observer sees no event");
     PostMessageA(mirrorOwner,mirrorCallback,mirrorId,WM_LBUTTONUP); started = GetTickCount();
     do { PumpFor(20); GetWindowTextA(source,title,sizeof(title)); }
     while (lstrcmpA(title,"Mirror callback received") && GetTickCount() - started < 3000);

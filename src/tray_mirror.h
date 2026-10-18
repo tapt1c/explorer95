@@ -9,7 +9,7 @@
 #define TRAY_MIRROR_RESYNC (WM_APP + 35)
 #define TRAY_MIRROR_BATCH 8
 #define TRAY_MIRROR_RESOURCE 201
-#define TRAY_MIRROR_REFRESH "Explorer95.TrayMirror.Refresh.3"
+#define TRAY_MIRROR_REFRESH "Explorer95.TrayMirror.Refresh.4"
 typedef struct TrayMirrorStatus { DWORD stage, error; } TrayMirrorStatus;
 typedef struct TrayMirrorImage {
     DWORD present, color[16 * 16]; BYTE mask[16 * 4];
@@ -23,6 +23,7 @@ typedef struct TrayMirrorSnapshot {
 typedef struct TrayMirrorEvent { DWORD operation, flags; TrayMirrorItem item; } TrayMirrorEvent;
 BOOL TrayMirrorPack(HICON icon, TrayMirrorImage *image);
 HICON TrayMirrorUnpack(const TrayMirrorImage *image);
+BOOL TrayMirrorSameImage(const TrayMirrorImage *left, const TrayMirrorImage *right);
 typedef BOOL (WINAPI *TrayMirrorStartProc)(HWND sink, HWND shell);
 typedef void (WINAPI *TrayMirrorStopProc)(void);
 #endif

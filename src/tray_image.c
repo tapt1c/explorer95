@@ -30,9 +30,20 @@ BOOL TrayMirrorPack(HICON icon, TrayMirrorImage *image)
     DeleteDC(memory); ReleaseDC(NULL,screen);
     if (okay) {
         for (i = 0; i < 16 * 16; ++i) image->color[i] &= 0x00ffffffUL;
+        for (i = 0; i < 16; ++i) image->mask[i * 4 + 2] = image->mask[i * 4 + 3] = 0;
         image->present = 1;
     }
     return okay;
+}
+BOOL TrayMirrorSameImage(const TrayMirrorImage *left, const TrayMirrorImage *right)
+{
+    int i;
+    if (left->present != right->present) return FALSE;
+    if (!left->present) return TRUE;
+    for (i = 0; i < 256; ++i) if (left->color[i] != right->color[i]) return FALSE;
+    for (i = 0; i < 16; ++i)
+        if (left->mask[i * 4] != right->mask[i * 4] || left->mask[i * 4 + 1] != right->mask[i * 4 + 1]) return FALSE;
+    return TRUE;
 }
 HICON TrayMirrorUnpack(const TrayMirrorImage *image)
 {

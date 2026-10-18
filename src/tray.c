@@ -18,6 +18,8 @@ typedef struct TrayIcon {
     int policy;
     BOOL eligible;
     BOOL mirrored, snapshotSeen;
+    BOOL pixelsValid;
+    TrayMirrorImage pixels;
     char tip[64];
 } TrayIcon;
 
@@ -31,7 +33,8 @@ static DWORD mirrorRetry;
 static DWORD mirrorFault;
 static BOOL mirrorWarned;
 static BOOL mirrorPending;
-static BOOL mirrorReplied;
+static BOOL mirrorWaiting;
+static DWORD mirrorRequested;
 static DWORD mirrorStage;
 static DWORD mirrorNext, mirrorTotal;
 
@@ -39,6 +42,7 @@ static void MirrorClose(void)
 {
     mirrorShell = NULL;
     mirrorPending = FALSE; mirrorNext = mirrorTotal = 0;
+    mirrorWaiting = FALSE;
     if (mirrorStop) mirrorStop();
     mirrorStop = NULL;
     if (mirrorModule) FreeLibrary(mirrorModule);
@@ -46,11 +50,19 @@ static void MirrorClose(void)
     if (mirrorPath[0]) DeleteFileA(mirrorPath);
     mirrorPath[0] = 0;
 }
+static BOOL MirrorRequest(void)
+{
+    mirrorWaiting = TRUE; mirrorRequested = GetTickCount(); mirrorPending = FALSE;
+    mirrorStage = 13;
+    if (PostMessageA(mirrorShell,RegisterWindowMessageA(TRAY_MIRROR_REFRESH),0,0)) return TRUE;
+    if (!GetLastError()) SetLastError(ERROR_GEN_FAILURE);
+    mirrorWaiting = FALSE; return FALSE;
+}
 static BOOL MirrorOpen(HWND shell)
 {
-    HRSRC resource; HGLOBAL loaded; DWORD size, written = 0; DWORD_PTR result; HANDLE file; TrayMirrorStartProc start;
+    HRSRC resource; HGLOBAL loaded; DWORD size, written = 0; HANDLE file; TrayMirrorStartProc start;
     char dllPath[MAX_PATH]; int length;
-    mirrorStage = 10; mirrorReplied = FALSE;
+    mirrorStage = 10;
     resource = FindResourceA(env.host.instance, MAKEINTRESOURCEA(TRAY_MIRROR_RESOURCE), RT_RCDATA);
     if (!resource || !(size = SizeofResource(env.host.instance, resource)) ||
         !(loaded = LoadResource(env.host.instance, resource)) || !LockResource(loaded) ||
@@ -71,12 +83,9 @@ static BOOL MirrorOpen(HWND shell)
     mirrorStage = 12;
     if (!start || !mirrorStop || !start(env.bar, shell)) goto fail;
     mirrorShell = shell;
-    /* WH_CALLWNDPROCRET observes sent messages, not posted queue entries.
-     * The wait must allow the hook's synchronous WM_COPYDATA reply. */
-    mirrorStage = 13;
-    if (!SendMessageTimeoutA(shell, RegisterWindowMessageA(TRAY_MIRROR_REFRESH), 0, 0,
-        SMTO_ABORTIFHUNG, 1000, &result)) goto fail;
-    if (!mirrorReplied) { mirrorStage = 14; SetLastError(ERROR_DLL_INIT_FAILED); goto fail; }
+    /* The timer observes an asynchronous reply; never block this receiver
+     * waiting for the very Explorer thread that must send it WM_COPYDATA. */
+    if (!MirrorRequest()) goto fail;
     return TRUE;
 fail:
     { DWORD error = GetLastError(); if (!error) error = ERROR_NOT_SUPPORTED;
@@ -295,6 +304,7 @@ static LRESULT Receive(const COPYDATASTRUCT *copy, BOOL mirrored)
     if (data->uFlags & NIF_ICON) {
         if (icon->image) DestroyIcon(icon->image);
         icon->image = image;
+        icon->pixelsValid = FALSE;
     }
     if (data->uFlags & NIF_TIP) { lstrcpynA(icon->tip, data->szTip, sizeof(icon->tip)); Tip(icon->button, icon->tip); }
     if (icon->policy >= 0) lstrcpynA(policies[icon->policy].label, icon->tip, sizeof(policies[icon->policy].label));
@@ -305,12 +315,25 @@ static LRESULT Receive(const COPYDATASTRUCT *copy, BOOL mirrored)
 LRESULT TrayCopyData(const COPYDATASTRUCT *copy) { return Receive(copy, FALSE); }
 static BOOL MirrorItemValid(const TrayMirrorItem *item, DWORD flags)
 {
+    int i;
+    if (flags & NIF_TIP) {
+        for (i = 0; i < 64 && item->tip[i]; ++i) {}
+        if (i == 64) return FALSE;
+    }
     return IsWindow(item->owner) && (!(flags & NIF_MESSAGE) || !item->callback || item->callback >= WM_USER) && item->image.present <= 1;
 }
 static LRESULT MirrorReceive(DWORD operation, DWORD flags, const TrayMirrorItem *item)
 {
     TrayPacket packet; COPYDATASTRUCT copy; HICON image = NULL; LRESULT result;
+    TrayIcon *existing = NULL; DWORD originalFlags = flags; int i;
     if (operation > NIM_DELETE || (flags & ~7u) || !MirrorItemValid(item,flags)) return FALSE;
+    for (i = 0; i < ICON_LIMIT; ++i) if (icons[i].owner == item->owner && icons[i].id == item->id) { existing = &icons[i]; break; }
+    if (existing && operation != NIM_DELETE) {
+        if ((flags & NIF_ICON) && existing->pixelsValid && TrayMirrorSameImage(&existing->pixels,&item->image)) flags &= ~NIF_ICON;
+        if ((flags & NIF_MESSAGE) && existing->callback == item->callback) flags &= ~NIF_MESSAGE;
+        if ((flags & NIF_TIP) && !lstrcmpA(existing->tip,item->tip)) flags &= ~NIF_TIP;
+        if (!flags) { existing->mirrored = existing->snapshotSeen = TRUE; return TRUE; }
+    }
     if (operation != NIM_DELETE && (flags & NIF_ICON) && item->image.present) {
         image = TrayMirrorUnpack(&item->image); if (!image) return FALSE;
     }
@@ -319,7 +342,13 @@ static LRESULT MirrorReceive(DWORD operation, DWORD flags, const TrayMirrorItem 
     packet.icon.uID = item->id; packet.icon.uFlags = flags; packet.icon.uCallbackMessage = item->callback;
     packet.icon.hIcon = image; lstrcpynA(packet.icon.szTip,item->tip,64);
     copy.dwData = 1; copy.cbData = offsetof(TrayPacket,icon) + packet.icon.cbSize; copy.lpData = &packet;
-    result = Receive(&copy,TRUE); if (image) DestroyIcon(image); return result;
+    result = Receive(&copy,TRUE); if (image) DestroyIcon(image);
+    if (result && operation != NIM_DELETE && (originalFlags & NIF_ICON)) {
+        for (i = 0; i < ICON_LIMIT; ++i) if (icons[i].owner == item->owner && icons[i].id == item->id) {
+            icons[i].pixels = item->image; icons[i].pixelsValid = TRUE; break;
+        }
+    }
+    return result;
 }
 LRESULT TrayMirrorCopyData(HWND source, const COPYDATASTRUCT *copy)
 {
@@ -343,17 +372,17 @@ LRESULT TrayMirrorCopyData(HWND source, const COPYDATASTRUCT *copy)
         for (i = 0; i < snapshot->count; ++i)
             if (!MirrorReceive(NIM_ADD,NIF_ICON | NIF_TIP | NIF_MESSAGE,&snapshot->items[i])) return FALSE;
         mirrorNext += snapshot->count;
-        mirrorReplied = TRUE; mirrorFault = 0;
-        RenderTraceTray(20,0,snapshot->total);
+        mirrorRequested = GetTickCount(); mirrorFault = 0;
         if (mirrorNext == mirrorTotal) {
             for (i = 0; i < ICON_LIMIT; ++i) if (icons[i].mirrored && !icons[i].snapshotSeen) DeleteIcon(&icons[i]);
             mirrorNext = mirrorTotal = 0;
+            mirrorWaiting = FALSE; RenderTraceTray(20,0,snapshot->total);
         }
         EnvLayoutBar(); return TRUE;
     }
     if (copy->dwData == TRAY_MIRROR_STATUS && copy->lpData && copy->cbData == sizeof(TrayMirrorStatus)) {
         const TrayMirrorStatus *status = copy->lpData;
-        mirrorReplied = TRUE; mirrorFault = status->error; mirrorStage = status->stage;
+        mirrorWaiting = FALSE; mirrorFault = status->error; mirrorStage = status->stage;
         RenderTraceTray(mirrorStage,mirrorFault,0); return TRUE;
     }
     return FALSE;
@@ -369,14 +398,25 @@ void TrayPrune(void)
             MirrorClose();
             for (i = 0; i < ICON_LIMIT; ++i) if (icons[i].mirrored) { DeleteIcon(&icons[i]); changed = TRUE; }
         }
+        if (mirrorShell && mirrorWaiting && (DWORD)(GetTickCount() - mirrorRequested) >= 5000) {
+            /* Absence of a protocol reply is a timeout, not proof of a DLL
+             * loader failure. Keep that distinction in diagnostics. */
+            mirrorStage = 14; mirrorFault = ERROR_TIMEOUT; mirrorRetry = GetTickCount();
+            RenderTraceTray(mirrorStage,mirrorFault,0); MirrorClose();
+        }
         if (!mirrorShell && shell && (DWORD)(GetTickCount() - mirrorRetry) >= 5000) {
             mirrorRetry = GetTickCount();
             if (!MirrorOpen(shell) && !mirrorWarned) mirrorFault = GetLastError();
         }
-        if (mirrorShell && mirrorPending && (DWORD)(GetTickCount() - mirrorRetry) >= 1000) {
-            DWORD_PTR result; mirrorRetry = GetTickCount(); mirrorPending = FALSE;
-            if (!SendMessageTimeoutA(mirrorShell,RegisterWindowMessageA(TRAY_MIRROR_REFRESH),0,0,
-                SMTO_ABORTIFHUNG,1000,&result)) mirrorPending = TRUE;
+        if (mirrorShell && !mirrorWaiting && ((DWORD)(GetTickCount() - mirrorRequested) >= 1000 ||
+            (mirrorPending && (DWORD)(GetTickCount() - mirrorRequested) >= 400))) {
+            /* A bounded one-second reconciliation also catches changes not
+             * exposed through Win95's sent-message hook. Unchanged pixels and
+             * metadata are retained, including their inactivity timestamp. */
+            if (!MirrorRequest()) {
+                mirrorFault = GetLastError(); mirrorRetry = GetTickCount();
+                RenderTraceTray(13,mirrorFault,0); MirrorClose();
+            }
         }
     }
     if (mirrorFault && !mirrorWarned) {

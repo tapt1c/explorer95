@@ -87,14 +87,14 @@ static BOOL Snapshot(void)
     } while (snapshot.offset < snapshot.total);
     return TRUE;
 }
-/* Query via the pre-dispatch hook, also used by the original Win95 tray
- * enumeration technique. The reply proves that DLL injection and the shared
- * handles actually work; a successful SendMessageTimeout alone proves neither.
- * Keep accepted-change observation separate, after the stock tray returns. */
+/* Run explicit queries when Explorer removes a posted message from its own
+ * queue. Do not depend on cross-thread SendMessage hook behavior, or require
+ * the host to receive a synchronous reply while blocked inside another send.
+ * PeekMessage(PM_NOREMOVE) must not run a query more than once. */
 static LRESULT CALLBACK Query(int code, WPARAM wp, LPARAM lp)
 {
-    if (code >= 0 && shared.sink) {
-        const CWPSTRUCT *message = (const CWPSTRUCT *)lp;
+    if (code == HC_ACTION && wp == PM_REMOVE && shared.sink) {
+        const MSG *message = (const MSG *)lp;
         if (message->hwnd == shared.shell && message->message == shared.refresh) {
             if (busy) dirty = TRUE;
             else {
@@ -154,7 +154,7 @@ __declspec(dllexport) BOOL WINAPI TrayMirrorStart(HWND sink, HWND shell)
     if (!thread) return FALSE;
     shared.sink = sink; shared.shell = shell; shared.refresh = RegisterWindowMessageA(TRAY_MIRROR_REFRESH);
     if (!shared.refresh) return FALSE;
-    shared.query = SetWindowsHookExA(WH_CALLWNDPROC, Query, instance, thread);
+    shared.query = SetWindowsHookExA(WH_GETMESSAGE, Query, instance, thread);
     if (shared.query) shared.changes = SetWindowsHookExA(WH_CALLWNDPROCRET, Observe, instance, thread);
     if (!shared.query || !shared.changes) {
         DWORD error = GetLastError();
