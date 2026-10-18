@@ -101,6 +101,7 @@ void BrowserUpdate(Browser *browser);
 void BrowserSaveOptions(const BrowserOptions *options);
 void BrowserBuildToolbar(Browser *browser);
 int BrowserToolbarAddImages(Browser *browser, int size);
+void BrowserToolbarSubclass(Browser *browser);
 void BrowserOpenOptions(Browser *browser);
 void BrowserViewsPopup(Browser *browser);
 BOOL BrowserIsWindow(HWND window);

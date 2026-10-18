@@ -556,6 +556,9 @@ NativeView *NativeViewCreateEx(HWND parent, LPCITEMIDLIST absolute, BOOL desktop
     settings.fFlags = FWF_NOCLIENTEDGE | (desktop ? FWF_DESKTOP : 0);
     if (initial) rect = *initial; else GetClientRect(parent, &rect);
     if (FAILED(IShellView_CreateViewWindow(view->view, NULL, &settings, &view->browser, &rect, &view->window))) goto fail;
+    /* Shell32 owns its child layout, but the hosted surface must clip its
+     * siblings and descendants while painting into the browser frame. */
+    SetWindowLongA(view->window, GWL_STYLE, GetWindowLongA(view->window, GWL_STYLE) | WS_CLIPSIBLINGS | WS_CLIPCHILDREN);
     SetPropA(view->window, property, view);
     view->oldView = (WNDPROC)SetWindowLongPtrA(view->window, GWLP_WNDPROC, (LONG_PTR)Subclass);
     view->list = FindWindowExA(view->window, NULL, WC_LISTVIEWA, NULL);

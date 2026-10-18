@@ -3,6 +3,27 @@
 #define WIN32_LEAN_AND_MEAN
 #include "browser_internal.h"
 
+static const char toolbarProcedure[] = "Explorer95.ToolbarProcedure";
+static LRESULT CALLBACK ToolbarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
+{
+    WNDPROC original = (WNDPROC)GetPropA(window, toolbarProcedure);
+    if (message == WM_ERASEBKGND) {
+        RECT client; GetClientRect(window, &client);
+        FillRect((HDC)wp, &client, (HBRUSH)(COLOR_BTNFACE + 1)); return TRUE;
+    }
+    if (message == WM_NCDESTROY) {
+        SetWindowLongPtrA(window, GWLP_WNDPROC, (LONG_PTR)original);
+        RemovePropA(window, toolbarProcedure);
+    }
+    return original ? CallWindowProcA(original, window, message, wp, lp) : DefWindowProcA(window, message, wp, lp);
+}
+void BrowserToolbarSubclass(Browser *browser)
+{
+    WNDPROC original = (WNDPROC)GetWindowLongPtrA(browser->toolbar, GWLP_WNDPROC);
+    if (original && SetPropA(browser->toolbar, toolbarProcedure, (HANDLE)original))
+        SetWindowLongPtrA(browser->toolbar, GWLP_WNDPROC, (LONG_PTR)ToolbarProc);
+}
+
 static int Scale(int value, int size) { return value * size / 24; }
 void BrowserDrawSymbol(HDC dc, const RECT *rect, char symbol, COLORREF color)
 {

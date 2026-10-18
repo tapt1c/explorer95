@@ -159,6 +159,9 @@ static void BrowserAddressTests(HWND browser, const char *fixture)
         LOWORD(SendMessageA(edit, EM_GETMARGINS, 0, 0)) >= 20,
         "editable Win95 address field reserves space for the current folder icon");
     Check(AddressIconPainted(icon), "current folder icon is painted inside the editable address field");
+    { RECT go; GetWindowRect(GetDlgItem(browser, ID_GO), &go);
+      Check(go.top == field.top && go.bottom == field.bottom && field.bottom - field.top <= 24,
+          "compact address field and Go share their native frame height and vertical edges"); }
     {
         RECT format; TEXTMETRICA metrics; POINT origin = {0,0}; HDC dc = GetDC(edit); int difference;
         HGDIOBJ old = SelectObject(dc, (HFONT)SendMessageA(edit, WM_GETFONT, 0, 0));

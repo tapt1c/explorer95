@@ -102,10 +102,10 @@ static void Build(Browser *browser)
 }
 UINT BrowserAddressHeight(Browser *browser)
 {
-    TEXTMETRICA metrics; HDC dc = GetDC(browser->window); HGDIOBJ old; int height = 20;
+    TEXTMETRICA metrics; HDC dc = GetDC(browser->window); HGDIOBJ old; int height = 16;
     if (!dc) return height;
     old = SelectObject(dc, browserFont);
-    if (GetTextMetricsA(dc, &metrics) && metrics.tmHeight + 4 > height) height = metrics.tmHeight + 4;
+    if (GetTextMetricsA(dc, &metrics) && metrics.tmHeight > height) height = metrics.tmHeight;
     SelectObject(dc, old); ReleaseDC(browser->window, dc); return height;
 }
 static LRESULT CALLBACK AddressProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
@@ -132,7 +132,7 @@ BOOL BrowserAddressCreate(Browser *browser)
     SetWindowLongA(address->edit, GWL_STYLE, GetWindowLongA(address->edit, GWL_STYLE) | WS_CLIPCHILDREN);
     address->icon = BrowserControl(address->edit, "STATIC", "", SS_OWNERDRAW, ID_ADDRESS_ICON);
     SendMessageA(address->edit, EM_SETMARGINS, EC_LEFTMARGIN, MAKELPARAM(22, 0));
-    SendMessageA(browser->address, CB_SETITEMHEIGHT, 0, BrowserAddressHeight(browser));
+    SendMessageA(browser->address, CB_SETITEMHEIGHT, 0, BrowserAddressHeight(browser) + 4);
     SendMessageA(browser->address, CB_SETITEMHEIGHT, (WPARAM)-1, BrowserAddressHeight(browser));
     return address->icon != NULL;
 }

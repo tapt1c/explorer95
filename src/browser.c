@@ -15,7 +15,7 @@ static const char *optionKeys[] = {"Folders", "Toolbar", "AddressBar", "StatusBa
 void BrowserError(HWND window, const char *action, DWORD error) { EnvError(window, action, error); }
 HWND BrowserControl(HWND window, const char *kind, const char *text, DWORD style, int id)
 {
-    HWND control = CreateWindowExA(0, kind, text, WS_CHILD | WS_VISIBLE | style, 0, 0, 0, 0,
+    HWND control = CreateWindowExA(0, kind, text, WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | style, 0, 0, 0, 0,
         window, (HMENU)(INT_PTR)id, browserInstance, NULL);
     SendMessageA(control, WM_SETFONT, (WPARAM)browserFont, TRUE); return control;
 }
@@ -136,6 +136,7 @@ void BrowserBuildToolbar(Browser *browser)
      * commands and stock bitmaps also work with original Win95 toolbars. */
     browser->toolbar = BrowserControl(browser->window, TOOLBARCLASSNAMEA, "", TBSTYLE_TOOLTIPS | TBSTYLE_WRAPABLE |
         TBSTYLE_FLAT | TBSTYLE_LIST | CCS_TOP | CCS_NODIVIDER | CCS_NOPARENTALIGN | CCS_NORESIZE, ID_TOOLBAR);
+    BrowserToolbarSubclass(browser);
     SendMessageA(browser->toolbar, TB_BUTTONSTRUCTSIZE, sizeof(TBBUTTON), 0);
     /* Split arrows are optional. Older controls keep ordinary navigation
      * buttons and the right-click history menu rather than eating Back clicks. */
@@ -217,9 +218,13 @@ void BrowserLayout(Browser *browser)
     EnvShowControl(browser->addressLabel, browser->options.address);
     EnvShowControl(browser->go, browser->options.address);
     if (browser->options.address) {
-        EnvMoveControl(browser->addressLabel, 5, top + 5, 49, 20);
+        int fieldHeight;
         EnvMoveControl(browser->address, 56, top + 2, width > 120 ? width - 112 : 8, 220);
-        EnvMoveControl(browser->go, width - 51, top + 1, 47, 25); top += 32;
+        /* CB_SETITEMHEIGHT is the edit's content height, not the bordered
+         * ComboBox height. Let USER measure its native frame, then align Go. */
+        GetWindowRect(browser->address, &tool); fieldHeight = tool.bottom - tool.top;
+        EnvMoveControl(browser->addressLabel, 5, top + 2 + (fieldHeight - (int)BrowserAddressHeight(browser)) / 2, 49, BrowserAddressHeight(browser));
+        EnvMoveControl(browser->go, width - 51, top + 2, 47, fieldHeight); top += fieldHeight + 8;
         SetRect(&browser->addressLine, 0, top - 3, width, top - 1);
     }
     BrowserAddressLayout(browser);
@@ -274,6 +279,7 @@ BOOL BrowserNavigate(Browser *browser, const char *requested, LPCITEMIDLIST pidl
     FileEntry *entries = NULL; HANDLE watch = NULL; int total = 0, i; BOOL same, wasBin = browser->recycleBin; DWORD length;
     HWND previousView = browser->native ? NativeViewWindow(browser->native) : browser->files;
     HWND focus = GetFocus(); BOOL restoreFocus = focus == previousView || (focus && IsChild(previousView, focus));
+    BOOL repaint;
     if (browser->closing) return FALSE;
     path[0] = 0;
     if (pidl && pidl->mkid.cb) SHGetPathFromIDListA(pidl, path);
@@ -302,6 +308,11 @@ BOOL BrowserNavigate(Browser *browser, const char *requested, LPCITEMIDLIST pidl
         recorded = BrowserClonePidl(absolute);
         if (!recorded) { NativeViewDestroy(native); EnvFree(absolute); return FALSE; }
     }
+    /* Shell32 teardown and sidebar updates may synchronously dispatch paint.
+     * Keep the last complete frame until every replacement child is laid out.
+     * Initial creation remains hidden; WM_SETREDRAW(TRUE) must not show it. */
+    repaint = IsWindowVisible(browser->window);
+    if (repaint) SendMessageA(browser->window,WM_SETREDRAW,FALSE,0);
     /* Commit history and visible state only after the destination was read. */
     if (historyIndex >= 0) browser->historyIndex = historyIndex;
     else if (!same || browser->historyIndex < 0) {
@@ -348,6 +359,10 @@ BOOL BrowserNavigate(Browser *browser, const char *requested, LPCITEMIDLIST pidl
     BrowserSidebarLocationChanged(browser);
     if (wasBin != browser->recycleBin) BrowserBuildToolbar(browser);
     BrowserTreeSync(browser); BrowserLayout(browser); BrowserUpdate(browser);
+    if (repaint) {
+        SendMessageA(browser->window,WM_SETREDRAW,TRUE,0);
+        RedrawWindow(browser->window,NULL,NULL,RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
+    }
     if (restoreFocus) SetFocus(browser->native ? NativeViewList(browser->native) : browser->files);
     return TRUE;
 }
@@ -762,9 +777,9 @@ static LRESULT CALLBACK BrowserProc(HWND window, UINT message, WPARAM wp, LPARAM
             PaintFrame(browser, dc); PaintBufferEnd(&browser->background, target, &rect); EndPaint(window, &paint); return 0; } break;
     case WM_ERASEBKGND:
         if (browser) {
-            /* Flat toolbars ask the parent to erase into their own/memory DC.
-             * Supply the classic face there; the frame itself stays buffered. */
-            PaintFrame(browser, (HDC)wp);
+            /* Own WM_PAINT fills the frame. Never paint a whole frame into
+             * a borrowed native-control DC (or an unclipped parent DC). The
+             * toolbar supplies its own local background in its subclass. */
             return TRUE;
         } break;
     case WM_DESTROY:
