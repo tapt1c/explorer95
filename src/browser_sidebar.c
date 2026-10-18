@@ -24,7 +24,7 @@ struct BrowserSidebar {
     int count, scroll, contentHeight, mode;
     BOOL collapsed[4], layouting, shared, share, publish, mail;
     BOOL tasksDirty, lastConcealed, redrawPaused;
-    int lastCount, lastIndex, updateDepth;
+    int lastCount, lastIndex, lastItems, updateDepth;
     RECT groups[4];
     char actionKey[MAX_PATH + 40], drive[4], driveDetails[384];
     BrowserVisit visits[BROWSER_HISTORY]; int visitCount;
@@ -154,8 +154,12 @@ static void BuildTasks(Browser *browser)
     } else if (browser->recycleBin) {
         Header(browser, 0, "Recycle Bin Tasks");
         if (ListView_GetItemCount(NativeViewList(browser->native))) Link(browser, 0, ID_EMPTY_RECYCLE, 7, "Empty the Recycle Bin");
+        if (selected.count) {
+            Link(browser, 0, ID_DELETE, 7, "Delete the selected items");
+            if (selected.count == 1) Link(browser, 0, ID_FILE_PROPERTIES, 1, "View properties");
+        }
     }
-    if ((browser->path[0] && !browser->concealed) || selected.count) {
+    if (!browser->recycleBin && ((browser->path[0] && !browser->concealed) || selected.count)) {
         Header(browser, 1, "File and Folder Tasks");
         if (!selected.count && browser->path[0]) Link(browser, 1, ID_NEWFOLDER, 4, "Make a new folder");
         if (selected.count) {
@@ -299,8 +303,10 @@ void BrowserSidebarUpdate(Browser *browser)
     if (browser->options.pane == BROWSER_PANE_TASKS) {
         HWND list = browser->native ? NativeViewList(browser->native) : browser->files;
         int count = ListView_GetSelectedCount(list), index = ListView_GetNextItem(list, -1, LVNI_SELECTED);
-        if (s->tasksDirty || count != s->lastCount || index != s->lastIndex || browser->concealed != s->lastConcealed) {
+        int items = ListView_GetItemCount(list);
+        if (s->tasksDirty || count != s->lastCount || index != s->lastIndex || items != s->lastItems || browser->concealed != s->lastConcealed) {
             s->tasksDirty = FALSE; s->lastCount = count; s->lastIndex = index; s->lastConcealed = browser->concealed;
+            s->lastItems = items;
             RebuildTasks(browser);
         }
     }

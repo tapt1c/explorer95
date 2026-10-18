@@ -28,6 +28,7 @@
 #define WM_BROWSER_NAVIGATE (WM_APP + 31)
 #define WM_BROWSER_STATE (WM_APP + 32)
 #define WM_BROWSER_ADDRESS (WM_APP + 33)
+#define WM_BROWSER_NATIVE_REFRESH (WM_APP + 34)
 #define ID_CONTENTS_TOGGLE 6200
 
 typedef struct FileEntry {

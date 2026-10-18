@@ -81,6 +81,10 @@ void BrowserUpdate(Browser *browser)
     states[2] = CanUp(browser); states[3] = states[4] = states[6] = states[7] = selected > 0;
     states[5] = IsClipboardFormatAvailable(CF_HDROP);
     states[8] = !browser->native || selected > 0;
+    if (browser->recycleBin) {
+        states[3] = states[4] = states[5] = states[7] = FALSE;
+        states[6] = selected > 0 && !browser->busy;
+    }
     for (i = 0; i < 9; ++i) {
         if (browser->toolbar) SendMessageA(browser->toolbar, TB_ENABLEBUTTON, commands[i], MAKELONG(states[i], 0));
         EnableMenuItem(menu, commands[i], MF_BYCOMMAND | (states[i] ? MF_ENABLED : MF_GRAYED));
@@ -375,9 +379,7 @@ BOOL BrowserNavigate(Browser *browser, const char *requested, LPCITEMIDLIST pidl
     browser->recycleBin = browser->computerFolder = browser->concealed = FALSE;
     if (absolute) {
         LPITEMIDLIST bin = NULL;
-        if (SUCCEEDED(SHGetSpecialFolderLocation(browser->window, CSIDL_BITBUCKET, &bin))) {
-            browser->recycleBin = BrowserSamePidl(absolute, bin); CoTaskMemFree(bin);
-        }
+        browser->recycleBin = NativeViewIsRecycleBin(native);
         if (SUCCEEDED(SHGetSpecialFolderLocation(browser->window, CSIDL_DRIVES, &bin))) {
             browser->computerFolder = BrowserSamePidl(absolute, bin); CoTaskMemFree(bin);
         }
@@ -606,7 +608,7 @@ static void Command(Browser *browser, int command)
         HRESULT result;
         if (!browser->recycleBin || !browser->native || browser->busy || !ListView_GetItemCount(NativeViewList(browser->native))) return;
         browser->busy = TRUE; BrowserUpdate(browser);
-        result = NativeEmptyRecycleBin(browser->window);
+        result = NativeEmptyRecycleBin(browser->native);
         browser->busy = FALSE;
         if (FAILED(result) && result != E_ABORT && result != HRESULT_FROM_WIN32(ERROR_CANCELLED))
             MessageBoxA(browser->window, "Windows could not empty the Recycle Bin. You can also use its system context menu.", "Explorer95", MB_OK | MB_ICONEXCLAMATION);
@@ -732,9 +734,14 @@ static LRESULT CALLBACK BrowserProc(HWND window, UINT message, WPARAM wp, LPARAM
         } return 0;
     case WM_BROWSER_NAVIGATE:
         if (browser && browser->pending) { LPITEMIDLIST pidl = browser->pending; browser->pending = NULL; BrowserNavigate(browser, NULL, pidl, -1); EnvFree(pidl); } return 0;
-    case WM_BROWSER_STATE: if (browser) BrowserUpdate(browser); return 0;
+    case WM_BROWSER_STATE:
+        if (browser) { NativeViewStateHandled(browser->native); if (!browser->busy) BrowserUpdate(browser); }
+        return 0;
     case WM_BROWSER_ADDRESS: if (browser) BrowserAddressOpen(browser); return 0;
-    case WM_BROWSER_REFRESH: if (browser) BrowserRefresh(browser); return 0;
+    case WM_BROWSER_REFRESH: if (browser && !browser->busy) BrowserRefresh(browser); return 0;
+    case WM_BROWSER_NATIVE_REFRESH:
+        if (browser && NativeViewTakeRefresh(browser->native) && !browser->busy) BrowserRefresh(browser);
+        return 0;
     case WM_NOTIFY:
         if (browser) {
             NMHDR *header = (NMHDR *)lp;
@@ -925,6 +932,16 @@ static BOOL CALLBACK CloseBrowser(HWND window, LPARAM unused)
     GetWindowThreadProcessId(window, &process); if (process == GetCurrentProcessId()) DestroyWindow(window);
     return TRUE;
 }
+static BOOL CALLBACK RefreshRecycleBin(HWND window, LPARAM unused)
+{
+    DWORD process; Browser *browser; (void)unused;
+    GetWindowThreadProcessId(window, &process);
+    if (process != GetCurrentProcessId() || !BrowserIsWindow(window)) return TRUE;
+    browser = (Browser *)GetWindowLongPtrA(window, GWLP_USERDATA);
+    if (browser && !browser->closing && browser->recycleBin) NativeViewRequestRefresh(browser->native);
+    return TRUE;
+}
+void BrowserRecycleBinsChanged(void) { EnumWindows(RefreshRecycleBin, 0); }
 void BrowserShutdown(void) { EnumWindows(CloseBrowser, 0); if (browserSymbols) { DeleteObject(browserSymbols); browserSymbols = NULL; } }
 
 static void CheckControl(HWND window, const char *label, int id, BOOL checked, int x, int y, int width)

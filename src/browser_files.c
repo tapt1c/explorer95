@@ -278,6 +278,7 @@ static BOOL PerformFileOperation(Browser *browser, UINT operation, const char *s
         }
     } else result = SHFileOperationA(&action);
     browser->busy = FALSE; EnvFree(paired);
+    if (action.wFunc == FO_DELETE) BrowserRecycleBinsChanged();
     if (result && !action.fAnyOperationsAborted) BrowserError(browser->window, "Windows could not complete the file operation.", result);
     paths.destination = destination; paths.sources = sources; EnumWindows(RefreshMatching, (LPARAM)&paths);
     return !result && !action.fAnyOperationsAborted;
@@ -455,11 +456,17 @@ void BrowserFilesContext(Browser *browser, LPARAM coordinates)
 void BrowserFilesCommand(Browser *browser, int command)
 {
     char *paths;
-    if (browser->concealed) return;
+    if (browser->concealed || browser->busy) return;
     if (browser->native) {
+        if (browser->recycleBin && (command == ID_COPY || command == ID_CUT || command == ID_PASTE || command == ID_RENAME)) return;
         const char *verb = command == ID_COPY ? "copy" : command == ID_CUT ? "cut" : command == ID_PASTE ? "paste" :
             command == ID_DELETE ? "delete" : command == ID_FILE_PROPERTIES ? "properties" : command == ID_RENAME ? "rename" : NULL;
-        if (verb) NativeViewInvoke(browser->native, verb, command == ID_PASTE);
+        if (verb) {
+            browser->busy = TRUE;
+            NativeViewInvoke(browser->native, verb, command == ID_PASTE);
+            browser->busy = FALSE;
+            if (browser->recycleBin && command == ID_DELETE) BrowserRefresh(browser);
+        }
         else if (command == ID_SELECTALL) ListView_SetItemState(NativeViewList(browser->native), -1, LVIS_SELECTED, LVIS_SELECTED);
         BrowserUpdate(browser); return;
     }

@@ -25,7 +25,11 @@ typedef struct NativeSelection {
 BOOL NativeViewSelection(NativeView *view, NativeSelection *selection);
 char *NativeViewSelectedPaths(NativeView *view);
 IContextMenu *NativeViewSelectionContext(NativeView *view);
-HRESULT NativeEmptyRecycleBin(HWND owner);
+BOOL NativeViewIsRecycleBin(NativeView *view);
+void NativeViewStateHandled(NativeView *view);
+BOOL NativeViewTakeRefresh(NativeView *view);
+void NativeViewRequestRefresh(NativeView *view);
+HRESULT NativeEmptyRecycleBin(NativeView *view);
 void NativeViewSetHost(const EnvironmentHost *host);
 void DesktopBackgroundMenu(NativeView *view, POINT point, HWND owner);
 BOOL NativeViewMenuMessage(NativeView *view, UINT message, WPARAM wp, LPARAM lp);

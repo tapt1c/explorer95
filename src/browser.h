@@ -72,4 +72,5 @@ HWND BrowserOpenNamespace(LPCITEMIDLIST absolute);
 HWND BrowserOpenRequest(const FolderRequest *request);
 BOOL BrowserTranslate(MSG *message);
 void BrowserShutdown(void);
+void BrowserRecycleBinsChanged(void);
 #endif

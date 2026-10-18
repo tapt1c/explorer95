@@ -25,7 +25,8 @@ struct NativeView {
     IContextMenu2 *context;
     ShellNew *newMenu;
     LPITEMIDLIST absolute;
-    BOOL desktop, deleting;
+    BOOL desktop, deleting, recycleBin, statePending, refreshPending;
+    int operationDepth;
     BOOL (*navigate)(HWND, LPCITEMIDLIST);
     HBITMAP wallpaper;
     BOOL tiled, backgroundDirty, sized;
@@ -36,6 +37,26 @@ struct NativeView {
 static EnvironmentHost host;
 static const char property[] = "Explorer95.NativeView";
 static BOOL OpenSelection(NativeView *view);
+static void NotifyState(NativeView *view)
+{
+    if (view->navigate && !view->statePending) {
+        view->statePending = TRUE; PostMessageA(view->parent, WM_APP + 32, 0, 0);
+    }
+}
+void NativeViewRequestRefresh(NativeView *view)
+{
+    if (view && view->recycleBin && !view->refreshPending) {
+        view->refreshPending = TRUE; PostMessageA(view->parent, WM_APP + 34, 0, 0);
+    }
+}
+void NativeViewStateHandled(NativeView *view) { if (view) view->statePending = FALSE; }
+BOOL NativeViewIsRecycleBin(NativeView *view) { return view && view->recycleBin; }
+BOOL NativeViewTakeRefresh(NativeView *view)
+{
+    BOOL pending = view && view->refreshPending;
+    if (view) view->refreshPending = FALSE;
+    return pending && !view->operationDepth;
+}
 
 static BOOL SameGuid(REFIID a, REFIID b)
 {
@@ -173,7 +194,7 @@ static HRESULT STDMETHODCALLTYPE DefaultCommand(ICommDlgBrowser *self, IShellVie
 static HRESULT STDMETHODCALLTYPE SelectionChanged(ICommDlgBrowser *self, IShellView *shellView, ULONG change)
 {
     NativeView *view = DialogOwner(self); (void)shellView;
-    if (view->navigate && change == CDBOSC_SELCHANGE) PostMessageA(view->parent, WM_APP + 32, 0, 0);
+    if (change == CDBOSC_SELCHANGE) NotifyState(view);
     return S_OK;
 }
 static HRESULT STDMETHODCALLTYPE IncludeObject(ICommDlgBrowser *self, IShellView *shellView, LPCITEMIDLIST pidl)
@@ -253,6 +274,13 @@ BOOL NativeViewSelection(NativeView *view, NativeSelection *selection)
     ZeroMemory(selection, sizeof(*selection));
     if (!view || !view->view) return FALSE;
     selection->count = ListView_GetSelectedCount(view->list);
+    if (view->recycleBin && selection->count) {
+        int index = ListView_GetNextItem(view->list, -1, LVNI_SELECTED);
+        ListView_GetItemText(view->list, index, 0, selection->name, MAX_PATH);
+        lstrcpyA(selection->type, "Deleted item");
+        selection->capabilities = SFGAO_CANDELETE | SFGAO_HASPROPSHEET;
+        return TRUE;
+    }
     if (!selection->count || FAILED(IShellView_GetItemObject(view->view, SVGIO_SELECTION, &IID_IDataObject, (void **)&data))) return FALSE;
     selection->capabilities = SFGAO_FOLDER | SFGAO_FILESYSTEM | SFGAO_CANMOVE | SFGAO_CANCOPY | SFGAO_CANDELETE | SFGAO_CANRENAME | SFGAO_HASPROPSHEET;
     pidl = FolderSelectionFirstPidl(data, &selection->capabilities); IDataObject_Release(data);
@@ -301,7 +329,9 @@ static BOOL OpenSelection(NativeView *view)
     STGMEDIUM medium;
     char path[MAX_PATH];
     BOOL handled = FALSE;
-    if ((!view->desktop && !view->navigate) || !view->view || ListView_GetSelectedCount(view->list) != 1) return FALSE;
+    /* Recycled folders are deleted objects, not navigable locations. Leave
+     * their default action (usually Properties) to the installed shell. */
+    if (view->recycleBin || (!view->desktop && !view->navigate) || !view->view || ListView_GetSelectedCount(view->list) != 1) return FALSE;
     if (FAILED(IShellView_GetItemObject(view->view, SVGIO_SELECTION, &IID_IDataObject, (void **)&data))) return FALSE;
     {
         LPITEMIDLIST absolute = FolderSelectionPidl(data);
@@ -381,6 +411,9 @@ static void DeleteDesktopSelection(NativeView *view)
         result = SHFileOperationA(&operation);
         /* Cancel must not fall through to a second deletion attempt. */
         if (!result && !operation.fAnyOperationsAborted) NativeViewRefresh(view);
+        /* Some old views (and Wine) do not notify an already open bin when
+         * SHFileOperation recycles a desktop file. Refresh our hosts once. */
+        BrowserRecycleBinsChanged();
     } else NativeViewInvoke(view, "delete", FALSE);
     if (paths) HeapFree(GetProcessHeap(), 0, paths);
 }
@@ -435,12 +468,23 @@ static LRESULT CALLBACK Subclass(HWND window, UINT message, WPARAM wp, LPARAM lp
             return 0;
         }
     }
-    if (view->navigate && (message == WM_LBUTTONUP || message == WM_KEYUP || message == WM_NOTIFY))
-        PostMessageA(view->parent, WM_APP + 32, 0, 0);
+    if (message == WM_LBUTTONUP || message == WM_KEYUP) NotifyState(view);
+    if (window == view->window && message == WM_NOTIFY && ((NMHDR *)lp)->hwndFrom == view->list) {
+        UINT code = ((NMHDR *)lp)->code;
+        if (code == LVN_ITEMCHANGED || code == LVN_INSERTITEM || code == LVN_DELETEITEM || code == LVN_DELETEALLITEMS)
+            NotifyState(view);
+    }
     {
         BOOL shellDrag = view->desktop && window == view->window && message == WM_NOTIFY &&
             (((NMHDR *)lp)->code == LVN_BEGINDRAG || ((NMHDR *)lp)->code == LVN_BEGINRDRAG);
+        BOOL refresh = view->recycleBin && (message == WM_CONTEXTMENU ||
+            (window == view->list && message == WM_KEYDOWN && wp == VK_DELETE));
+        if (refresh) ++view->operationDepth;
         LRESULT result = CallWindowProcA(original, window, message, wp, lp);
+        /* The native context menu has now returned from InvokeCommand and
+         * its confirmation. Never refresh from WM_EXITMENULOOP: that runs
+         * before the shell command, including inside its modal confirmation. */
+        if (refresh && !--view->operationDepth) BrowserRecycleBinsChanged();
         if (shellDrag) DesktopIconsAfterShellAction(view->icons);
         return result;
     }
@@ -537,6 +581,16 @@ NativeView *NativeViewCreateEx(HWND parent, LPCITEMIDLIST absolute, BOOL desktop
     view->parent = parent; view->desktop = desktop;
     view->absolute = Combine(NULL, absolute);
     if (!view->absolute || FAILED(SHGetDesktopFolder(&root))) goto fail;
+    if (!desktop) {
+        LPITEMIDLIST bin = NULL;
+        if (SUCCEEDED(SHGetSpecialFolderLocation(parent, CSIDL_BITBUCKET, &bin))) {
+            UINT bytes = PidlBytes(bin), i;
+            view->recycleBin = bytes == PidlBytes(absolute);
+            for (i = 0; view->recycleBin && i < bytes; ++i)
+                if (((const BYTE *)bin)[i] != ((const BYTE *)absolute)[i]) view->recycleBin = FALSE;
+            CoTaskMemFree(bin);
+        }
+    }
     if (PidlBytes(absolute)) {
         if (FAILED(IShellFolder_BindToObject(root, absolute, NULL, &IID_IShellFolder, (void **)&view->folder))) goto fail;
     } else { view->folder = root; IShellFolder_AddRef(root); }
@@ -627,11 +681,13 @@ void NativeViewDesktopSettingsChanged(NativeView *view)
 void NativeViewRefresh(NativeView *view)
 {
     if (!view) return;
+    view->refreshPending = FALSE;
     if (view->icons && !DesktopIconsBeginRefresh(view->icons)) return;
     if (view->desktop) ReadWallpaper(view);
     IShellView_Refresh(view->view);
     DesktopIconsEndRefresh(view->icons);
     InvalidateRect(view->list, NULL, TRUE);
+    NotifyState(view);
 }
 void NativeViewArrange(NativeView *view, BOOL autoArrange)
 {
@@ -657,6 +713,16 @@ BOOL NativeViewInvoke(NativeView *view, const char *verb, BOOL background)
 {
     IContextMenu *context; CMINVOKECOMMANDINFO action; HRESULT result; HMENU menu;
     if (!view) return FALSE;
+    if (view->recycleBin && !background && !lstrcmpiA(verb, "delete")) {
+        /* Old shell extensions need numeric verbs and may silently accept
+         * unsupported strings. Let their own ListView choose the real Delete
+         * command, exactly as for a physical keypress, with native confirmation. */
+        if (view->deleting || !ListView_GetSelectedCount(view->list)) return FALSE;
+        view->deleting = TRUE;
+        SendMessageA(view->list, WM_KEYDOWN, VK_DELETE, 1);
+        view->deleting = FALSE;
+        return TRUE;
+    }
     result = IShellView_GetItemObject(view->view, background ? SVGIO_BACKGROUND : SVGIO_SELECTION, &IID_IContextMenu, (void **)&context);
     if (FAILED(result)) return FALSE;
     menu = CreatePopupMenu(); IContextMenu_QueryContextMenu(context, menu, 0, 1, 0x6fff, CMF_NORMAL);
@@ -664,45 +730,28 @@ BOOL NativeViewInvoke(NativeView *view, const char *verb, BOOL background)
     action.lpVerb = verb; action.nShow = SW_SHOWNORMAL; result = IContextMenu_InvokeCommand(context, &action);
     DestroyMenu(menu); IContextMenu_Release(context); return SUCCEEDED(result);
 }
-HRESULT NativeEmptyRecycleBin(HWND owner)
+HRESULT NativeEmptyRecycleBin(NativeView *view)
 {
-    typedef HRESULT (WINAPI *EmptyBin)(HWND, LPCSTR, DWORD);
-    EmptyBin empty = (EmptyBin)(void *)GetProcAddress(GetModuleHandleA("shell32.dll"), "SHEmptyRecycleBinA");
-    IShellFolder *desktop = NULL; IContextMenu *context = NULL; LPITEMIDLIST bin = NULL;
-    HMENU menu = NULL; CMINVOKECOMMANDINFO action; HRESULT result;
-    /* This export is newer than the Win95 baseline. Do not import it or
-     * suppress its standard confirmation/progress UI. Cancel is final. */
-    if (empty) return empty(owner, NULL, 0);
-    result = SHGetSpecialFolderLocation(owner, CSIDL_BITBUCKET, &bin);
-    if (SUCCEEDED(result)) result = SHGetDesktopFolder(&desktop);
-    if (SUCCEEDED(result)) {
-        LPCITEMIDLIST selected = bin;
-        result = IShellFolder_GetUIObjectOf(desktop, owner, 1, &selected, &IID_IContextMenu, NULL, (void **)&context);
-    }
-    if (SUCCEEDED(result)) {
-        menu = CreatePopupMenu();
-        result = menu ? IContextMenu_QueryContextMenu(context, menu, 0, 1, 0x6fff, CMF_NORMAL) : E_OUTOFMEMORY;
-        if (SUCCEEDED(result)) {
-            int i;
-            ZeroMemory(&action, sizeof(action)); action.cbSize = sizeof(action);
-            action.hwnd = owner; action.lpVerb = "empty"; action.nShow = SW_SHOWNORMAL;
-            /* Original shell extensions may only accept an integer verb.
-             * Identify it by its canonical name, never a localized caption. */
-            for (i = 0; i < GetMenuItemCount(menu); ++i) {
-                UINT id = GetMenuItemID(menu, i); char verb[80]; verb[0] = 0;
-                if (id && id < 0x7000 && SUCCEEDED(IContextMenu_GetCommandString(context, id - 1, GCS_VERBA, NULL, verb, sizeof(verb))) &&
-                    (!lstrcmpiA(verb, "empty") || !lstrcmpiA(verb, "emptyrecyclebin"))) {
-                    action.lpVerb = MAKEINTRESOURCEA(id - 1); break;
-                }
-            }
-            result = IContextMenu_InvokeCommand(context, &action);
-        }
-    }
-    if (menu) DestroyMenu(menu);
-    if (context) IContextMenu_Release(context);
-    if (desktop) IShellFolder_Release(desktop);
-    if (bin) CoTaskMemFree(bin);
-    return result;
+    UINT *saved; int i, count; HWND focus;
+    if (!view || !view->recycleBin || !view->list) return E_INVALIDARG;
+    if (view->deleting) return HRESULT_FROM_WIN32(ERROR_BUSY);
+    count = ListView_GetItemCount(view->list);
+    if (!count) return S_FALSE;
+    if (count < 0 || count > 65536) return E_OUTOFMEMORY;
+    saved = HeapAlloc(GetProcessHeap(), 0, (SIZE_T)count * sizeof(*saved));
+    if (!saved) return E_OUTOFMEMORY;
+    for (i = 0; i < count; ++i) saved[i] = ListView_GetItemState(view->list, i, LVIS_SELECTED | LVIS_FOCUSED);
+    focus = GetFocus();
+    ListView_SetItemState(view->list, -1, LVIS_SELECTED, LVIS_SELECTED);
+    SetFocus(view->list);
+    NativeViewInvoke(view, "delete", FALSE);
+    /* Cancellation leaves the list intact. Restore its original selection;
+     * do not try a second API/verb when the user declined the native dialog. */
+    if (ListView_GetItemCount(view->list) == count)
+        for (i = 0; i < count; ++i) ListView_SetItemState(view->list, i, saved[i], LVIS_SELECTED | LVIS_FOCUSED);
+    HeapFree(GetProcessHeap(), 0, saved);
+    if (IsWindow(focus)) SetFocus(focus);
+    return S_OK;
 }
 HWND OpenNativeFolder(LPCITEMIDLIST absolute) { return BrowserOpenNamespace(absolute); }
 void NativeViewSetHost(const EnvironmentHost *callbacks) { host = *callbacks; }

@@ -9,6 +9,7 @@ HWND BrowserOpenNamespace(LPCITEMIDLIST pidl)
 { (void)pidl; Check(FALSE, "native message probe must not open a folder"); return NULL; }
 BOOL EnvironmentLaunch(HWND owner, const char *path, const char *args, const char *directory)
 { (void)owner; (void)path; (void)args; (void)directory; Check(FALSE, "native message probe must not launch a program"); return FALSE; }
+void BrowserRecycleBinsChanged(void) { Check(FALSE, "native message probe must not change the Recycle Bin"); }
 void EnvironmentShowProperties(void) { Check(FALSE, "native message probe must not open settings"); }
 void EnvironmentArrangeDesktop(BOOL automatic) { (void)automatic; Check(FALSE, "native message probe must not arrange desktop"); }
 void EnvironmentToggleDesktopIcons(void) { Check(FALSE, "native message probe must not toggle desktop icons"); }
@@ -56,6 +57,8 @@ static void NativeViewMessageTests(void)
     Check(parent != NULL, "create hidden parent for native message probe");
     view = NativeViewCreateEx(parent, NULL, FALSE, 0, &rect);
     Check(view != NULL && NativeViewList(view) != NULL, "host the actual Shell32 ListView in the test process");
+    Check(!NativeViewIsRecycleBin(view) && NativeEmptyRecycleBin(view) == E_INVALIDARG,
+        "empty-bin command refuses a desktop or another namespace before touching its selection");
     list = NativeViewList(view);
     NativeViewSetNavigator(view, NativeProbeNavigate);
     nativeProbeOriginal = (WNDPROC)SetWindowLongPtrA(list, GWLP_WNDPROC, (LONG_PTR)NativeProbeProc);

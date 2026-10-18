@@ -872,8 +872,8 @@ static void PumpFor(DWORD duration)
     } while (GetTickCount() - started < duration);
 }
 #include "quick_launch_cases.h"
-#include "desktop_delete_cases.h"
 #include "browser_panes_cases.h"
+#include "desktop_delete_cases.h"
 static void WinKeyEvent(UINT key, BOOL up)
 {
     keybd_event((BYTE)key, (BYTE)(key == VK_RWIN ? 0x5c : 0x5b),
