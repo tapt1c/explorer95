@@ -9,10 +9,10 @@
 typedef struct NotifyPacket { DWORD signature, operation; NOTIFYICONDATAA icon; } NotifyPacket;
 /* Each extracted DLL has its own shared section, used only by its host and
  * the one hooked Explorer process. Never put process-local pointers here. */
-static struct { HWND sink, shell; UINT refresh; } shared __attribute__((section(".shared"), shared)) = {0};
+static struct { HWND sink, shell; HHOOK query, changes; UINT refresh; } shared __attribute__((section(".shared"), shared)) = {0};
 static HINSTANCE instance;
-static HHOOK hook;
 static BOOL busy, dirty;
+static DWORD snapshotStage;
 /* This separate freestanding DLL also needs the header's ZeroMemory helper. */
 void *memset(void *destination, int value, size_t count)
 {
@@ -48,16 +48,20 @@ static BOOL Snapshot(void)
     void *pointers[TRAY_MIRROR_LIMIT]; static TrayMirrorSnapshot snapshot;
     HWND notify = FindWindowExA(shared.shell, NULL, "TrayNotifyWnd", NULL);
     int i, j, count; BYTE imageHeader[32];
-    if (!notify || !Read((void *)GetWindowLongPtrA(notify, 0), &tray, sizeof(tray)) ||
-        !Read(tray.items, &array, sizeof(array)) || array.count < 0 || array.count > TRAY_MIRROR_LIMIT ||
+    snapshotStage = 1;
+    if (!notify || !Read((void *)GetWindowLongPtrA(notify, 0), &tray, sizeof(tray))) return FALSE;
+    snapshotStage = 2;
+    if (!Read(tray.items, &array, sizeof(array)) || array.count < 0 || array.count > TRAY_MIRROR_LIMIT ||
         (array.count && !Read(array.items, pointers, array.count * sizeof(*pointers)))) return FALSE;
     /* Validate the complete model before calling the image-list API. A foreign
      * shell with an incompatible layout must not produce a partial snapshot. */
+    snapshotStage = 3;
     for (i = 0; i < array.count; ++i) {
         ClassicItem *item = &records[i];
         if (!Read(pointers[i], item, sizeof(*item)) || item->cbSize != offsetof(NOTIFYICONDATAA, szTip) + 64 ||
             !IsWindow(item->owner) || (item->flags & ~7u) || (item->callback && item->callback < WM_USER) || item->image < -1) return FALSE;
     }
+    snapshotStage = 4;
     if (array.count && !Read(tray.images,imageHeader,sizeof(imageHeader))) return FALSE;
     count = array.count ? ImageList_GetImageCount(tray.images) : 0;
     for (i = 0; i < array.count; ++i) if (records[i].image >= count) return FALSE;
@@ -74,6 +78,7 @@ static BOOL Snapshot(void)
             if (item->image >= 0 && !icon) return FALSE;
             out->owner = item->owner; out->id = item->id; out->callback = item->callback;
             lstrcpynA(out->tip,item->tip,sizeof(out->tip));
+            snapshotStage = 5;
             okay = TrayMirrorPack(icon,&out->image); if (icon) DestroyIcon(icon);
             if (!okay) return FALSE;
         }
@@ -82,6 +87,29 @@ static BOOL Snapshot(void)
     } while (snapshot.offset < snapshot.total);
     return TRUE;
 }
+/* Query via the pre-dispatch hook, also used by the original Win95 tray
+ * enumeration technique. The reply proves that DLL injection and the shared
+ * handles actually work; a successful SendMessageTimeout alone proves neither.
+ * Keep accepted-change observation separate, after the stock tray returns. */
+static LRESULT CALLBACK Query(int code, WPARAM wp, LPARAM lp)
+{
+    if (code >= 0 && shared.sink) {
+        const CWPSTRUCT *message = (const CWPSTRUCT *)lp;
+        if (message->hwnd == shared.shell && message->message == shared.refresh) {
+            if (busy) dirty = TRUE;
+            else {
+                busy = TRUE;
+                if (!Snapshot() && !dirty) {
+                    TrayMirrorStatus status = {snapshotStage, ERROR_NOT_SUPPORTED};
+                    Deliver(TRAY_MIRROR_STATUS,&status,sizeof(status));
+                }
+                busy = FALSE;
+                if (dirty && PostMessageA(shared.sink,TRAY_MIRROR_RESYNC,(WPARAM)shared.shell,0)) dirty = FALSE;
+            }
+        }
+    }
+    return CallNextHookEx(shared.query,code,wp,lp);
+}
 static LRESULT CALLBACK Observe(int code, WPARAM wp, LPARAM lp)
 {
     if (code >= 0 && shared.sink) {
@@ -89,13 +117,10 @@ static LRESULT CALLBACK Observe(int code, WPARAM wp, LPARAM lp)
         if (message->hwnd == shared.shell) {
             if (busy) {
                 if (message->message == WM_COPYDATA && message->lResult) dirty = TRUE;
-                return CallNextHookEx(NULL,code,wp,lp);
+                return CallNextHookEx(shared.changes,code,wp,lp);
             }
             busy = TRUE;
-            if (message->message == shared.refresh && !Snapshot() && !dirty) {
-                DWORD error = ERROR_NOT_SUPPORTED; Deliver(TRAY_MIRROR_STATUS, &error, sizeof(error));
-            }
-            else if (message->message == WM_COPYDATA && message->lResult) {
+            if (message->message == WM_COPYDATA && message->lResult) {
                 const COPYDATASTRUCT *copy = (const COPYDATASTRUCT *)message->lParam;
                 const NotifyPacket *packet = copy ? copy->lpData : NULL;
                 const DWORD bytes = offsetof(NotifyPacket, icon) + offsetof(NOTIFYICONDATAA, szTip) + 64;
@@ -119,24 +144,30 @@ static LRESULT CALLBACK Observe(int code, WPARAM wp, LPARAM lp)
             if (dirty && shared.sink && PostMessageA(shared.sink,TRAY_MIRROR_RESYNC,(WPARAM)shared.shell,0)) dirty = FALSE;
         }
     }
-    return CallNextHookEx(NULL, code, wp, lp);
+    return CallNextHookEx(shared.changes, code, wp, lp);
 }
 __declspec(dllexport) BOOL WINAPI TrayMirrorStart(HWND sink, HWND shell)
 {
     DWORD thread, process;
-    if (hook || !IsWindow(sink) || !IsWindow(shell)) return FALSE;
+    if (shared.query || shared.changes || !IsWindow(sink) || !IsWindow(shell)) return FALSE;
     thread = GetWindowThreadProcessId(shell, &process);
     if (!thread) return FALSE;
     shared.sink = sink; shared.shell = shell; shared.refresh = RegisterWindowMessageA(TRAY_MIRROR_REFRESH);
     if (!shared.refresh) return FALSE;
-    hook = SetWindowsHookExA(WH_CALLWNDPROCRET, Observe, instance, thread);
-    if (!hook) { shared.sink = shared.shell = NULL; return FALSE; }
+    shared.query = SetWindowsHookExA(WH_CALLWNDPROC, Query, instance, thread);
+    if (shared.query) shared.changes = SetWindowsHookExA(WH_CALLWNDPROCRET, Observe, instance, thread);
+    if (!shared.query || !shared.changes) {
+        DWORD error = GetLastError();
+        if (shared.query) UnhookWindowsHookEx(shared.query);
+        shared.query = NULL; shared.sink = shared.shell = NULL; SetLastError(error); return FALSE;
+    }
     return TRUE;
 }
 __declspec(dllexport) void WINAPI TrayMirrorStop(void)
 {
     shared.sink = NULL; shared.shell = NULL;
-    if (hook) { UnhookWindowsHookEx(hook); hook = NULL; }
+    if (shared.query) { UnhookWindowsHookEx(shared.query); shared.query = NULL; }
+    if (shared.changes) { UnhookWindowsHookEx(shared.changes); shared.changes = NULL; }
 }
 BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID reserved)
 { (void)reserved; if (reason == DLL_PROCESS_ATTACH) instance = module; return TRUE; }

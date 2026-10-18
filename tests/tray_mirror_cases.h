@@ -6,6 +6,8 @@ typedef struct { int count; void **items; } MirrorArray;
 typedef struct { DWORD unused[7]; void *array; HIMAGELIST images; } MirrorState;
 typedef struct { DWORD signature, operation; NOTIFYICONDATAA icon; } MirrorEvent;
 static int mirrorSnapshots, mirrorEvents, mirrorStatuses;
+static TrayMirrorStatus mirrorStatus;
+static int mirrorSnapshotsAtDispatch;
 static BOOL mirrorAccept = TRUE;
 static UINT mirrorOperation;
 static HICON mirrorImage;
@@ -77,13 +79,17 @@ static LRESULT CALLBACK MirrorSinkProc(HWND window, UINT message, WPARAM wp, LPA
                 if (mirrorImage) DestroyIcon(mirrorImage);
                 mirrorImage = TrayMirrorUnpack(&event->item.image);
             }
-        } else if (copy->dwData == TRAY_MIRROR_STATUS) ++mirrorStatuses;
+        } else if (copy->dwData == TRAY_MIRROR_STATUS) {
+            Check(copy->cbData == sizeof(mirrorStatus),"tray errors carry a bounded stage and error code");
+            CopyMemory(&mirrorStatus,copy->lpData,sizeof(mirrorStatus)); ++mirrorStatuses;
+        }
         return TRUE;
     }
     return DefWindowProcA(window, message, wp, lp);
 }
 static LRESULT CALLBACK MirrorSourceProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
 {
+    if (message == RegisterWindowMessageA(TRAY_MIRROR_REFRESH)) mirrorSnapshotsAtDispatch = mirrorSnapshots;
     if (message == WM_COPYDATA) return mirrorAccept;
     return DefWindowProcA(window, message, wp, lp);
 }
@@ -124,12 +130,19 @@ static void TrayMirrorTests(void)
     SendMessageA(source, refresh, 0, 0);
     Check(mirrorSnapshots == 1 && !lstrcmpA(mirrorTip, "Existing volume fixture") && mirrorImage,
         "initial snapshot retrieves pre-existing notification text and an owned image without restarting its application");
+    Check(mirrorSnapshotsAtDispatch == 1,"explicit tray queries execute in the pre-dispatch hook before the original window procedure");
     Check(MirrorImageMatches(mirrorImage,FALSE), "initial notification pixels and transparency mask survive serialization");
     array.count = TRAY_MIRROR_LIMIT + 1; SendMessageA(source, refresh, 0, 0);
     Check(mirrorStatuses == 1 && mirrorSnapshots == 1, "oversized classic tray arrays report failure without publishing a partial snapshot");
     array.count = 1; array.items = (void **)1; SendMessageA(source, refresh, 0, 0);
-    Check(mirrorStatuses == 2 && mirrorSnapshots == 1, "invalid classic tray pointers are rejected without dereferencing them");
+    Check(mirrorStatuses == 2 && mirrorSnapshots == 1 && mirrorStatus.stage == 2 && mirrorStatus.error == ERROR_NOT_SUPPORTED,
+        "invalid classic tray pointers report their failing stage without dereferencing them");
     array.items = &pointer;
+    record.size = 0; SendMessageA(source,refresh,0,0);
+    Check(mirrorStatus.stage == 3 && mirrorSnapshots == 1,"incompatible classic icon records report a distinct ABI failure");
+    record.size = offsetof(NOTIFYICONDATAA,szTip) + 64;
+    { HIMAGELIST images = state.images; state.images = (HIMAGELIST)1; SendMessageA(source,refresh,0,0); state.images = images;
+      Check(mirrorStatus.stage == 4 && mirrorSnapshots == 1,"invalid image-list memory is rejected before invoking Common Controls"); }
     ZeroMemory(&event, sizeof(event)); event.signature = 0x34753423UL; event.icon.cbSize = record.size;
     event.icon.hWnd = sink; event.icon.uID = 73; event.icon.uFlags = NIF_TIP; lstrcpyA(event.icon.szTip, "Changed volume fixture");
     copy.dwData = 1; copy.cbData = offsetof(MirrorEvent, icon) + event.icon.cbSize; copy.lpData = &event;

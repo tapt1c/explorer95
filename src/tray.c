@@ -5,6 +5,7 @@
 #include "settings_internal.h"
 #include <tlhelp32.h>
 #include "tray_mirror.h"
+#include "render_trace.h"
 
 #define ICON_LIMIT 64
 #define TRAY_SIGNATURE 0x34753423UL
@@ -30,6 +31,8 @@ static DWORD mirrorRetry;
 static DWORD mirrorFault;
 static BOOL mirrorWarned;
 static BOOL mirrorPending;
+static BOOL mirrorReplied;
+static DWORD mirrorStage;
 static DWORD mirrorNext, mirrorTotal;
 
 static void MirrorClose(void)
@@ -46,26 +49,38 @@ static void MirrorClose(void)
 static BOOL MirrorOpen(HWND shell)
 {
     HRSRC resource; HGLOBAL loaded; DWORD size, written = 0; DWORD_PTR result; HANDLE file; TrayMirrorStartProc start;
+    char dllPath[MAX_PATH]; int length;
+    mirrorStage = 10; mirrorReplied = FALSE;
     resource = FindResourceA(env.host.instance, MAKEINTRESOURCEA(TRAY_MIRROR_RESOURCE), RT_RCDATA);
     if (!resource || !(size = SizeofResource(env.host.instance, resource)) ||
         !(loaded = LoadResource(env.host.instance, resource)) || !LockResource(loaded) ||
-        !GetTempFileNameA(env.dataDir, "E95", 0, mirrorPath)) return FALSE;
+        !GetTempFileNameA(env.dataDir, "E95", 0, mirrorPath)) goto fail;
     file = CreateFileA(mirrorPath, GENERIC_WRITE, 0, NULL, TRUNCATE_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (file == INVALID_HANDLE_VALUE) goto fail;
     { BOOL okay = WriteFile(file, LockResource(loaded), size, &written, NULL); CloseHandle(file);
       if (!okay || written != size) goto fail; }
-    mirrorModule = LoadLibraryA(mirrorPath); if (!mirrorModule) goto fail;
+    /* Give the injected module an ordinary short DLL name. Reserve the TMP
+     * first, then rename without replacing any pre-existing DLL. */
+    length = lstrlenA(mirrorPath); if (length < 4) goto fail;
+    lstrcpyA(dllPath,mirrorPath); lstrcpyA(dllPath + length - 4,".DLL");
+    if (!MoveFileA(mirrorPath,dllPath)) goto fail;
+    lstrcpyA(mirrorPath,dllPath);
+    mirrorStage = 11; mirrorModule = LoadLibraryA(mirrorPath); if (!mirrorModule) goto fail;
     start = (TrayMirrorStartProc)(UINT_PTR)GetProcAddress(mirrorModule, "TrayMirrorStart");
     mirrorStop = (TrayMirrorStopProc)(UINT_PTR)GetProcAddress(mirrorModule, "TrayMirrorStop");
+    mirrorStage = 12;
     if (!start || !mirrorStop || !start(env.bar, shell)) goto fail;
     mirrorShell = shell;
     /* WH_CALLWNDPROCRET observes sent messages, not posted queue entries.
      * The wait must allow the hook's synchronous WM_COPYDATA reply. */
+    mirrorStage = 13;
     if (!SendMessageTimeoutA(shell, RegisterWindowMessageA(TRAY_MIRROR_REFRESH), 0, 0,
         SMTO_ABORTIFHUNG, 1000, &result)) goto fail;
+    if (!mirrorReplied) { mirrorStage = 14; SetLastError(ERROR_DLL_INIT_FAILED); goto fail; }
     return TRUE;
 fail:
-    { DWORD error = GetLastError(); MirrorClose(); SetLastError(error ? error : ERROR_NOT_SUPPORTED); return FALSE; }
+    { DWORD error = GetLastError(); if (!error) error = ERROR_NOT_SUPPORTED;
+      RenderTraceTray(mirrorStage,error,0); MirrorClose(); SetLastError(error); return FALSE; }
 }
 
 typedef struct TrayPolicy { char module[64], kind[80], label[64]; UINT id; int mode; } TrayPolicy;
@@ -328,14 +343,18 @@ LRESULT TrayMirrorCopyData(HWND source, const COPYDATASTRUCT *copy)
         for (i = 0; i < snapshot->count; ++i)
             if (!MirrorReceive(NIM_ADD,NIF_ICON | NIF_TIP | NIF_MESSAGE,&snapshot->items[i])) return FALSE;
         mirrorNext += snapshot->count;
+        mirrorReplied = TRUE; mirrorFault = 0;
+        RenderTraceTray(20,0,snapshot->total);
         if (mirrorNext == mirrorTotal) {
             for (i = 0; i < ICON_LIMIT; ++i) if (icons[i].mirrored && !icons[i].snapshotSeen) DeleteIcon(&icons[i]);
             mirrorNext = mirrorTotal = 0;
         }
         EnvLayoutBar(); return TRUE;
     }
-    if (copy->dwData == TRAY_MIRROR_STATUS && copy->lpData && copy->cbData == sizeof(DWORD)) {
-        CopyMemory(&mirrorFault, copy->lpData, sizeof(mirrorFault)); return TRUE;
+    if (copy->dwData == TRAY_MIRROR_STATUS && copy->lpData && copy->cbData == sizeof(TrayMirrorStatus)) {
+        const TrayMirrorStatus *status = copy->lpData;
+        mirrorReplied = TRUE; mirrorFault = status->error; mirrorStage = status->stage;
+        RenderTraceTray(mirrorStage,mirrorFault,0); return TRUE;
     }
     return FALSE;
 }
@@ -361,8 +380,9 @@ void TrayPrune(void)
         }
     }
     if (mirrorFault && !mirrorWarned) {
-        DWORD error = mirrorFault; mirrorFault = 0; mirrorWarned = TRUE;
-        EnvError(env.bar, "Cannot read the classic Windows 95 notification area. New notifications may still appear.", error);
+        char text[240]; DWORD error = mirrorFault; mirrorFault = 0; mirrorWarned = TRUE;
+        wsprintfA(text,"Cannot mirror the Windows 95 notification area (step %lu).\r\nRun with --trace-render to record details in EX95REND.LOG.",mirrorStage);
+        EnvError(env.bar,text,error);
     }
     for (i = 0; i < ICON_LIMIT; ++i) if (icons[i].owner && !IsWindow(icons[i].owner)) {
         DeleteIcon(&icons[i]); changed = TRUE;

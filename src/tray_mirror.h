@@ -9,7 +9,8 @@
 #define TRAY_MIRROR_RESYNC (WM_APP + 35)
 #define TRAY_MIRROR_BATCH 8
 #define TRAY_MIRROR_RESOURCE 201
-#define TRAY_MIRROR_REFRESH "Explorer95.TrayMirror.Refresh.2"
+#define TRAY_MIRROR_REFRESH "Explorer95.TrayMirror.Refresh.3"
+typedef struct TrayMirrorStatus { DWORD stage, error; } TrayMirrorStatus;
 typedef struct TrayMirrorImage {
     DWORD present, color[16 * 16]; BYTE mask[16 * 4];
 } TrayMirrorImage;
