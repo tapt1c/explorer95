@@ -559,13 +559,25 @@ explorer95.exe --settings="C:\EX95TEST\Explorer95.ini"
 
 ## Расстановка значков рабочего стола
 
+- Пустой WM_LBUTTONDBLCLK в desktop ListView поглощается до исходной процедуры
+  Shell32: нельзя передавать его как активацию прежнего выделения/desktop owner.
+  Обычный выбор, rectangle selection, двойной клик по значку и Enter остаются
+  штатными. Проверка в NativeViewMessageTests наблюдает реальные NM_DBLCLK,
+  foreground+shadow, отдельный erase без PumpFor и resize с RDW_ERASENOW.
+
 - Рабочий стол остаётся системным `IShellView`. `native_view` связывает его ListView
   с `DesktopIcons`, а `desktop_icons` отвечает за перенос, сетку и файл позиций.
   Не переносите эту логику в файловый Проводник и не заменяйте системные значки
   собственным списком файлов: должны сохраниться виртуальные объекты Shell32.
-- Подписи desktop остаются текстом системного ListView. В его WM_ERASEBKGND
-  сначала копируйте сохранённый фон, затем PaintDesktopLabelShadows: обычная
-  Win95 GDI рисует чёрную тень до штатного белого текста. Не требуйте NM_CUSTOMDRAW
+- Подписи desktop остаются текстом системного ListView. Desktop WM_ERASEBKGND
+  только возвращает TRUE: он не должен стирать готовые значки или оставлять
+  на экране один фон с тенями до следующего WM_PAINT. В WM_PAINT NativeView
+  собирает фон, PaintDesktopLabelShadows и штатный foreground через исходную
+  процедуру WM_PRINTCLIENT в сохраняемом desktopFrame, затем копирует только
+  invalidated-область. Обычная Win95 GDI рисует чёрную тень до штатного белого текста.
+  Прямой путь при нехватке буфера сохраняется; память кадра освобождается при
+  уничтожении view. WM_PAINT с переданным HDC не запускает новый BeginPaint.
+  WS_CLIPCHILDREN у desktop ListView защищает нативный редактор имени. Не требуйте NM_CUSTOMDRAW
   или DrawShadowText из более новых Common Controls и не накладывайте собственный
   белый текст поверх готовых native glyphs. Выделенные подписи пропускаются,
   изменение LVIS_SELECTED инвалидирует только их LVIR_LABEL с erase.

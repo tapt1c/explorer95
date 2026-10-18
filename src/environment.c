@@ -797,6 +797,7 @@ static LRESULT CALLBACK DesktopProc(HWND window, UINT message, WPARAM wp, LPARAM
 {
     RenderTraceEvent("desktop", window, message, wp, lp);
     if (env.closing) return DefWindowProcA(window, message, wp, lp);
+    if (message == WM_LBUTTONDBLCLK) return 0;
     if (message == WM_WINDOWPOSCHANGING) {
         WINDOWPOS *pos = (WINDOWPOS *)lp;
         if (!(pos->flags & SWP_NOZORDER)) {

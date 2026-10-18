@@ -33,7 +33,8 @@ struct NativeView {
     BOOL (*navigate)(HWND, LPCITEMIDLIST);
     HBITMAP wallpaper;
     BOOL tiled, backgroundDirty, sized;
-    PaintBuffer background;
+    PaintBuffer background, desktopFrame;
+    BOOL paintingDesktop, desktopRedrawDisabled;
     DesktopIcons *icons;
 };
 
@@ -269,6 +270,28 @@ static void PaintBackground(NativeView *view, HDC target, HWND window)
     PaintBufferEnd(&view->background, target, &rect);
 }
 
+/* Win95's native view can erase during sizing without painting its icons yet.
+ * Keep the last complete screen image until background, shadows and native
+ * foreground have all been painted into one retained surface. WM_PRINTCLIENT
+ * is the original Win95 control painting contract, also used by layout restore. */
+static void PaintDesktopFrame(NativeView *view, HWND window)
+{
+    PAINTSTRUCT paint; RECT area; HDC target=BeginPaint(window,&paint),dc; int saved;
+    if(!target) { EndPaint(window,&paint); return; }
+    if(view->paintingDesktop || view->desktopRedrawDisabled) { EndPaint(window,&paint); return; }
+    view->paintingDesktop=TRUE; GetClientRect(window,&area);
+    dc=PaintBufferBegin(&view->desktopFrame,target,&area); saved=SaveDC(dc);
+    if(saved) IntersectClipRect(dc,paint.rcPaint.left,paint.rcPaint.top,paint.rcPaint.right,paint.rcPaint.bottom);
+    PaintBackground(view,dc,window); PaintDesktopLabelShadows(window,dc);
+    /* Call the saved shell/control procedure rather than our WM_PAINT entry.
+     * A control that forwards printing as WM_PAINT with an HDC still reaches
+     * its own procedure through the nonzero-wParam path below. */
+    CallWindowProcA(view->oldList,window,WM_PRINTCLIENT,(WPARAM)dc,PRF_CLIENT);
+    if(saved) RestoreDC(dc,saved);
+    if(dc!=target) PaintBufferEnd(&view->desktopFrame,target,&paint.rcPaint);
+    view->paintingDesktop=FALSE; EndPaint(window,&paint);
+}
+
 /* Route filesystem and virtual folders through our browser. Shell IDList Array
  * carries My Computer/Recycle Bin without relying on a filesystem path. */
 BOOL NativeViewSelection(NativeView *view, NativeSelection *selection)
@@ -440,6 +463,9 @@ static LRESULT CALLBACK Subclass(HWND window, UINT message, WPARAM wp, LPARAM lp
         if (message == WM_LBUTTONDBLCLK) {
             LVHITTESTINFO info; ZeroMemory(&info, sizeof(info)); info.pt.x = (short)LOWORD(lp); info.pt.y = (short)HIWORD(lp);
             hit = ListView_HitTest(window, &info) >= 0;
+            /* Win95 DefView treats an empty double click as a shell action.
+             * It must not activate a stale selection or its desktop owner. */
+            if(view->desktop && !hit) return 0;
         }
         if (hit && OpenSelection(view)) return 0;
     }
@@ -450,7 +476,10 @@ static LRESULT CALLBACK Subclass(HWND window, UINT message, WPARAM wp, LPARAM lp
         if (message == LVM_INSERTITEMA || message == LVM_INSERTITEMW || message == LVM_DELETEITEM ||
             message == LVM_DELETEALLITEMS || message == LVM_SETITEMTEXTA || message == LVM_SETITEMTEXTW || message == WM_SIZE)
             { view->fileHover=-1; DesktopIconsChanged(view->icons); }
-        if (message == WM_ERASEBKGND) { PaintBackground(view, (HDC)wp, window); PaintDesktopLabelShadows(window, (HDC)wp); return TRUE; }
+        /* A separate erase must never expose wallpaper plus black shadows
+         * while the native foreground is still waiting for WM_PAINT. */
+        if (message == WM_ERASEBKGND) return TRUE;
+        if (message == WM_PAINT && !wp) { PaintDesktopFrame(view,window); return 0; }
         if (message == WM_CONTEXTMENU) {
             POINT point;
             LVHITTESTINFO hit;
@@ -488,8 +517,13 @@ static LRESULT CALLBACK Subclass(HWND window, UINT message, WPARAM wp, LPARAM lp
             (((NMHDR *)lp)->code == LVN_BEGINDRAG || ((NMHDR *)lp)->code == LVN_BEGINRDRAG);
         BOOL refresh = view->recycleBin && (message == WM_CONTEXTMENU ||
             (window == view->list && message == WM_KEYDOWN && wp == VK_DELETE));
+        BOOL desktopRedraw=view->desktop && window==view->list && message==WM_SETREDRAW;
+        if(desktopRedraw && !wp) view->desktopRedrawDisabled=TRUE;
         if (refresh) ++view->operationDepth;
         LRESULT result = CallWindowProcA(original, window, message, wp, lp);
+        if(desktopRedraw && wp) {
+            view->desktopRedrawDisabled=FALSE; InvalidateRect(window,NULL,TRUE);
+        }
         /* The native context menu has now returned from InvokeCommand and
          * its confirmation. Never refresh from WM_EXITMENULOOP: that runs
          * before the shell command, including inside its modal confirmation. */
@@ -618,6 +652,7 @@ NativeView *NativeViewCreateEx(HWND parent, LPCITEMIDLIST absolute, BOOL desktop
         SetPropA(view->list, property, view);
         view->oldList = (WNDPROC)SetWindowLongPtrA(view->list, GWLP_WNDPROC, (LONG_PTR)Subclass);
         if (desktop) {
+            SetWindowLongA(view->list,GWL_STYLE,GetWindowLongA(view->list,GWL_STYLE)|WS_CLIPCHILDREN);
             ReadWallpaper(view);
             ListView_SetBkColor(view->list, CLR_NONE);
             ListView_SetTextBkColor(view->list, CLR_NONE);
@@ -661,7 +696,7 @@ void NativeViewDestroy(NativeView *view)
     if (view->desktop) SetPropA(view->parent, "Explorer95.ViewDestroyStage", (HANDLE)4);
     if (view->folder) IShellFolder_Release(view->folder);
     if (view->wallpaper) DeleteObject(view->wallpaper);
-    PaintBufferFree(&view->background);
+    PaintBufferFree(&view->background); PaintBufferFree(&view->desktopFrame);
     Release(&view->browser);
 }
 

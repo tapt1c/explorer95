@@ -130,6 +130,71 @@ static void NativeShellCommandTests(HWND parent)
     DestroyWindow(list);
 }
 
+static WNDPROC nativeDesktopOriginal;
+static int nativeBackgroundClicks;
+static LRESULT CALLBACK NativeDesktopObserver(HWND window, UINT message, WPARAM wp, LPARAM lp)
+{
+    if(message==WM_NOTIFY && ((NMHDR *)lp)->code==NM_DBLCLK) ++nativeBackgroundClicks;
+    return CallWindowProcA(nativeDesktopOriginal,window,message,wp,lp);
+}
+static DWORD NativeDesktopPixels(HWND list, const RECT *area)
+{
+    HDC dc=GetDC(list); DWORD hash=2166136261U; int x,y;
+    for(y=area->top;y<area->bottom;y+=2) for(x=area->left;x<area->right;x+=2)
+        hash=(hash^GetPixel(dc,x,y))*16777619U;
+    ReleaseDC(list,dc); return hash;
+}
+static void NativeDesktopPaintTests(HWND parent)
+{
+    RECT area={0,0,320,200},item; NativeView *view; HWND list; HDC dc; DWORD pixels; LPARAM empty;
+    view=NativeViewCreateEx(parent,NULL,TRUE,0,&area);
+    Check(view && NativeViewList(view),"host a real desktop ListView for background input and paint regression");
+    list=NativeViewList(view); ShowWindow(parent,SW_SHOW); UpdateWindow(parent);
+    RedrawWindow(list,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_UPDATENOW);
+    Check(ListView_GetItemCount(list)>0 && ListView_GetItemRect(list,0,&item,LVIR_BOUNDS),"desktop paint fixture contains an actual icon and its native label");
+    nativeDesktopOriginal=(WNDPROC)SetWindowLongPtrA(NativeViewWindow(view),GWLP_WNDPROC,(LONG_PTR)NativeDesktopObserver);
+    nativeBackgroundClicks=0; empty=MAKELPARAM(300,180);
+    { LVHITTESTINFO hit; ZeroMemory(&hit,sizeof(hit)); hit.pt.x=300; hit.pt.y=180;
+      Check(ListView_HitTest(list,&hit)<0,"desktop double click fixture uses empty space"); }
+    SendMessageA(list,WM_LBUTTONDOWN,MK_LBUTTON,empty); SendMessageA(list,WM_LBUTTONUP,0,empty);
+    SendMessageA(list,WM_LBUTTONDBLCLK,MK_LBUTTON,empty); SendMessageA(list,WM_LBUTTONUP,0,empty);
+    Check(!nativeBackgroundClicks,"empty desktop double click never reaches the shell's default activation handler");
+    RedrawWindow(list,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_UPDATENOW);
+    { RECT label; int x,y,foreground=0,shadow=0; HDC image=GetDC(list);
+      ListView_GetItemRect(list,0,&label,LVIR_LABEL);
+      for(y=label.top;y<label.bottom;++y) for(x=label.left;x<label.right;++x) {
+          COLORREF color=GetPixel(image,x,y); if(color==GetSysColor(COLOR_WINDOW)) ++foreground; if(color==RGB(0,0,0)) ++shadow;
+      }
+      ReleaseDC(list,image);
+      Check(foreground>5 && shadow>5,"buffered native desktop paints both foreground text and its shadow, not just the background"); }
+    pixels=NativeDesktopPixels(list,&item);
+    dc=GetDC(list); SendMessageA(list,WM_ERASEBKGND,(WPARAM)dc,0); ReleaseDC(list,dc);
+    /* Inspect immediately, before WM_PAINT: the video shows an intermediate
+     * frame containing only the shadow while all native icons are erased. */
+    Check(NativeDesktopPixels(list,&item)==pixels,"standalone desktop erase preserves the finished icon, text and shadow until the next complete paint");
+    RedrawWindow(list,&item,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_UPDATENOW);
+    Check(NativeDesktopPixels(list,&item)==pixels,"partial desktop repaint reconstructs the same icon, native text and shadow");
+    { int height; BOOL retained=TRUE,complete=TRUE;
+      for(height=140;height<=200;height+=60) {
+          area.bottom=height; NativeViewResize(view,&area);
+          RedrawWindow(NativeViewWindow(view),NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_ERASENOW|RDW_ALLCHILDREN);
+          retained &= NativeDesktopPixels(list,&item)==pixels;
+          RedrawWindow(NativeViewWindow(view),NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_UPDATENOW|RDW_ALLCHILDREN);
+          complete &= NativeDesktopPixels(list,&item)==pixels;
+      }
+      Check(retained && complete,"desktop resizing preserves complete icon pixels through erase-only and final native paint passes"); }
+    SendMessageA(list,WM_SETREDRAW,FALSE,0);
+    { RECT marker={item.left+8,item.top+8,item.left+16,item.top+16}; HBRUSH ink=CreateSolidBrush(RGB(249,5,233)); DWORD paused;
+      dc=GetDC(list); FillRect(dc,&marker,ink); ReleaseDC(list,dc); DeleteObject(ink); paused=NativeDesktopPixels(list,&item);
+      InvalidateRect(list,&item,TRUE); SendMessageA(list,WM_PAINT,0,0);
+      Check(NativeDesktopPixels(list,&item)==paused,"desktop buffering honors native WM_SETREDRAW holds instead of forcing PrintClient during shell updates"); }
+    SendMessageA(list,WM_SETREDRAW,TRUE,0); RedrawWindow(list,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_UPDATENOW);
+    Check(NativeDesktopPixels(list,&item)==pixels,"resuming native redraw reconstructs the complete desktop frame");
+    SaveScreen("build/desktop-native-frame.bmp");
+    SetWindowLongPtrA(NativeViewWindow(view),GWLP_WNDPROC,(LONG_PTR)nativeDesktopOriginal);
+    NativeViewDestroy(view); ShowWindow(parent,SW_HIDE);
+}
+
 static void NativeViewMessageTests(void)
 {
     HRESULT ole = OleInitialize(NULL); HWND parent, list; NativeView *view; RECT rect = {0, 0, 320, 200};
@@ -162,5 +227,6 @@ static void NativeViewMessageTests(void)
     NativeViewResize(view, &rect);
     Check(nativePositionCalls == 1, "unchanged native geometry does not move or invalidate the view again");
     SetWindowLongPtrA(NativeViewWindow(view), GWLP_WNDPROC, (LONG_PTR)nativePositionOriginal);
-    NativeViewSetNavigator(view, NULL); NativeViewDestroy(view); DestroyWindow(parent); OleUninitialize();
+    NativeViewSetNavigator(view, NULL); NativeViewDestroy(view);
+    NativeDesktopPaintTests(parent); DestroyWindow(parent); OleUninitialize();
 }
