@@ -13,6 +13,7 @@
 #include "desktop_icons.h"
 #include "folder_open.h"
 #include "shell_new.h"
+#include "file_drag.h"
 
 struct NativeView {
     IShellBrowser browser;
@@ -27,6 +28,8 @@ struct NativeView {
     LPITEMIDLIST absolute;
     BOOL desktop, deleting, recycleBin, statePending, refreshPending;
     int operationDepth;
+    BOOL fileDragging; int fileHover; BOOL fileHoverTarget; char fileHoverPath[MAX_PATH];
+    FileDrop *fileDrop; int dropIndex;
     BOOL (*navigate)(HWND, LPCITEMIDLIST);
     HBITMAP wallpaper;
     BOOL tiled, backgroundDirty, sized;
@@ -446,7 +449,7 @@ static LRESULT CALLBACK Subclass(HWND window, UINT message, WPARAM wp, LPARAM lp
         if (DesktopIconsMessage(view->icons, message, wp, lp)) return message == WM_ERASEBKGND;
         if (message == LVM_INSERTITEMA || message == LVM_INSERTITEMW || message == LVM_DELETEITEM ||
             message == LVM_DELETEALLITEMS || message == LVM_SETITEMTEXTA || message == LVM_SETITEMTEXTW || message == WM_SIZE)
-            DesktopIconsChanged(view->icons);
+            { view->fileHover=-1; DesktopIconsChanged(view->icons); }
         if (message == WM_ERASEBKGND) { PaintBackground(view, (HDC)wp, window); PaintDesktopLabelShadows(window, (HDC)wp); return TRUE; }
         if (message == WM_CONTEXTMENU) {
             POINT point;
@@ -637,6 +640,7 @@ NativeView *NativeViewCreate(HWND parent, LPCITEMIDLIST absolute, BOOL desktop)
 void NativeViewDestroy(NativeView *view)
 {
     if (!view) return;
+    FileDropRevoke(view->fileDrop); view->fileDrop=NULL;
     if (view->icons) { DesktopIcons *icons = view->icons; view->icons = NULL; DesktopIconsDestroy(icons); }
     if (IsWindow(view->list) && view->oldList) {
         SetWindowLongPtrA(view->list, GWLP_WNDPROC, (LONG_PTR)view->oldList);
@@ -686,7 +690,7 @@ void NativeViewDesktopSettingsChanged(NativeView *view)
 }
 void NativeViewRefresh(NativeView *view)
 {
-    if (!view) return;
+    if (!view || view->fileDragging) return;
     view->refreshPending = FALSE;
     if (view->icons && !DesktopIconsBeginRefresh(view->icons)) return;
     if (view->desktop) ReadWallpaper(view);
@@ -705,11 +709,92 @@ void NativeViewArrange(NativeView *view, BOOL autoArrange)
     SetWindowLongPtrA(view->list, GWL_STYLE, style);
     if (autoArrange) ListView_Arrange(view->list, LVA_DEFAULT);
 }
+static BOOL DesktopFileTarget(void *context, POINT screen)
+{
+    NativeView *view=context; HWND hitWindow=WindowFromPoint(screen); LVHITTESTINFO hit;
+    IEnumIDList *items=NULL; LPITEMIDLIST item; ULONG fetched; char label[MAX_PATH];
+    if(hitWindow && hitWindow!=view->window && hitWindow!=view->list && !IsChild(view->window,hitWindow)) return TRUE;
+    ScreenToClient(view->list,&screen); ZeroMemory(&hit,sizeof(hit)); hit.pt=screen;
+    if(ListView_HitTest(view->list,&hit)<0 || (ListView_GetItemState(view->list,hit.iItem,LVIS_SELECTED)&LVIS_SELECTED)) return FALSE;
+    if(view->fileHover==hit.iItem) return view->fileHoverTarget;
+    view->fileHover=hit.iItem; view->fileHoverTarget=FALSE; view->fileHoverPath[0]=0;
+    ListView_GetItemText(view->list,hit.iItem,0,label,sizeof(label));
+    /* Match through public shell enumeration; ListView lParam is private ABI.
+     * Enumerate only this desktop after entering a new item, never its drives. */
+    if(SUCCEEDED(IShellFolder_EnumObjects(view->folder,view->parent,SHCONTF_FOLDERS|SHCONTF_NONFOLDERS,&items)) && items) {
+        while(IEnumIDList_Next(items,1,&item,&fetched)==S_OK) {
+            STRRET name; char text[MAX_PATH]; BOOL match=FALSE;
+            if(SUCCEEDED(IShellFolder_GetDisplayNameOf(view->folder,item,SHGDN_NORMAL,&name))) {
+                if(name.uType==STRRET_CSTR) { lstrcpynA(text,name.cStr,sizeof(text)); match=TRUE; }
+                else if(name.uType==STRRET_WSTR) { match=WideCharToMultiByte(CP_ACP,0,name.pOleStr,-1,text,sizeof(text),NULL,NULL)!=0; CoTaskMemFree(name.pOleStr); }
+                else if(name.uType==STRRET_OFFSET && name.uOffset<PidlBytes(item)) {
+                    UINT remaining=PidlBytes(item)-name.uOffset;
+                    lstrcpynA(text,(char *)item+name.uOffset,remaining<sizeof(text) ? remaining : sizeof(text)); match=TRUE;
+                }
+                if(match && !lstrcmpA(text,label)) {
+                    SFGAOF flags=SFGAO_FOLDER|SFGAO_DROPTARGET; LPCITEMIDLIST selected=item;
+                    if(SUCCEEDED(IShellFolder_GetAttributesOf(view->folder,1,&selected,&flags))) {
+                        LPITEMIDLIST absolute=Combine(view->absolute,item);
+                        view->fileHoverTarget=(flags&(SFGAO_FOLDER|SFGAO_DROPTARGET))==(SFGAO_FOLDER|SFGAO_DROPTARGET);
+                        if(absolute) { SHGetPathFromIDListA(absolute,view->fileHoverPath); HeapFree(GetProcessHeap(),0,absolute); }
+                    }
+                    CoTaskMemFree(item); break;
+                }
+            }
+            CoTaskMemFree(item);
+        }
+        IEnumIDList_Release(items);
+    }
+    return view->fileHoverTarget;
+}
+static void DesktopFileDrag(void *context)
+{
+    NativeView *view=context; IDataObject *data=NULL; DWORD effect; HRESULT result;
+    if(view->fileDragging || FAILED(IShellView_GetItemObject(view->view,SVGIO_SELECTION,&IID_IDataObject,(void **)&data))) return;
+    view->fileDragging=TRUE; ++view->operationDepth;
+    result=FileDragStart(data,FALSE,&effect); IDataObject_Release(data);
+    --view->operationDepth; view->fileDragging=FALSE; view->fileHover=-1;
+    if(result==DRAGDROP_S_DROP && effect) { PostMessageA(view->list,WM_KEYDOWN,VK_F5,0); BrowserRecycleBinsChanged(); }
+}
+static void DesktopDropLeave(void *context)
+{
+    NativeView *view=context;
+    if(view->dropIndex>=0) ListView_SetItemState(view->list,view->dropIndex,0,LVIS_DROPHILITED);
+    view->dropIndex=-1;
+}
+static BOOL DesktopDropResolve(void *context, POINT screen, char *path)
+{
+    NativeView *view=context; LVHITTESTINFO hit; RECT area; POINT client=screen; int index=-1;
+    ScreenToClient(view->list,&client); GetClientRect(view->list,&area);
+    if(!PtInRect(&area,client)) return FALSE;
+    ZeroMemory(&hit,sizeof(hit)); hit.pt=client;
+    if(ListView_HitTest(view->list,&hit)>=0 && DesktopFileTarget(view,screen)) {
+        /* Virtual folders (e.g. Recycle Bin) keep their original native target. */
+        if(!view->fileHoverPath[0]) { DesktopDropLeave(view); return FALSE; }
+        lstrcpyA(path,view->fileHoverPath); index=hit.iItem;
+    } else if(!host.specialPath || !host.specialPath(CSIDL_DESKTOPDIRECTORY,path)) return FALSE;
+    if(index!=view->dropIndex) { DesktopDropLeave(view); view->dropIndex=index;
+        if(index>=0) ListView_SetItemState(view->list,index,LVIS_DROPHILITED,LVIS_DROPHILITED); }
+    return TRUE;
+}
+static void DesktopDropCompleted(void *context)
+{
+    NativeView *view=context;
+    PostMessageA(view->list,WM_KEYDOWN,VK_F5,0); BrowserRecycleBinsChanged();
+}
 void NativeViewConfigureDesktop(NativeView *view, const char *profile, BOOL automatic, BOOL locked, BOOL snap, int width, int height)
 {
     if (!view || !view->desktop || !view->list) return;
     if (!view->icons) view->icons = DesktopIconsCreate(view->list, profile);
     DesktopIconsConfigure(view->icons, automatic, locked, snap, width, height);
+    view->fileHover=-1; DesktopIconsSetFileDrag(view->icons,view,DesktopFileTarget,DesktopFileDrag);
+    if(!view->fileDrop) {
+        IDropTarget *native=NULL; HWND owner=FindWindowA("Explorer95.Taskbar",NULL);
+        IShellView_QueryInterface(view->view,&IID_IDropTarget,(void **)&native);
+        view->dropIndex=-1;
+        view->fileDrop=FileDropRegister(view->list,owner ? owner : view->parent,view,DesktopDropResolve,DesktopDropLeave,DesktopDropCompleted,native);
+        if(native) IDropTarget_Release(native);
+    }
 }
 void NativeViewLineUp(NativeView *view) { if (view) DesktopIconsLineUp(view->icons); }
 HWND NativeViewWindow(NativeView *view) { return view ? view->window : NULL; }

@@ -12,6 +12,9 @@ typedef struct StartLayout {
     BOOL morePins, moreRight;
 } StartLayout;
 int StartMenuWidth(BOOL largeIcons);
+void CalculateStartLayoutGroups(const RECT *bounds, int anchorX, int anchorY,
+    int frameX, int frameY, int fontHeight, int pins, int requestedRecent,
+    int rightItems, int rightGaps, BOOL largeIcons, StartLayout *out);
 void CalculateStartLayout(const RECT *bounds, int anchorX, int anchorY,
     int frameX, int frameY, int fontHeight, int pins, int requestedRecent,
     int rightItems, BOOL largeIcons, StartLayout *out);

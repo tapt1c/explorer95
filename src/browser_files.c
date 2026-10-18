@@ -1,5 +1,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include "browser_internal.h"
+#include "render_trace.h"
+#include "file_operations.h"
 void BrowserFilesFree(FileEntry *entry)
 {
     while (entry) { FileEntry *next = entry->next; EnvFree(entry); entry = next; }
@@ -236,52 +238,14 @@ static BOOL CALLBACK RefreshMatching(HWND window, LPARAM value)
 }
 static BOOL PerformFileOperation(Browser *browser, UINT operation, const char *sources, const char *destination, BOOL permanent)
 {
-    SHFILEOPSTRUCTA action; char target[MAX_PATH + 1], *paired = NULL; int result = 0;
-    RefreshPaths paths; BOOL collision = FALSE; const char *source; UINT count = 0;
-    ZeroMemory(&action, sizeof(action)); action.hwnd = browser->window; action.wFunc = operation; action.pFrom = sources;
-    ZeroMemory(target, sizeof(target)); if (destination) lstrcpynA(target, destination, MAX_PATH);
-    action.pTo = destination ? target : NULL; action.fFlags = permanent ? 0 : FOF_ALLOWUNDO;
-    if (operation == FO_MOVE && destination) {
-        char *next;
-        for (source = sources; *source; source += lstrlenA(source) + 1) ++count;
-        paired = EnvAlloc((SIZE_T)count * MAX_PATH + 1);
-        if (!paired) { BrowserError(browser->window, "Not enough memory to move these files.", ERROR_NOT_ENOUGH_MEMORY); return FALSE; }
-        next = paired;
-        for (source = sources; *source; source += lstrlenA(source) + 1) {
-            const char *name = source, *p;
-            for (p = source; *p; ++p) if (*p == '\\') name = p + 1;
-            if (!*name || !EnvJoin(next, destination, name)) { EnvFree(paired); BrowserError(browser->window, "The destination path is too long.", ERROR_FILENAME_EXCED_RANGE); return FALSE; }
-            { char prefix[MAX_PATH]; int length = lstrlenA(source);
-              lstrcpynA(prefix, destination, length + 1);
-              if (!lstrcmpiA(source, next) || (!lstrcmpiA(prefix, source) && destination[length] == '\\')) {
-                  EnvFree(paired); BrowserError(browser->window, "A folder cannot be moved into itself, and source and destination must differ.", ERROR_INVALID_PARAMETER); return FALSE;
-              } }
-            if (GetFileAttributesA(next) != INVALID_FILE_ATTRIBUTES) collision = TRUE;
-            next += lstrlenA(next) + 1;
-        }
-        /* Explicit pairs avoid Wine 10's multi-file move rejection. Its move
-         * implementation also overwrites collisions without asking; use the
-         * shell's confirmed copy for a merge/replace, and remove originals only
-         * after an entirely successful copy. Cancel/skip leaves originals and
-         * the cut clipboard intact. Original Win95 supports both code paths. */
-        if (!collision) { action.pTo = paired; action.fFlags |= FOF_MULTIDESTFILES; }
-    }
-    browser->busy = TRUE;
-    if (operation == FO_MOVE && collision) {
-        action.wFunc = FO_COPY; result = SHFileOperationA(&action);
-        if (!result && !action.fAnyOperationsAborted) {
-            action.wFunc = FO_DELETE; action.pTo = NULL;
-            /* Removal is part of the confirmed move, not an independent Delete
-             * command. The complete destination already exists at this point. */
-            action.fFlags = FOF_NOCONFIRMATION;
-            result = SHFileOperationA(&action);
-        }
-    } else result = SHFileOperationA(&action);
-    browser->busy = FALSE; EnvFree(paired);
-    if (action.wFunc == FO_DELETE) BrowserRecycleBinsChanged();
-    if (result && !action.fAnyOperationsAborted) BrowserError(browser->window, "Windows could not complete the file operation.", result);
-    paths.destination = destination; paths.sources = sources; EnumWindows(RefreshMatching, (LPARAM)&paths);
-    return !result && !action.fAnyOperationsAborted;
+    DWORD result; BOOL aborted=FALSE; RefreshPaths paths;
+    browser->busy=TRUE;
+    result=ShellFilesPerform(browser->window,operation,sources,destination,permanent,&aborted);
+    browser->busy=FALSE;
+    if(operation==FO_DELETE) BrowserRecycleBinsChanged();
+    if(result && !aborted) BrowserError(browser->window,"Windows could not complete the file operation.",result);
+    paths.destination=destination; paths.sources=sources; EnumWindows(RefreshMatching,(LPARAM)&paths);
+    return !result && !aborted;
 }
 static void ClipboardPaste(Browser *browser)
 {
@@ -331,22 +295,24 @@ static void Properties(Browser *browser)
     if (!ShellExecuteExA(&action) && GetLastError() != ERROR_CANCELLED) BrowserError(browser->window, "Cannot open the Windows properties dialog.", GetLastError());
     EnvFree(paths);
 }
-static IContextMenu *SelectionContext(Browser *browser)
+static void *SelectionObject(Browser *browser, REFIID iid)
 {
     IShellFolder *desktop = NULL, *folder = NULL; LPITEMIDLIST absolute = NULL, *items = NULL;
-    IContextMenu *context = NULL; WCHAR wide[MAX_PATH]; int count = ListView_GetSelectedCount(browser->files), index = -1, used = 0, i;
-    if (!count || FAILED(SHGetDesktopFolder(&desktop))) return NULL;
+    void *context = NULL; WCHAR wide[MAX_PATH]; int count = ListView_GetSelectedCount(browser->files), index = -1, used = 0, i;
+    if (!count || count > 4096 || FAILED(SHGetDesktopFolder(&desktop))) return NULL;
     if (!MultiByteToWideChar(CP_ACP, 0, browser->path, -1, wide, MAX_PATH) ||
         FAILED(IShellFolder_ParseDisplayName(desktop, browser->window, NULL, wide, NULL, &absolute, NULL))) goto cleanup;
     if (FAILED(IShellFolder_BindToObject(desktop, absolute, NULL, &IID_IShellFolder, (void **)&folder))) goto cleanup;
     items = EnvAlloc(sizeof(*items) * count); if (!items) goto cleanup;
     while ((index = ListView_GetNextItem(browser->files, index, LVNI_SELECTED)) >= 0) {
         FileEntry *entry = Selected(browser, index);
+        if (used>=count) goto cleanup;
         if (!entry || !MultiByteToWideChar(CP_ACP, 0, entry->name, -1, wide, MAX_PATH) ||
             FAILED(IShellFolder_ParseDisplayName(folder, browser->window, NULL, wide, NULL, &items[used], NULL))) goto cleanup;
         ++used;
     }
-    IShellFolder_GetUIObjectOf(folder, browser->window, used, (LPCITEMIDLIST *)items, &IID_IContextMenu, NULL, (void **)&context);
+    if(!used) goto cleanup;
+    IShellFolder_GetUIObjectOf(folder, browser->window, used, (LPCITEMIDLIST *)items, iid, NULL, &context);
 cleanup:
     if (items) { for (i = 0; i < used; ++i) CoTaskMemFree(items[i]); EnvFree(items); }
     if (absolute) CoTaskMemFree(absolute);
@@ -354,6 +320,56 @@ cleanup:
     if (desktop) IShellFolder_Release(desktop);
     return context;
 }
+static IContextMenu *SelectionContext(Browser *browser) { return SelectionObject(browser,&IID_IContextMenu); }
+static void DropLeave(void *context)
+{
+    Browser *browser=context;
+    if(browser->dropIndex>=0) ListView_SetItemState(browser->files,browser->dropIndex,0,LVIS_DROPHILITED);
+    browser->dropIndex=-1;
+}
+static BOOL DropResolve(void *context, POINT screen, char *path)
+{
+    Browser *browser=context; LVHITTESTINFO hit; RECT area; int index=-1;
+    if(browser->closing || browser->native || browser->concealed || !browser->path[0] || !IsWindowVisible(browser->files)) return FALSE;
+    ScreenToClient(browser->files,&screen); GetClientRect(browser->files,&area);
+    if(!PtInRect(&area,screen)) return FALSE;
+    ZeroMemory(&hit,sizeof(hit)); hit.pt=screen;
+    if(ListView_HitTest(browser->files,&hit)>=0) {
+        FileEntry *entry=Selected(browser,hit.iItem);
+        if(entry && (entry->attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+            if(!EnvJoin(path,browser->path,entry->name)) return FALSE;
+            index=hit.iItem;
+        }
+    }
+    if(index<0) lstrcpyA(path,browser->path);
+    if(index!=browser->dropIndex) {
+        DropLeave(browser); browser->dropIndex=index;
+        if(index>=0) ListView_SetItemState(browser->files,index,LVIS_DROPHILITED,LVIS_DROPHILITED);
+    }
+    return TRUE;
+}
+static void DropCompleted(void *context)
+{
+    Browser *browser=context;
+    PostMessageA(browser->window,WM_BROWSER_REFRESH,0,0);
+}
+BOOL BrowserFilesCreateDrop(Browser *browser)
+{
+    browser->dropIndex=-1;
+    browser->fileDrop=FileDropRegister(browser->files,browser->window,browser,DropResolve,DropLeave,DropCompleted,NULL);
+    return browser->fileDrop!=NULL;
+}
+static void DragFiles(Browser *browser, BOOL right)
+{
+    IDataObject *data; DWORD effect; HRESULT result;
+    if(browser->busy || browser->native || browser->concealed || ListView_GetEditControl(browser->files)) return;
+    data=SelectionObject(browser,&IID_IDataObject); RenderTraceShell("drag-data",data ? S_OK : E_FAIL,0,0); if(!data) return;
+    browser->busy=TRUE;
+    result=FileDragStart(data,right,&effect);
+    browser->busy=FALSE; IDataObject_Release(data);
+    if(result==DRAGDROP_S_DROP && effect) { PostMessageA(browser->window,WM_BROWSER_REFRESH,0,0); BrowserRecycleBinsChanged(); }
+}
+
 BOOL BrowserFilesInvokeVerb(Browser *browser, const char *verb, BOOL current, BOOL invoke)
 {
     IContextMenu *context = NULL; HMENU menu; HRESULT result; BOOL found = FALSE; UINT id;
@@ -492,6 +508,7 @@ void BrowserFilesCommand(Browser *browser, int command)
 BOOL BrowserFilesNotify(Browser *browser, NMHDR *header)
 {
     if (header->idFrom != ID_FILES) return FALSE;
+    if(header->code==LVN_BEGINDRAG || header->code==LVN_BEGINRDRAG) { DragFiles(browser,header->code==LVN_BEGINRDRAG); return TRUE; }
     if (header->code == NM_DBLCLK) BrowserFilesOpen(browser);
     if (header->code == LVN_ITEMCHANGED) BrowserUpdate(browser);
     if (header->code == LVN_COLUMNCLICK) {

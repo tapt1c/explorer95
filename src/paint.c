@@ -7,6 +7,8 @@ static HMODULE extension;
 static TransparentBltProc transparentBlt;
 static BOOL extensionChecked;
 static HBITMAP startLogo;
+static HFONT marlett;
+static BOOL marlettChecked;
 
 BOOL PaintColorsChanged(PaintColors *colors)
 {
@@ -172,8 +174,50 @@ void PaintStartLogo(HDC target, int x, int y)
     if (!startLogo) startLogo = (HBITMAP)LoadImageA(GetModuleHandleA(NULL), MAKEINTRESOURCEA(143), IMAGE_BITMAP, 0, 0, 0);
     PaintColorKey(target, x, y, startLogo, RGB(192,192,192), TRUE);
 }
+void PaintArrow(HDC dc, const RECT *bounds, UINT direction, COLORREF color, BOOL allowFont)
+{
+    int saved=SaveDC(dc), x=(bounds->left+bounds->right)/2, y=(bounds->top+bounds->bottom)/2;
+    POINT points[3]; HBRUSH brush; HPEN pen; BOOL drawn=FALSE;
+    if(!saved) return;
+    IntersectClipRect(dc,bounds->left,bounds->top,bounds->right,bounds->bottom);
+    if(allowFont) {
+        char face[32];
+        if(!marlettChecked) {
+            LOGFONTA font; ZeroMemory(&font,sizeof(font)); font.lfHeight=-12;
+            font.lfCharSet=SYMBOL_CHARSET; lstrcpyA(font.lfFaceName,"Marlett");
+            marlett=CreateFontIndirectA(&font); marlettChecked=TRUE;
+        }
+        if(marlett) {
+            SelectObject(dc,marlett);
+            if(GetTextFaceA(dc,sizeof(face),face) && !lstrcmpiA(face,"Marlett")) {
+                char glyph=direction==DFCS_SCROLLLEFT ? '3' : direction==DFCS_SCROLLUP ? '5' : direction==DFCS_SCROLLDOWN ? '6' : '4';
+                RECT text=*bounds; SetBkMode(dc,TRANSPARENT); SetTextColor(dc,color);
+                drawn=DrawTextA(dc,&glyph,1,&text,DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_NOPREFIX)!=0;
+            }
+        }
+    }
+    if(!drawn) {
+        if(direction==DFCS_SCROLLUP || direction==DFCS_SCROLLDOWN) {
+            int sign=direction==DFCS_SCROLLUP ? -1 : 1;
+            points[0].x=x-3; points[0].y=y-sign*2;
+            points[1].x=x+3; points[1].y=y-sign*2;
+            points[2].x=x; points[2].y=y+sign*2;
+        } else {
+            int sign=direction==DFCS_SCROLLLEFT ? -1 : 1;
+            points[0].x=x-sign*2; points[0].y=y-3;
+            points[1].x=x-sign*2; points[1].y=y+3;
+            points[2].x=x+sign*2; points[2].y=y;
+        }
+        brush=CreateSolidBrush(color); pen=CreatePen(PS_SOLID,1,color);
+        if(brush && pen) { SelectObject(dc,brush); SelectObject(dc,pen); Polygon(dc,points,3); }
+        RestoreDC(dc,saved); if(brush) DeleteObject(brush); if(pen) DeleteObject(pen); return;
+    }
+    RestoreDC(dc,saved);
+}
 void PaintShutdown(void)
 {
+    if (marlett) DeleteObject(marlett);
+    marlett=NULL; marlettChecked=FALSE;
     if (startLogo) DeleteObject(startLogo);
     if (extension) FreeLibrary(extension);
     startLogo = NULL; extension = NULL; transparentBlt = NULL; extensionChecked = FALSE;

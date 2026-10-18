@@ -13,5 +13,6 @@ BOOL DesktopIconsBeginRefresh(DesktopIcons *icons);
 void DesktopIconsEndRefresh(DesktopIcons *icons);
 void DesktopIconsAfterShellAction(DesktopIcons *icons);
 void DesktopIconsLineUp(DesktopIcons *icons);
+void DesktopIconsSetFileDrag(DesktopIcons *icons, void *context, BOOL (*target)(void *, POINT), void (*begin)(void *));
 BOOL DesktopIconsSave(DesktopIcons *icons);
 #endif

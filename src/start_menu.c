@@ -11,8 +11,8 @@ static HWND hovered;
 static HICON itemIcons[16], recentIcons[RECENT_LIMIT], pinIcons[PIN_LIMIT];
 static StartLayout geometry;
 static BOOL showingRecent;
-static const char *rightLabels[] = {"My Documents", "Recent Documents", "My Computer", "Network Neighborhood", "Control Panel", "Printers", "Help", "Find...", "Run...", "Favorites"};
-static const int rightCommands[] = {ID_DOCUMENTS, ID_RECENTDOCS, ID_COMPUTER, ID_NETWORK, ID_CONTROL, ID_PRINTERS, ID_HELP, ID_FIND, ID_RUN, ID_FAVORITES};
+static const char *rightLabels[] = {"My Documents", "Recent Documents", "My Computer", "Network Neighborhood", "Control Panel", "Printers", "Help", "Find...", "Run...", "Favorites", "Command Prompt"};
+static const int rightCommands[] = {ID_DOCUMENTS, ID_RECENTDOCS, ID_COMPUTER, ID_NETWORK, ID_CONTROL, ID_PRINTERS, ID_HELP, ID_FIND, ID_RUN, ID_FAVORITES, ID_COMMAND};
 static char user[128];
 static BOOL popupActive, classicActive;
 static DWORD hoverStarted;
@@ -20,7 +20,12 @@ static HWND openedHover;
 static FILETIME highlightEpoch;
 static char seenShortcuts[64][MAX_PATH];
 static int seenNext;
+/* Storage order preserves VisibleItems/FolderMenus bits in existing profiles. */
+#define RIGHT_COUNT 11
+static const int rightOrder[RIGHT_COUNT] = {0,1,9,2,3,4,5,10,6,7,8};
+static int rightSeparators[2], rightSeparatorCount;
 static void ClassicPopup(void);
+static HICON DosIcon(BOOL large);
 static BOOL FolderPopup(int id);
 static PaintBuffer menuBuffer, itemBuffer;
 static int loadedIconSize;
@@ -176,10 +181,28 @@ static void LoadHighlightHistory(void)
     seenNext = GetPrivateProfileIntA("SeenShortcuts", "Next", 0, env.ini) % 64;
     for (i = 0; i < 64; ++i) { wsprintfA(key, "Path%d", i); GetPrivateProfileStringA("SeenShortcuts", key, "", seenShortcuts[i], MAX_PATH, env.ini); }
 }
-static UINT RightBit(int i) { return 1U << (i == 9 ? 12 : i); }
+static UINT RightBit(int i) { return 1U << (i >= 9 ? i + 3 : i); }
+static int RightGroup(int position) { return position < 5 ? 0 : position < 8 ? 1 : 2; }
+static int RightGaps(UINT items)
+{
+    int position, groups=0, previous=-1;
+    for(position=0;position<RIGHT_COUNT;++position) if(items & RightBit(rightOrder[position])) {
+        int group=RightGroup(position); if(group!=previous) { ++groups; previous=group; }
+    }
+    return groups>0 ? (groups-1)*6 : 0;
+}
+static HICON RightSmallIcon(int index)
+{
+    static const int folders[] = {CSIDL_PERSONAL, CSIDL_RECENT, CSIDL_DRIVES, CSIDL_NETWORK, CSIDL_CONTROLS, CSIDL_PRINTERS};
+    static const int resources[] = {24,23,25};
+    if(index==10) return DosIcon(FALSE);
+    if(index==9) return SpecialIcon(CSIDL_FAVORITES,FALSE);
+    if(index==0) return SystemIcon(4,FALSE);
+    return index<6 ? SpecialIcon(folders[index],FALSE) : SystemIcon(resources[index-6],FALSE);
+}
 static int FolderIndex(int id)
 {
-    int i; for (i = 0; i < 10; ++i) if (rightCommands[i] == id) return i;
+    int i; for (i = 0; i < RIGHT_COUNT; ++i) if (rightCommands[i] == id) return i;
     return -1;
 }
 static void FreePrograms(void)
@@ -376,9 +399,9 @@ static void MeasureStart(int pins, int requestedRecent, BOOL largeIcons, StartLa
         if (bounds.right > bar.left) bounds.right = bar.left;
         x = bounds.right - StartMenuWidth(largeIcons);
     }
-    for (i = 0; i < 10; ++i) if (VisibleItems() & RightBit(i)) ++right;
-    CalculateStartLayout(&bounds, x, y, GetSystemMetrics(SM_CXDLGFRAME), GetSystemMetrics(SM_CYDLGFRAME),
-        fontHeight, pins, requestedRecent, right, largeIcons, layout);
+    for (i = 0; i < RIGHT_COUNT; ++i) if (VisibleItems() & RightBit(i)) ++right;
+    CalculateStartLayoutGroups(&bounds, x, y, GetSystemMetrics(SM_CXDLGFRAME), GetSystemMetrics(SM_CYDLGFRAME),
+        fontHeight, pins, requestedRecent, right, RightGaps(VisibleItems()), largeIcons, layout);
 }
 void StartMeasure(int pins, int requestedRecent, StartLayout *layout)
 { MeasureStart(pins, requestedRecent, env.options.largeStartIcons, layout); }
@@ -390,7 +413,7 @@ int StartMaximumRecent(int pins) { return StartMaximumRecentFor(pins, env.option
 int StartMaximumRecentOptions(int pins, const ShellOptions *options)
 {
     RECT bounds; int thickness, fontHeight = 14, i, right = 0; StartLayout layout; HDC dc; HGDIOBJ old; TEXTMETRICA metrics;
-    if (options->edge == env.options.edge && options->rows == env.options.rows && options->largeIcons == env.options.largeIcons)
+    if (options->edge == env.options.edge && options->rows == env.options.rows && options->largeIcons == env.options.largeIcons && options->taskTiles == env.options.taskTiles)
         return StartMaximumRecentFor(pins, options->largeStartIcons);
     if (!SystemParametersInfoA(SPI_GETWORKAREA, 0, &bounds, 0)) SetRect(&bounds, 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
     /* Remove only our existing reservation, retaining other taskbars/appbars. */
@@ -408,9 +431,9 @@ int StartMaximumRecentOptions(int pins, const ShellOptions *options)
     dc = GetDC(env.bar); old = SelectObject(dc, env.host.font);
     if (GetTextMetricsA(dc, &metrics)) fontHeight = metrics.tmHeight;
     SelectObject(dc, old); ReleaseDC(env.bar, dc);
-    for (i = 0; i < 10; ++i) if (options->startItems & env.availableStartItems & RightBit(i)) ++right;
-    CalculateStartLayout(&bounds, bounds.left, bounds.top, GetSystemMetrics(SM_CXDLGFRAME), GetSystemMetrics(SM_CYDLGFRAME),
-        fontHeight, pins, RECENT_LIMIT, right, options->largeStartIcons, &layout);
+    for (i = 0; i < RIGHT_COUNT; ++i) if (options->startItems & env.availableStartItems & RightBit(i)) ++right;
+    CalculateStartLayoutGroups(&bounds, bounds.left, bounds.top, GetSystemMetrics(SM_CXDLGFRAME), GetSystemMetrics(SM_CYDLGFRAME),
+        fontHeight, pins, RECENT_LIMIT, right, RightGaps(options->startItems & env.availableStartItems), options->largeStartIcons, &layout);
     return layout.recentRows;
 }
 void StartPosition(void)
@@ -442,7 +465,7 @@ static void Item(HWND window, const char *text, int id)
 
 static void LayoutStart(HWND window)
 {
-    RECT rect; int half, row, i, visible = 0, pinShown, rightShown;
+    RECT rect; int half, row, i, visible = 0, pinShown, rightShown, y, previous=-1;
     StartMeasure(startPinCount, env.options.recentCount, &geometry);
     GetClientRect(window, &rect); half = rect.right / 2; row = geometry.rowHeight;
     pinShown = geometry.pinRows - (geometry.morePins ? 1 : 0);
@@ -463,13 +486,20 @@ static void LayoutStart(HWND window)
     showingRecent = visible != 0;
     MoveWindow(GetDlgItem(window, ID_PROGRAMS), 5, geometry.programsY + 2, half - 10, geometry.programsHeight - 4, TRUE);
     visible = 0; rightShown = geometry.rightRows - (geometry.moreRight ? 1 : 0);
-    for (i = 0; i < 10; ++i) {
-        BOOL show = (VisibleItems() & RightBit(i)) && visible < rightShown;
-        ShowWindow(GetDlgItem(window, rightCommands[i]), show ? SW_SHOW : SW_HIDE);
-        if (show) MoveWindow(GetDlgItem(window, rightCommands[i]), half + 5, geometry.bodyTop + visible++ * row, half - 10, row, TRUE);
+    y=geometry.bodyTop; rightSeparatorCount=0;
+    for (i = 0; i < RIGHT_COUNT; ++i) {
+        int index=rightOrder[i], group=RightGroup(i);
+        BOOL show = (VisibleItems() & RightBit(index)) && visible < rightShown;
+        ShowWindow(GetDlgItem(window, rightCommands[index]), show ? SW_SHOW : SW_HIDE);
+        if(show) {
+            if(previous>=0 && previous!=group) { rightSeparators[rightSeparatorCount++]=y+2; y+=6; }
+            previous=group;
+            MoveWindow(GetDlgItem(window,rightCommands[index]),half+5,y,half-10,row,TRUE);
+            y+=row; ++visible;
+        }
     }
     ShowWindow(GetDlgItem(window, ID_MORECOMMANDS), geometry.moreRight && geometry.rightRows ? SW_SHOW : SW_HIDE);
-    MoveWindow(GetDlgItem(window, ID_MORECOMMANDS), half + 5, geometry.bodyTop + visible * row, half - 10, row, TRUE);
+    MoveWindow(GetDlgItem(window, ID_MORECOMMANDS), half + 5, y, half - 10, row, TRUE);
     {
         int third = (rect.right - 10) / 3, height = geometry.footerHeight - 10;
         MoveWindow(GetDlgItem(window, ID_EXIT), 5, geometry.footerY + 4, third, height, TRUE);
@@ -506,9 +536,8 @@ void StartRefresh(void)
         if (i < startPinCount) pinIcons[i] = startPins[i].path[0] == '@' ? (!lstrcmpA(startPins[i].path, "@explorer") ? MenuSystemIcon(5) : DosIcon(env.options.largeStartIcons)) : MenuPathIcon(startPins[i].path);
     }
     if (IsWindowVisible(env.start)) StartPosition();
-    for (i = 0; i < 10; ++i) {
-        char label[96]; wsprintfA(label, "%s%s", rightLabels[i], env.options.startMenus & RightBit(i) ? "   >" : "");
-        SetWindowTextA(GetDlgItem(env.start, rightCommands[i]), label);
+    for (i = 0; i < RIGHT_COUNT; ++i) {
+        SetWindowTextA(GetDlgItem(env.start, rightCommands[i]), rightLabels[i]);
     }
     DragAcceptFiles(env.start, env.options.allowDrop);
     LayoutStart(env.start); InvalidateRect(env.start, NULL, FALSE);
@@ -547,6 +576,7 @@ static HICON StartIcon(int id)
     case ID_EXIT: case ID_SHUTDOWN: return itemIcons[10];
     case ID_LOGOFF: return itemIcons[11];
     case ID_FAVORITES: return itemIcons[12];
+    case ID_COMMAND: return itemIcons[13];
     default:
         if (id >= ID_PINNED && id < ID_PINNED + PIN_LIMIT) return pinIcons[id - ID_PINNED];
         if (id >= ID_RECENT && id < ID_RECENT + RECENT_LIMIT) return recentIcons[id - ID_RECENT];
@@ -555,23 +585,19 @@ static HICON StartIcon(int id)
 }
 static void MorePopup(BOOL pins)
 {
-    static ProgramItem entries[10];
+    static ProgramItem entries[RIGHT_COUNT];
     HMENU menu = CreatePopupMenu(); RECT rect; int i, used = 0, visible = 0, command;
     int skip = pins ? geometry.pinRows - 1 : geometry.rightRows - 1;
-    for (i = 0; i < (pins ? startPinCount : 10); ++i) {
-        int id = pins ? ID_PINNED + i : rightCommands[i];
-        if (!pins && !(VisibleItems() & RightBit(i))) continue;
+    for (i = 0; i < (pins ? startPinCount : RIGHT_COUNT); ++i) {
+        int index=pins ? i : rightOrder[i];
+        int id = pins ? ID_PINNED + i : rightCommands[index];
+        if (!pins && !(VisibleItems() & RightBit(index))) continue;
         if (visible++ < skip) continue;
         GetWindowTextA(GetDlgItem(env.start, id), entries[used].label, MAX_PATH);
         if (pins) {
             entries[used].icon = startPins[i].path[0] == '@' ?
                 (!lstrcmpA(startPins[i].path, "@explorer") ? SystemIcon(5, FALSE) : DosIcon(FALSE)) : EnvPathIcon(startPins[i].path);
-        } else {
-            static const int folders[] = {CSIDL_PERSONAL, CSIDL_RECENT, CSIDL_DRIVES, CSIDL_NETWORK, CSIDL_CONTROLS, CSIDL_PRINTERS};
-            static const int resources[] = {24, 23, 25};
-            entries[used].icon = i == 9 ? SpecialIcon(CSIDL_FAVORITES, FALSE) : i == 0 ? SystemIcon(4, FALSE) :
-                i < 6 ? SpecialIcon(folders[i], FALSE) : SystemIcon(resources[i - 6], FALSE);
-        }
+        } else entries[used].icon=RightSmallIcon(index);
         AppendMenuA(menu, MF_OWNERDRAW, id, (LPCSTR)&entries[used++]);
     }
     GetWindowRect(GetDlgItem(env.start, pins ? ID_MOREPINS : ID_MORECOMMANDS), &rect);
@@ -620,6 +646,7 @@ static void LoadItemIcons(void)
     itemIcons[8] = MenuSystemIcon(23); itemIcons[9] = MenuSystemIcon(25);
     itemIcons[10] = SystemIcon(28, FALSE); itemIcons[11] = SystemIcon(45, FALSE);
     itemIcons[12] = SpecialIcon(CSIDL_FAVORITES, env.options.largeStartIcons);
+    itemIcons[13] = DosIcon(env.options.largeStartIcons);
 }
 
 static LRESULT CALLBACK StartProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
@@ -629,11 +656,11 @@ static LRESULT CALLBACK StartProc(HWND window, UINT message, WPARAM wp, LPARAM l
         int i; DWORD bytes = sizeof(user);
         if (!GetUserNameA(user, &bytes)) lstrcpyA(user, "Explorer95");
         for (i = 0; i < PIN_LIMIT; ++i) Item(window, "", ID_PINNED + i);
-        Item(window, "All Programs   >", ID_PROGRAMS);
-        Item(window, "More pinned...   >", ID_MOREPINS); Item(window, "More...   >", ID_MORECOMMANDS);
-        Item(window, "My Documents", ID_DOCUMENTS); Item(window, "Recent Documents   >", ID_RECENTDOCS);
+        Item(window, "All Programs", ID_PROGRAMS);
+        Item(window, "More pinned...", ID_MOREPINS); Item(window, "More...", ID_MORECOMMANDS);
+        Item(window, "My Documents", ID_DOCUMENTS); Item(window, "Recent Documents", ID_RECENTDOCS);
         Item(window, "My Computer", ID_COMPUTER); Item(window, "Network Neighborhood", ID_NETWORK);
-        Item(window, "Favorites", ID_FAVORITES);
+        Item(window, "Favorites", ID_FAVORITES); Item(window,"Command Prompt",ID_COMMAND);
         Item(window, "Control Panel", ID_CONTROL); Item(window, "Printers", ID_PRINTERS);
         Item(window, "Help", ID_HELP); Item(window, "Find...", ID_FIND); Item(window, "Run...", ID_RUN);
         Item(window, "Exit", ID_EXIT); Item(window, "Log Off...", ID_LOGOFF); Item(window, "Shut Down...", ID_SHUTDOWN);
@@ -663,6 +690,10 @@ static LRESULT CALLBACK StartProc(HWND window, UINT message, WPARAM wp, LPARAM l
             SetRect(&part, 7, geometry.separatorY, rect.right / 2 - 7, geometry.separatorY + 2);
             DrawEdge(dc, &part, EDGE_ETCHED, BF_TOP);
         }
+        { int i; for(i=0;i<rightSeparatorCount;++i) {
+            SetRect(&part,rect.right/2+7,rightSeparators[i],rect.right-7,rightSeparators[i]+2);
+            DrawEdge(dc,&part,EDGE_ETCHED,BF_TOP);
+        } }
         PaintBufferEnd(&menuBuffer, target, &rect); EndPaint(window, &paint); return 0;
     }
     case WM_MEASUREITEM: {
@@ -694,6 +725,14 @@ static LRESULT CALLBACK StartProc(HWND window, UINT message, WPARAM wp, LPARAM l
         if (!icon) icon = LoadIconA(NULL, IDI_APPLICATION);
         if (icon) DrawIconEx(item->hDC, text.left + 5, text.top + (text.bottom - text.top - iconSize) / 2, icon, iconSize, iconSize, 0, NULL, DI_NORMAL);
         text.left += icon ? iconSize + 12 : 8;
+        { int index=FolderIndex(item->CtlID);
+          if(item->CtlID==ID_PROGRAMS || item->CtlID==ID_MOREPINS || item->CtlID==ID_MORECOMMANDS ||
+             (index>=0 && (index<6 || index==9) && (env.options.startMenus & RightBit(index)))) {
+              RECT arrow=item->rcItem; arrow.left=arrow.right-16; arrow.right-=2;
+              PaintArrow(item->hDC,&arrow,DFCS_SCROLLRIGHT,GetSysColor(selected ? COLOR_HIGHLIGHTTEXT : COLOR_MENUTEXT),TRUE);
+              text.right-=16;
+          }
+        }
         GetWindowTextA(item->hwndItem, label, sizeof(label));
         DrawTextA(item->hDC, label, -1, &text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
         PaintBufferEnd(&itemBuffer, target, &item->rcItem); return TRUE;
@@ -839,18 +878,22 @@ static void ClassicPopup(void)
         ProgramItem *item = &entries[used++]; lstrcpyA(item->label, "Programs"); item->icon = SystemIcon(37, FALSE);
         AppendMenuA(menu, MF_OWNERDRAW | MF_POPUP, (UINT_PTR)ProgramsMenu(FALSE), (LPCSTR)item);
     }
-    for (i = 0; i < 10; ++i) if (VisibleItems() & RightBit(i)) {
+    { int previous=-1;
+    for (i = 0; i < RIGHT_COUNT; ++i) {
+        int index=rightOrder[i], group=RightGroup(i);
         static const int folders[] = {CSIDL_PERSONAL, CSIDL_RECENT, CSIDL_DRIVES, CSIDL_NETWORK, CSIDL_CONTROLS, CSIDL_PRINTERS};
-        static const int resources[] = {24, 23, 25};
-        ProgramItem *item = &entries[used++]; lstrcpynA(item->label, rightLabels[i], MAX_PATH);
-        item->icon = i == 9 ? SpecialIcon(CSIDL_FAVORITES, FALSE) : i == 0 ? SystemIcon(4, FALSE) :
-            i < 6 ? SpecialIcon(folders[i], FALSE) : SystemIcon(resources[i - 6], FALSE);
-        if ((i < 6 || i == 9) && (env.options.startMenus & RightBit(i))) {
-            int folder = i == 9 ? CSIDL_FAVORITES : folders[i];
+        ProgramItem *item;
+        if(!(VisibleItems() & RightBit(index))) continue;
+        if(previous>=0 && previous!=group) AppendMenuA(menu,MF_SEPARATOR,0,NULL);
+        previous=group;
+        item=&entries[used++]; lstrcpynA(item->label,rightLabels[index],MAX_PATH);
+        item->icon=RightSmallIcon(index);
+        if ((index < 6 || index == 9) && (env.options.startMenus & RightBit(index))) {
+            int folder = index == 9 ? CSIDL_FAVORITES : folders[index];
             HMENU child = env.host.specialPath(folder, path) ? FolderMenu(path, 0) : NamespaceMenu(folder);
             AppendMenuA(menu, MF_OWNERDRAW | MF_POPUP, (UINT_PTR)child, (LPCSTR)item);
-        } else AppendMenuA(menu, MF_OWNERDRAW, rightCommands[i], (LPCSTR)item);
-    }
+        } else AppendMenuA(menu, MF_OWNERDRAW, rightCommands[index], (LPCSTR)item);
+    } }
     AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
     for (i = 0; i < 3; ++i) if (VisibleItems() & (1U << (9 + i))) {
         const int ids[] = {ID_EXIT, ID_LOGOFF, ID_SHUTDOWN}; ProgramItem *item = &entries[used++];

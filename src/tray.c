@@ -435,6 +435,15 @@ void TrayPrune(void)
 
 static LRESULT CALLBACK TrayProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
 {
+    if(message==WM_DRAWITEM && ((DRAWITEMSTRUCT *)lp)->CtlID==ID_TRAYMORE) {
+        DRAWITEMSTRUCT *item=(DRAWITEMSTRUCT *)lp; RECT rect=item->rcItem;
+        FillRect(item->hDC,&rect,(HBRUSH)(COLOR_BTNFACE+1));
+        DrawFrameControl(item->hDC,&rect,DFC_BUTTON,DFCS_BUTTONPUSH | (item->itemState&ODS_SELECTED ? DFCS_PUSHED : 0));
+        if(item->itemState&ODS_SELECTED) OffsetRect(&rect,1,1);
+        PaintArrow(item->hDC,&rect,DFCS_SCROLLLEFT,GetSysColor(COLOR_BTNTEXT),TRUE);
+        if(item->itemState&ODS_FOCUS) { InflateRect(&rect,-3,-3); DrawFocusRect(item->hDC,&rect); }
+        return TRUE;
+    }
     if (message == WM_COMMAND && LOWORD(wp) == ID_TRAYMORE) {
         OverflowMenu(); return 0;
     }
@@ -454,7 +463,7 @@ BOOL TrayCreate(void)
         0, 0, 100, 24, env.bar, NULL, env.host.instance, NULL);
     tooltip = CreateWindowExA(WS_EX_TOPMOST, TOOLTIPS_CLASSA, NULL, WS_POPUP | TTS_ALWAYSTIP,
         CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, env.tray, NULL, env.host.instance, NULL);
-    moreButton = EnvControl(env.tray, "BUTTON", ">", 0, ID_TRAYMORE);
+    moreButton = EnvControl(env.tray, "BUTTON", "Hidden icons", BS_OWNERDRAW, ID_TRAYMORE);
     env.clock = EnvControl(env.tray, "STATIC", "", SS_CENTER | SS_CENTERIMAGE | SS_NOTIFY, 1);
     return env.tray && tooltip && env.clock;
 }
@@ -492,7 +501,7 @@ void TraySettingsCreate(HWND w)
     control = CTRL("COMBOBOX", "", WS_TABSTOP | CBS_DROPDOWNLIST, ID_NOTIFYMODE, 142, 280, 342, 100);
     SendMessageA(control, CB_ADDSTRING, 0, (LPARAM)"Hide when inactive"); SendMessageA(control, CB_ADDSTRING, 0, (LPARAM)"Always show"); SendMessageA(control, CB_ADDSTRING, 0, (LPARAM)"Always hide");
     CTRL("BUTTON", "Restore defaults", WS_TABSTOP, ID_TRAYDEFAULTS, 310, 310, 174, 24);
-    CTRL("STATIC", "Hidden icons stay available through the > button.", 0, 0, 30, 310, 270, 26);
+    CTRL("STATIC", "Hidden icons stay available through the arrow button.", 0, 0, 30, 310, 270, 26);
     PolicySelection(w);
 #undef CTRL
 }

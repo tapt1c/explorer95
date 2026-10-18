@@ -24,5 +24,7 @@ void PaintStartLogo(HDC target, int x, int y);
 void PaintTextShadow(HDC dc, const char *text, const RECT *bounds, UINT flags);
 void PaintDesktopLabelShadows(HWND list, HDC dc);
 void PaintDialogBackground(HWND window, HDC dc);
+/* Win95 Marlett arrows with a plain GDI fallback if the face is unavailable. */
+void PaintArrow(HDC dc, const RECT *bounds, UINT direction, COLORREF color, BOOL allowFont);
 void PaintShutdown(void);
 #endif

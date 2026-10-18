@@ -694,7 +694,7 @@ static LRESULT CALLBACK BrowserProc(HWND window, UINT message, WPARAM wp, LPARAM
         browser->status = BrowserControl(window, STATUSCLASSNAMEA, "", CCS_BOTTOM | CCS_NOPARENTALIGN | CCS_NORESIZE, ID_BROWSER_STATUS);
         BrowserFilesImages(browser); ZeroMemory(&column, sizeof(column)); column.mask = LVCF_TEXT | LVCF_WIDTH;
         for (i = 0; i < 4; ++i) { column.pszText = i == 0 ? "Name" : i == 1 ? "Type" : i == 2 ? "Size" : "Date Modified"; column.cx = i ? 120 : 230; ListView_InsertColumn(browser->files, i, &column); }
-        if (!BrowserSidebarCreate(browser)) return -1;
+        if (!BrowserSidebarCreate(browser) || !BrowserFilesCreateDrop(browser)) return -1;
         BuildMenu(browser); BrowserBuildToolbar(browser); SetTimer(window, 10, 800, NULL); return 0;
     }
     case WM_SYSCOLORCHANGE:
@@ -850,9 +850,13 @@ static LRESULT CALLBACK BrowserProc(HWND window, UINT message, WPARAM wp, LPARAM
              * toolbar supplies its own local background in its subclass. */
             return TRUE;
         } break;
+    case WM_CLOSE:
+        if(browser && browser->busy && FileDragDeferClose(window)) return 0;
+        DestroyWindow(window); return 0;
     case WM_DESTROY:
         if (browser) {
             int i; browser->closing = TRUE; KillTimer(window, 10);
+            FileDropRevoke(browser->fileDrop); browser->fileDrop=NULL;
             BrowserAddressDestroy(browser); BrowserSearchDestroy(browser); BrowserSidebarDestroy(browser);
             if (browser->toolbar) DestroyWindow(browser->toolbar);
             if (browser->toolbarImages) DeleteObject(browser->toolbarImages);

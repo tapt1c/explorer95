@@ -129,6 +129,7 @@ static void Check(BOOL okay, const char *description)
 #include "folder_handler_cases.h"
 #include "shell_new_cases.h"
 #include "folder_selection_cases.h"
+#include "file_drag_data_cases.h"
 #include "native_view_cases.h"
 #include "tray_mirror_cases.h"
 
@@ -294,6 +295,15 @@ static void PaintTests(void)
         Check(okay && transparent == 100 && opaque == 156,
             mode ? "TransparentBlt preserves the supplied flag and keys gray onto a colored background" :
                    "Win95 GDI fallback preserves every opaque pixel and all 100 transparent pixels");
+    }
+    for(mode=0;mode<2;++mode) {
+        RECT arrow={6,6,18,18}; HGDIOBJ font=GetCurrentObject(dc,OBJ_FONT); COLORREF text=GetTextColor(dc); int painted=0; BOOL clipped=TRUE;
+        FillRect(dc,&rect,brush); PaintArrow(dc,&arrow,DFCS_SCROLLRIGHT,RGB(255,255,255),mode);
+        for(y=0;y<24;++y) for(x=0;x<24;++x) if(GetPixel(dc,x,y)!=background) {
+            if(x<arrow.left || x>=arrow.right || y<arrow.top || y>=arrow.bottom) clipped=FALSE; else ++painted;
+        }
+        Check(clipped && painted>5 && GetTextColor(dc)==text && GetCurrentObject(dc,OBJ_FONT)==font,
+            mode ? "Marlett arrow stays clipped and restores the caller's GDI state" : "font-free GDI arrow fallback is visible and restores the caller's state");
     }
     {
         HWND dialog = CreateWindowA("STATIC", "", WS_POPUP, 10, 10, 220, 140, NULL, NULL, GetModuleHandleA(NULL), NULL);
@@ -935,8 +945,10 @@ static void PumpFor(DWORD duration)
     } while (GetTickCount() - started < duration);
 }
 #include "quick_launch_cases.h"
+#include "backlog_menu_cases.h"
 #include "browser_panes_cases.h"
 #include "desktop_delete_cases.h"
+#include "file_drag_cases.h"
 static void WinKeyEvent(UINT key, BOOL up)
 {
     keybd_event((BYTE)key, (BYTE)(key == VK_RWIN ? 0x5c : 0x5b),
@@ -1635,7 +1647,7 @@ void start(void)
     wsprintfA(settings, "%s\\settings.ini", settingsDir);
     if (group == GROUP_FULL || group == GROUP_CORE || group == GROUP_BROWSER) ShellNewTests(settingsDir, module);
     if (group != GROUP_BROWSER) { LayoutTests(); HistoryTests(settingsDir, module, settings); ShellFeatureTests(); }
-    if (group == GROUP_FULL || group == GROUP_CORE) { PaintTests(); ConfigTests(settingsDir); DesktopIconTests(settingsDir); FolderHandlerTests(module,settings); FolderSelectionTests(); NativeViewMessageTests(); TrayMirrorTests(); TrayMirrorCrossProcessTests(); }
+    if (group == GROUP_FULL || group == GROUP_CORE) { PaintTests(); ConfigTests(settingsDir); DesktopIconTests(settingsDir); FolderHandlerTests(module,settings); FolderSelectionTests(); DragDataTests(); NativeViewMessageTests(); TrayMirrorTests(); TrayMirrorCrossProcessTests(); }
     if (group == GROUP_CORE) goto cleanup;
     wsprintfA(command, "\"%s\" --settings=\"%s\"", executable, settings);
     if (group != GROUP_MENU) wsprintfA(command,"\"%s\" --settings=\"%s\" --open=\"%s\"",executable,settings,fixture);
@@ -1673,7 +1685,7 @@ void start(void)
         Check(!IsWindow(initial), "startup folder closes before keyboard focus tests begin");
     }
     if (group != GROUP_BROWSER) WinKeyTests(bar, FindWindowA("Explorer95.Start", NULL));
-    if (group != GROUP_BROWSER) QuickLaunchTests(bar, settings);
+    if (group != GROUP_BROWSER) { QuickLaunchTests(bar, settings); TaskTileTests(bar,settings); StartOrderTests(bar,FindWindowA("Explorer95.Start",NULL),settings); }
     if (group != GROUP_MENU) {
         FolderForwardTests(executable,settings,fixture,bar); DesktopRefreshTests(desktop);
         FolderSettingsTests(bar);
@@ -1696,6 +1708,7 @@ void start(void)
     GetWindowTextA(browser, actual, sizeof(actual));
     Check(!lstrcmpA(title, actual), "address navigation updates window title");
     Check(SendMessageA(files, LVM_GETITEMCOUNT, 0, 0) == 3, "folder enumeration includes two folders and a file");
+    FileDragTests(bar,desktop,browser,fixture);
     DesktopDeleteTests(desktop, browser, fixture);
 
     /* Home selects the first sorted item; Enter must open that folder. */

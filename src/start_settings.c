@@ -10,7 +10,7 @@ static int draftCount;
 static UINT pinsVersion, draftVersion;
 static const char *visibleNames[START_OPTION_COUNT] = {
     "My Documents", "Recent Documents", "My Computer", "Network Neighborhood",
-    "Control Panel", "Printers", "Help", "Find", "Run", "Exit Explorer95", "Log Off", "Shut Down", "Favorites"
+    "Control Panel", "Printers", "Help", "Find", "Run", "Exit Explorer95", "Log Off", "Shut Down", "Favorites", "Command Prompt"
 };
 
 void StartLoadPins(void)

@@ -65,6 +65,8 @@ Explorer95 — любительская нативная оболочка для
 | `src/start_settings.c` | Страницы General / Advanced / Pinned programs в общем окне, черновик закреплений и ограничения недавних программ. |
 | `src/settings.c`, `src/settings_internal.h` | Единое окно с вкладками, общий Apply/Cancel, запись профиля через временный файл, preview и действия системной оболочки. |
 | `src/shell_config.c` | Подготовка копии EXE, изменение `[boot] shell=`, резервирование и восстановление. |
+| `src/file_operations.c`, `src/file_operations.h` | Общие SHFileOperationA для clipboard и Drag and Drop, пары путей MOVE и штатные подтверждения конфликтов. |
+| `src/file_drag.c`, `src/file_drag.h` | Общий Win95 OLE source/target, подтверждаемые файловые операции, native fallback виртуальных целей, отмена и отложенное закрытие источника. |
 | `src/folder_open.c`, `src/folder_open.h` | ANSI-команды открытия, проверяемый протокол WM_COPYDATA и чтение Shell IDList Array с проверкой границ. |
 | `src/folder_handler.c`, `src/folder_handler.h` | Обратимые команды open/explore для Directory, Drive, My Computer и Recycle Bin; полные снимки команд и DDE в реестре. |
 | `src/native_view.c`, `src/native_view.h` | Хост `IShellBrowser`/`IShellView`, системные виртуальные папки, рабочий стол, обои и контекстные меню. |
@@ -87,6 +89,8 @@ Explorer95 — любительская нативная оболочка для
 | `tests/run_ui.sh`, `tests/openbox.xml` | Изолированный Xvfb/Openbox для headless UI без перехвата горячих клавиш Wine; отдельные XDG-данные корзины. |
 | `tests/desktop_icons_cases.h` | Сценарии переноса и сохранения раскладки на настоящем ListView внутри smoke-процесса; входят в core и full. |
 | `tests/shell_features_cases.h` | Проверки доступности пунктов Start на отдельных временных корнях реестра; входят в core/menu/full. |
+| `tests/file_drag_data_cases.h` | Проверка внешнего CF_HDROP: ANSI/Unicode, снимок нескольких путей, границы, двойной NUL, отказ для wildcard/относительных путей; core/full. |
+| `tests/backlog_menu_cases.h`, `tests/file_drag_cases.h` | Плитки/группировка/Apply/Cancel, порядок Start и разделители; реальные OLE-переносы мышью между окнами и рабочим столом только со своими файлами. |
 | `tests/quick_launch_cases.h` | Реальное изменение размера Quick Launch, блокировка, Escape, переполнение и запуск скрытой команды; menu/full. |
 | `tests/desktop_delete_cases.h` | Системный Delete на рабочем столе, очистка через реальные File/toolbar/sidebar, отмена, восстановление и обновление Корзины только с собственным файлом; browser/full. |
 | `tests/native_view_cases.h` | Внутрипроцессный хост настоящего NativeView и canary над ListView: проверка повторного входа LVM_GETEDITCONTROL; core/full. |
@@ -281,6 +285,12 @@ WINEPREFIX=/tmp/explorer95-wine640 WINEDEBUG=-all \
 миниатюр, предпросмотров, desktop Z-order и затемнения ради прохождения такого прогона.
 Проверки видимости должны обслуживать сообщения и ждать завершения смены фокуса
 с ограниченным сроком, прежде чем вводить следующую клавишу.
+- Для OLE-регрессий в Wine вводите модификатор после достижения цели и стабилизации
+  X11 focus: переход между окнами может сбросить искусственный Ctrl/Shift в
+  GetKeyboardState, хотя проверка GetAsyncKeyState перед переходом была успешной.
+  Не добавляйте обходы в продукт: один key-down после движения и один key-up
+  после drop. Escape проверяйте без Ctrl, иначе зарегистрированный Ctrl+Esc
+  открывает Start. Файловые assert и отмена должны оставаться обязательными.
 Для fade сначала ограниченно дождитесь реально нарисованного светлого снимка:
 IsWindowVisible может опережать отображение поверхности X11. Затем проверяйте
 уменьшение яркости и конечный порог без принудительной перерисовки; отсутствие
@@ -299,6 +309,23 @@ Wine хранит Unix-корзину через XDG_DATA_HOME вне prefix п�
 единственного собственного fixture и отменяет её при любых посторонних объектах.
 
 ## Оформление, значки и геометрия «Пуска»
+
+- Правая колонка: Documents / Recent / Favorites / Computer / Network;
+  Control Panel / Printers / Command Prompt; Help / Find / Run. Между непустыми
+  группами — 6px с etched-разделителем. Расчёт `CalculateStartLayoutGroups`
+  учитывает эти отступы и More; старый `CalculateStartLayout` остаётся обёрткой.
+  Не перенумеровывайте VisibleItems/FolderMenus: Favorites — бит12, Command — бит13,
+  ItemsVersion=2 предотвращает повторное включение Command после скрытия.
+- Собственные стрелки Start/Quick Launch/tray рисуются `PaintArrow`: проверенный
+  GetTextFaceA Marlett (3/4/5/6), затем GDI-треугольник при отсутствии шрифта.
+  Нативные TrackPopupMenu рисуют свои submenu arrows сами. Функция сохраняет DC,
+  клиппинг и цвет; cached font освобождается в PaintShutdown.
+- `Taskbar.TaskTiles` включает квадратные кнопки со значками и подсказкой названия;
+  `GroupTasks` работает независимо. Используйте общую EnvPaintTaskTile в панели
+  и preview. Не удаляйте текст HWND — он нужен подсказкам и доступности.
+  Классические кнопки остаются вариантом по умолчанию, их ширина сохраняется
+  при временном переходе к плиткам. Плитки используют крупные системные значки,
+  высоту 44px на строку и стопку рамок у группы.
 
 - Используйте системные цвета, шрифты, рамки и метрики. Избегайте жёстко заданных
   современных палитр и зависимости от темы Luna.
@@ -650,6 +677,30 @@ explorer95.exe --settings="C:\EX95TEST\Explorer95.ini"
 системные drag-операции с модификаторами, F5 и перезапуск с тем же профилем.
 
 ## Проводник и совместимость файловых операций
+
+- Файловый Drag and Drop находится в `file_drag`, `browser_files` и `native_view`.
+  Используйте штатные IDataObject / IDropTarget / DoDragDrop (Win95 OLE).
+  Файловые цели используют ShellFilesPerform / SHFileOperationA совместно
+  с clipboard; LINK использует IShellLinkA с уникальным именем без перезаписи.
+  Правый drag предлагает Copy / Move / Link / Cancel в TrackPopupMenu.
+  Не удаляйте исходники повторно в IDropSource после успешного MOVE.
+- В DragEnter валидируйте размер, смещения, двойной NUL и число CF_HDROP-путей,
+  конвертацию Unicode в ANSI; снимок путей живёт до Drop/Leave. DragOver работает
+  по кэшированным данным текущей папки; не перечисляйте другие диски/сеть.
+  Виртуальные цели рабочего стола сохраняют native IDropTarget из IShellView;
+  собственный target регистрируется только на child ListView.
+  Не используйте частные lParam системного ListView в качестве PIDL.
+- Не полагайтесь на успех произвольного IShellFolder IDropTarget как доказательство
+  переноса: Wine 10 shfldr_fs.c возвращает S_OK, но Copy/Move/Link там — заглушки.
+  Регрессии проверяют фактические файлы и обновление списков. Не отключайте их;
+  настоящий Win95/внешние приложения всё равно требуют проверки на целевой системе.
+- Свободная расстановка рабочего стола остаётся прежней: её ghost переключается
+  на OLE только при выходе к другому окну или наведении на folder/drop target.
+  Не применяйте координаты прерванного layout drag к реальным значкам.
+- DoDragDrop содержит вложенный цикл сообщений. Закрытие источника/окружения
+  откладывается через FileDragDeferClose до возврата; IDropTarget держит локальную
+  ссылку на делегата через внешние вызовы, RevokeDragDrop обнуляет context.
+  Обновление списков ставится в очередь после завершения операции.
 
 - `--open`, `--explore`, `--namespace` принимаются до запуска окружения. Именованный
   startup mutex исключает гонку нескольких экземпляров. Запросы существующему

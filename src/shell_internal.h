@@ -78,11 +78,11 @@
 #define TASK_LIMIT 64
 #define RECENT_LIMIT 30
 #define PIN_LIMIT 6
-#define START_OPTION_COUNT 13
+#define START_OPTION_COUNT 14
 
 typedef struct ShellOptions {
     int edge, rows, taskWidth, recentCount, quickSize;
-    BOOL locked, autoHide, topmost, clock, quick, largeIcons, largeStartIcons, group, hideInactive;
+    BOOL locked, autoHide, topmost, clock, quick, largeIcons, largeStartIcons, group, hideInactive, taskTiles;
     BOOL classicStart, hoverMenus, allowDrop, highlightNew, desktopIcons, autoArrange, classicShutdown;
     BOOL lockDesktopIcons, snapDesktopIcons;
     int desktopGridX, desktopGridY;
@@ -151,6 +151,7 @@ int EnvStartButtonWidth(void);
 int EnvStartLabelWidth(const char *label);
 void EnvPaintStartButton(HDC dc, const RECT *bounds, const char *label, BOOL down, BOOL focus);
 void EnvPaintTaskButton(HDC dc, const RECT *bounds, const char *label, HICON icon, BOOL down, BOOL focus);
+void EnvPaintTaskTile(HDC dc, const RECT *bounds, HICON icon, int count, BOOL down, BOOL focus);
 void EnvPaintQuickButton(HDC dc, const RECT *bounds, HICON icon, int size, BOOL down, BOOL hot, BOOL focus);
 void EnvPaintQuickGrip(HDC dc, const RECT *bounds, BOOL vertical, BOOL locked);
 

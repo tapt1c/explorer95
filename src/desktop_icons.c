@@ -12,6 +12,7 @@ typedef struct DragPosition { int index; POINT point; RECT bounds; } DragPositio
 typedef struct Placement { POINT from, to; RECT offset; BOOL fixed, moving; } Placement;
 struct DesktopIcons {
     HWND list;
+    void *fileContext; BOOL (*fileTarget)(void *, POINT); void (*fileBegin)(void *);
     char path[MAX_PATH];
     char recovery[MAX_PATH];
     IconPosition *saved;
@@ -560,6 +561,12 @@ BOOL DesktopIconsMessage(DesktopIcons *icons, UINT message, WPARAM wp, LPARAM lp
     }
     if (!icons->dragging) return FALSE;
     if (message == WM_SETCURSOR && !icons->ghostEntered) { SetCursor(LoadCursorA(NULL,IDC_SIZEALL)); return TRUE; }
+    if (message == WM_MOUSEMOVE && icons->fileTarget && icons->fileBegin) {
+        POINT screen; GetCursorPos(&screen);
+        if(icons->fileTarget(icons->fileContext,screen)) {
+            EndDrag(icons,FALSE); icons->fileBegin(icons->fileContext); return TRUE;
+        }
+    }
     if (message == WM_MOUSEMOVE || message == WM_LBUTTONUP) {
         POINT point; point.x = (short)LOWORD(lp); point.y = (short)HIWORD(lp); MoveDrag(icons,point);
         if (message == WM_LBUTTONUP) EndDrag(icons,TRUE);
@@ -582,4 +589,9 @@ void DesktopIconsLineUp(DesktopIcons *icons)
         HeapFree(GetProcessHeap(),0,plan);
     }
     icons->ready = TRUE; icons->pending = FALSE; SaveOrReport(icons);
+}
+
+void DesktopIconsSetFileDrag(DesktopIcons *icons, void *context, BOOL (*target)(void *, POINT), void (*begin)(void *))
+{
+    if(icons) { icons->fileContext=context; icons->fileTarget=target; icons->fileBegin=begin; }
 }

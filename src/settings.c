@@ -96,7 +96,7 @@ static BOOL WriteOptions(const char *ini, const ShellOptions *o)
 {
     BOOL okay = TRUE;
 #define SAVE(section, key, member) okay &= WriteNumber(ini, section, key, o->member)
-    SAVE("Taskbar", "Edge", edge); SAVE("Taskbar", "Rows", rows); SAVE("Taskbar", "TaskWidth", taskWidth);
+    SAVE("Taskbar", "Edge", edge); SAVE("Taskbar", "Rows", rows); SAVE("Taskbar", "TaskWidth", taskWidth); SAVE("Taskbar", "TaskTiles", taskTiles);
     SAVE("Taskbar", "Locked", locked); SAVE("Taskbar", "AutoHide", autoHide); SAVE("Taskbar", "AlwaysOnTop", topmost);
     SAVE("Taskbar", "Clock", clock); SAVE("Taskbar", "QuickLaunch", quick); SAVE("Taskbar", "LargeIcons", largeIcons);
     SAVE("Taskbar", "QuickLaunchSize", quickSize);
@@ -109,6 +109,7 @@ static BOOL WriteOptions(const char *ini, const ShellOptions *o)
     SAVE("Desktop", "LockIcons", lockDesktopIcons); SAVE("Desktop", "SnapToGrid", snapDesktopIcons);
     SAVE("Desktop", "GridWidth", desktopGridX); SAVE("Desktop", "GridHeight", desktopGridY);
 #undef SAVE
+    okay &= WriteNumber(ini, "Start", "ItemsVersion", 2);
     okay &= WritePrivateProfileStringA("Start", "ButtonLabel", o->startLabel, ini);
     return okay;
 }
@@ -128,6 +129,7 @@ void SettingsChanged(HWND window)
 { if (!loading) EnableWindow(GetDlgItem(window, ID_APPLY_NOW), TRUE); }
 void SettingsPreviewChanged(HWND window)
 {
+    EnableWindow(GetDlgItem(window,ID_WIDTH),SendDlgItemMessageA(window,ID_TASKTILES,BM_GETCHECK,0,0)!=BST_CHECKED);
     InvalidateRect(GetDlgItem(window, ID_PREVIEW_TASKBAR), NULL, FALSE);
     InvalidateRect(GetDlgItem(window, ID_PREVIEW_START), NULL, FALSE);
     InvalidateRect(GetDlgItem(window, ID_PREVIEW_DESKTOP), NULL, FALSE); SettingsChanged(window);
@@ -178,6 +180,7 @@ int SettingsRecentMaximum(HWND window, int pins, BOOL large)
     options.edge = SendDlgItemMessageA(window, ID_EDGE, CB_GETCURSEL, 0, 0);
     options.rows = SendDlgItemMessageA(window, ID_ROWS, CB_GETCURSEL, 0, 0) + 1;
     options.largeIcons = Checked(window, ID_LARGE); options.largeStartIcons = large;
+    options.taskTiles=Checked(window,ID_TASKTILES);
     return StartMaximumRecentOptions(pins, &options);
 }
 static void PreviewTaskbar(HDC dc, const RECT *bounds, BOOL sampleTasks)
@@ -188,7 +191,7 @@ static void PreviewTaskbar(HDC dc, const RECT *bounds, BOOL sampleTasks)
     int iconSize = large ? 32 : 16, slot = large ? 36 : 22;
     int rows = (int)SendDlgItemMessageA(env.properties, ID_ROWS, CB_GETCURSEL, 0, 0) + 1;
     if (rows < 1) rows = 1;
-    int buttonHeight = EnvBarButtonHeight((large ? 40 : 28) * rows, rows);
+    int buttonHeight = EnvBarButtonHeight((Checked(env.properties,ID_TASKTILES) ? 44 : large ? 40 : 28) * rows, rows);
     GetDlgItemTextA(env.properties, ID_STARTLABEL, label, sizeof(label));
     if (!label[0]) lstrcpyA(label, "Start");
     startWidth = EnvStartLabelWidth(label);
@@ -224,10 +227,12 @@ static void PreviewTaskbar(HDC dc, const RECT *bounds, BOOL sampleTasks)
     taskWidth = (end - begin) / count;
     i = GetDlgItemInt(env.properties, ID_WIDTH, NULL, FALSE);
     if (i >= 80 && i <= 300 && taskWidth > i) taskWidth = i;
+    if(Checked(env.properties,ID_TASKTILES) && taskWidth>buttonHeight+2) taskWidth=buttonHeight+2;
     for (i = 0; i < count; ++i) {
-        HICON icon = EnvSystemIcon(i ? 16 : 5);
+        HICON icon = Checked(env.properties,ID_TASKTILES) ? EnvLargeSystemIcon(i ? 16 : 5) : EnvSystemIcon(i ? 16 : 5);
         SetRect(&part, begin + i * taskWidth, bounds->top + 3, begin + (i + 1) * taskWidth - 2, bounds->top + 3 + buttonHeight);
-        EnvPaintTaskButton(dc, &part, count == 1 ? "Windows Explorer (2)" : i ? "My Computer" : "Explorer95", icon, i == 0, FALSE);
+        if(Checked(env.properties,ID_TASKTILES)) EnvPaintTaskTile(dc,&part,icon,count==1 ? 2 : 1,i==0,FALSE);
+        else EnvPaintTaskButton(dc, &part, count == 1 ? "Windows Explorer (2)" : i ? "My Computer" : "Explorer95", icon, i == 0, FALSE);
         if (icon) DestroyIcon(icon);
     }
 }
@@ -238,7 +243,7 @@ static void Preview(const DRAWITEMSTRUCT *item)
     FillRect(dc, &rect, (HBRUSH)(COLOR_BTNFACE + 1)); DrawEdge(dc, &rect, EDGE_SUNKEN, BF_RECT);
     SelectObject(dc, env.host.font); SetBkMode(dc, TRANSPARENT); SetTextColor(dc, GetSysColor(COLOR_BTNTEXT));
     if (item->CtlID == ID_PREVIEW_TASKBAR) {
-        int barHeight = Checked(env.properties, ID_LARGE) ? 40 : 28;
+        int barHeight = Checked(env.properties,ID_TASKTILES) ? 44 : Checked(env.properties, ID_LARGE) ? 40 : 28;
         SetRect(&part, 2, (height - barHeight) / 2, width - 2, (height + barHeight) / 2);
         PreviewTaskbar(dc, &part, TRUE);
     } else if (item->CtlID == ID_PREVIEW_START) {
@@ -261,7 +266,7 @@ static void Preview(const DRAWITEMSTRUCT *item)
         if (Checked(env.properties, ID_DESKTOPICONS)) {
             HICON icon = EnvSystemIcon(16); DrawIconEx(dc, 16, 15, icon, 32, 32, 0, NULL, DI_NORMAL); if (icon) DestroyIcon(icon);
         }
-        int barHeight = Checked(env.properties, ID_LARGE) ? 40 : 28;
+        int barHeight = Checked(env.properties,ID_TASKTILES) ? 44 : Checked(env.properties, ID_LARGE) ? 40 : 28;
         SetRect(&part, 4, height - 4 - barHeight, width - 4, height - 4); PreviewTaskbar(dc, &part, FALSE);
     }
     PaintBufferEnd(&previewBuffer, item->hDC, &item->rcItem);
@@ -307,6 +312,7 @@ static BOOL Apply(HWND window)
     options.taskWidth = width; options.traySeconds = seconds;
     options.locked = Checked(window, ID_LOCK); options.autoHide = Checked(window, ID_AUTOHIDE); options.topmost = Checked(window, ID_TOPMOST);
     options.clock = Checked(window, ID_CLOCK); options.quick = Checked(window, ID_QUICK); options.largeIcons = Checked(window, ID_LARGE);
+    options.taskTiles=Checked(window,ID_TASKTILES);
     options.group = Checked(window, ID_GROUP); options.hideInactive = Checked(window, ID_INACTIVE);
     options.desktopIcons = Checked(window, ID_DESKTOPICONS); options.autoArrange = Checked(window, ID_AUTOARRANGE);
     options.lockDesktopIcons = Checked(window, ID_LOCKICONS); options.snapDesktopIcons = Checked(window, ID_SNAPICONS);
@@ -337,6 +343,7 @@ static LRESULT CALLBACK PropertiesProc(HWND window, UINT message, WPARAM wp, LPA
         Checkbox(window, SETTINGS_TASKBAR, "Auto-hide the taskbar", ID_AUTOHIDE, env.options.autoHide, 32, 152, 226);
         Checkbox(window, SETTINGS_TASKBAR, "Keep taskbar on top", ID_TOPMOST, env.options.topmost, 32, 180, 226);
         Checkbox(window, SETTINGS_TASKBAR, "Group similar windows", ID_GROUP, env.options.group, 32, 208, 226);
+        Checkbox(window, SETTINGS_TASKBAR, "Windows 7-style task tiles", ID_TASKTILES, env.options.taskTiles, 32, 236, 226);
         Checkbox(window, SETTINGS_TASKBAR, "Show Quick Launch", ID_QUICK, env.options.quick, 266, 124, 222);
         Checkbox(window, SETTINGS_TASKBAR, "Large Quick Launch icons", ID_LARGE, env.options.largeIcons, 266, 152, 222);
         Control(window, SETTINGS_TASKBAR, "BUTTON", "Open Quick Launch folder", WS_TABSTOP, ID_QUICKFOLDER, 266, 188, 218, 26);
@@ -348,7 +355,7 @@ static LRESULT CALLBACK PropertiesProc(HWND window, UINT message, WPARAM wp, LPA
         control = Control(window, SETTINGS_TASKBAR, "COMBOBOX", "", WS_TABSTOP | CBS_DROPDOWNLIST, ID_ROWS, 238, 268, 48, 100);
         SendMessageA(control, CB_ADDSTRING, 0, (LPARAM)"1"); SendMessageA(control, CB_ADDSTRING, 0, (LPARAM)"2"); SendMessageA(control, CB_ADDSTRING, 0, (LPARAM)"3"); SendMessageA(control, CB_SETCURSEL, env.options.rows - 1, 0);
         Control(window, SETTINGS_TASKBAR, "STATIC", "Button width:", 0, 0, 32, 316, 102, 20);
-        Control(window, SETTINGS_TASKBAR, "EDIT", "", WS_BORDER | WS_TABSTOP | ES_NUMBER, ID_WIDTH, 144, 312, 64, 23); SetDlgItemInt(window, ID_WIDTH, env.options.taskWidth, FALSE);
+        Control(window, SETTINGS_TASKBAR, "EDIT", "", WS_BORDER | WS_TABSTOP | ES_NUMBER, ID_WIDTH, 144, 312, 64, 23); SetDlgItemInt(window, ID_WIDTH, env.options.taskWidth, FALSE); EnableWindow(GetDlgItem(window,ID_WIDTH),!env.options.taskTiles);
         Control(window, SETTINGS_TASKBAR, "STATIC", "80 - 300 pixels", 0, 0, 222, 316, 260, 20);
         StartSettingsBegin(); StartSettingsCreate(window);
         Control(window, SETTINGS_DESKTOP, "STATIC", "", SS_OWNERDRAW, ID_PREVIEW_DESKTOP, 30, 52, 454, 88);

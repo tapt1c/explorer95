@@ -3,6 +3,7 @@
 #include "shell_internal.h"
 #include "browser.h"
 #include "shell_new.h"
+#include "file_drag.h"
 
 #define BROWSER_HISTORY 32
 #define BROWSER_EXTRA_TOOLS 6
@@ -72,6 +73,8 @@ typedef struct Browser {
     BrowserAddress *location;
     IContextMenu2 *context;
     ShellNew *newMenu;
+    FileDrop *fileDrop;
+    int dropIndex;
     BrowserOptions options;
     BrowserOptions layoutOptions;
     RECT layoutClient;
@@ -155,6 +158,7 @@ void BrowserFilesArrange(Browser *browser);
 void BrowserFilesOpen(Browser *browser);
 void BrowserFilesCommand(Browser *browser, int command);
 BOOL BrowserFilesNotify(Browser *browser, NMHDR *header);
+BOOL BrowserFilesCreateDrop(Browser *browser);
 void BrowserFilesContext(Browser *browser, LPARAM coordinates);
 void BrowserFilesDraw(Browser *browser, const DRAWITEMSTRUCT *draw);
 void BrowserFilesImages(Browser *browser);

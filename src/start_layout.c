@@ -3,9 +3,9 @@
 static int Minimum(int a, int b) { return a < b ? a : b; }
 static int Maximum(int a, int b) { return a > b ? a : b; }
 int StartMenuWidth(BOOL largeIcons) { return largeIcons ? 410 : 370; }
-void CalculateStartLayout(const RECT *bounds, int anchorX, int anchorY,
+void CalculateStartLayoutGroups(const RECT *bounds, int anchorX, int anchorY,
     int frameX, int frameY, int fontHeight, int pins, int requestedRecent,
-    int rightItems, BOOL largeIcons, StartLayout *out)
+    int rightItems, int rightGaps, BOOL largeIcons, StartLayout *out)
 {
     int width = bounds->right - bounds->left, height = bounds->bottom - bounds->top;
     int row = Maximum(largeIcons ? 40 : 28, fontHeight + 10), budget, gap, left, right, clientHeight;
@@ -22,10 +22,11 @@ void CalculateStartLayout(const RECT *bounds, int anchorX, int anchorY,
     gap = out->pinRows && requestedRecent ? 8 : 0;
     out->recentRows = Minimum(requestedRecent, Maximum(0, budget - out->pinRows * row - gap) / row);
     if (!out->recentRows) gap = 0;
-    out->rightRows = Minimum(rightItems, budget / row);
+    if (rightGaps < 0) rightGaps = 0;
+    out->rightRows = Minimum(rightItems, Maximum(0, budget - rightGaps) / row);
     out->moreRight = rightItems > out->rightRows;
     left = out->pinRows * row + gap + out->recentRows * row;
-    right = out->rightRows * row;
+    right = out->rightRows * row + (out->rightRows ? rightGaps : 0);
     clientHeight = header + Maximum(left, right) + programs + footer;
     out->rowHeight = row; out->bodyTop = header;
     out->separatorY = gap ? header + out->pinRows * row + gap / 2 : -1;
@@ -40,4 +41,12 @@ void CalculateStartLayout(const RECT *bounds, int anchorX, int anchorY,
      * intentionally large value to align the menu's bottom with the screen. */
     out->window.top = Maximum(bounds->top, Minimum(anchorY - out->window.bottom, bounds->bottom - out->window.bottom));
     out->window.right += out->window.left; out->window.bottom += out->window.top;
+}
+
+void CalculateStartLayout(const RECT *bounds, int anchorX, int anchorY,
+    int frameX, int frameY, int fontHeight, int pins, int requestedRecent,
+    int rightItems, BOOL largeIcons, StartLayout *out)
+{
+    CalculateStartLayoutGroups(bounds,anchorX,anchorY,frameX,frameY,fontHeight,
+        pins,requestedRecent,rightItems,0,largeIcons,out);
 }
