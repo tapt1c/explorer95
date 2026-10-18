@@ -39,7 +39,15 @@ static void DragTaskPane(HWND browser, HWND sidebar, int delta, BOOL cancel)
     Check(WindowFromPoint(point) == browser, "pane resizing starts on the visible frame separator");
     mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0); PumpFor(40);
     SetCursorPos(point.x + delta, point.y); PumpFor(60);
-    if (cancel) { keybd_event(VK_ESCAPE, 0, 0, 0); keybd_event(VK_ESCAPE, 0, KEYEVENTF_KEYUP, 0); PumpFor(60); }
+    if (cancel) {
+        DWORD started = GetTickCount(); RECT restored;
+        keybd_event(VK_ESCAPE, 0, 0, 0); keybd_event(VK_ESCAPE, 0, KEYEVENTF_KEYUP, 0);
+        /* Do not release the mouse while the other GUI thread is still
+         * processing the layout/input. Observe cancellation before ending
+         * the drag; one keyboard injection, same restored-width assertion. */
+        do { PumpFor(20); GetWindowRect(sidebar,&restored); }
+        while (restored.right - restored.left != rect.right - rect.left && GetTickCount() - started < 3000);
+    }
     mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0); PumpFor(60);
 }
 static POINT SelectNativePlace(HWND list, BOOL control)
