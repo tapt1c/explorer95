@@ -63,6 +63,50 @@ static BOOL DesktopGhostIsTransparent(HWND list)
     if (!okay || opaque <= 20) { char text[120]; wsprintfA(text,"Ghost transparency: opaque=%d min-transparent=%d\r\n",opaque,minimum); Log(text); }
     return okay && opaque > 20;
 }
+static void CheckDesktopGridLabels(HWND list, int size)
+{
+    int i,j,count=ListView_GetItemCount(list); RECT area; GetClientRect(list,&area);
+    for(i=0;i<count;++i) {
+        POINT point=DesktopPoint(list,i); RECT bounds,other,intersection;
+        if((point.x-(64-size)/2)%64 || (point.y-4)%80) {
+            char note[120]; wsprintfA(note,"Grid: size=%d item=%d position=%ld,%ld\r\n",size,i,point.x,point.y); Log(note);
+        }
+        Check((point.x-(64-size)/2)%64==0 && (point.y-4)%80==0,"long shortcut labels retain the same desktop grid origin and pitch as short names");
+        ListView_GetItemRect(list,i,&bounds,LVIR_BOUNDS);
+        Check(bounds.left>=0 && bounds.top>=0 && bounds.right<=area.right && bounds.bottom<=area.bottom,"a complete grid cell keeps the shortcut and its label inside the desktop");
+        for(j=0;j<i;++j) { ListView_GetItemRect(list,j,&other,LVIR_BOUNDS); Check(!IntersectRect(&intersection,&bounds,&other),"grid-aligned shortcut labels do not overlap neighbouring icons"); }
+    }
+}
+static void DesktopGridLabelTests(const char *directory)
+{
+    HWND parent, list; HIMAGELIST images; int size, i;
+    char profile[MAX_PATH], layout[MAX_PATH];
+    const char *names[]={"One","Shortcut to Inbox","Shortcut to explorer95.exe","A long shortcut name with several words and an extension.lnk"};
+    for(size=32;size<=48;size+=16) {
+        parent=CreateWindowA("Explorer95.IconTest","Grid label fixture",WS_POPUP|WS_VISIBLE,0,0,600,410,NULL,NULL,GetModuleHandleA(NULL),NULL);
+        list=CreateWindowA(WC_LISTVIEWA,"",WS_CHILD|WS_VISIBLE|LVS_ICON|LVS_ALIGNLEFT|LVS_SHAREIMAGELISTS,0,0,580,360,parent,NULL,GetModuleHandleA(NULL),NULL);
+        images=ImageList_Create(size,size,ILC_COLOR|ILC_MASK,1,1); ImageList_AddIcon(images,LoadIconA(NULL,IDI_APPLICATION)); ListView_SetImageList(list,images,LVSIL_NORMAL);
+        testDesktopListProc=(WNDPROC)SetWindowLongPtrA(list,GWLP_WNDPROC,(LONG_PTR)DesktopTestListProc);
+        for(i=0;i<4;++i) DesktopItem(list,i,names[i],(64-size)/2,4+i*80);
+        wsprintfA(profile,"%s\\grid%d.ini",directory,size); wsprintfA(layout,"%s.DIP",profile);
+        testDesktopIcons=DesktopIconsCreate(list,profile); DesktopIconsConfigure(testDesktopIcons,FALSE,FALSE,TRUE,64,80); DesktopPump();
+        DesktopIconsLineUp(testDesktopIcons);
+        CheckDesktopGridLabels(list,size);
+        ListView_SetItemState(list,-1,0,LVIS_SELECTED); ListView_SetItemState(list,2,LVIS_SELECTED,LVIS_SELECTED);
+        DesktopBegin(parent,list,2); SendMessageA(list,WM_LBUTTONUP,0,MAKELPARAM(-100,-100));
+        CheckDesktopGridLabels(list,size);
+        ListView_SetItemText(list,1,0,"Shortcut to Inbox with a longer display name"); DesktopIconsChanged(testDesktopIcons); DesktopPump();
+        CheckDesktopGridLabels(list,size);
+        /* Migrate positions that the old label-edge clamp saved off-grid. */
+        { POINT point=DesktopPoint(list,3); ListView_SetItemPosition(list,3,point.x+5,point.y+3); }
+        DesktopIconsDestroy(testDesktopIcons); testDesktopIcons=NULL;
+        testDesktopIcons=DesktopIconsCreate(list,profile); DesktopIconsConfigure(testDesktopIcons,FALSE,FALSE,TRUE,64,80); DesktopPump();
+        CheckDesktopGridLabels(list,size);
+        DesktopIconsDestroy(testDesktopIcons); testDesktopIcons=NULL;
+        SetWindowLongPtrA(list,GWLP_WNDPROC,(LONG_PTR)testDesktopListProc); DestroyWindow(parent); ImageList_Destroy(images);
+        Check(DeleteFileA(layout),"remove only our shortcut grid layout fixture");
+    }
+}
 static void DesktopIconTests(const char *directory)
 {
     WNDCLASSA cls; HWND parent, list; HIMAGELIST images; char profile[MAX_PATH], layout[MAX_PATH]; POINT a, b, saved; RECT bounds, area;
@@ -201,4 +245,5 @@ static void DesktopIconTests(const char *directory)
           "a desktop with no free room cancels the complete drop without partial neighbour movement"); }
     DesktopIconsDestroy(testDesktopIcons); testDesktopIcons = NULL;
     SetWindowLongPtrA(list,GWLP_WNDPROC,(LONG_PTR)testDesktopListProc); DestroyWindow(parent); ImageList_Destroy(images); DeleteFileA(layout);
+    DesktopGridLabelTests(directory);
 }

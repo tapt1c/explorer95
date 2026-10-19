@@ -28,7 +28,8 @@ struct DesktopIcons {
 };
 static void EndDrag(DesktopIcons *icons, BOOL commit);
 static void MoveDrag(DesktopIcons *icons, POINT point);
-static BOOL ResolvePositions(DesktopIcons *icons, Placement *plan, int count);
+static POINT GridPoint(DesktopIcons *icons, POINT point);
+static BOOL ResolvePositions(DesktopIcons *icons, Placement *plan, int count, BOOL grid);
 static Placement *MakePlan(DesktopIcons *icons, int *count);
 static void ApplyPlan(DesktopIcons *icons, const Placement *plan, int count);
 static void EnableNativeRedraw(DesktopIcons *icons)
@@ -136,14 +137,16 @@ static void Restore(DesktopIcons *icons)
         if (!Name(icons->list, i, name)) continue;
         for (j = 0; j < icons->count; ++j) if (!used[j] && !lstrcmpA(name, icons->saved[j].name)) {
             point.x = icons->saved[j].x; point.y = icons->saved[j].y;
-            point = Fit(icons->list, i, point); ListView_SetItemPosition(icons->list, i, point.x, point.y);
+            if(!icons->snap) point = Fit(icons->list, i, point);
+            ListView_SetItemPosition(icons->list, i, point.x, point.y);
             used[j] = TRUE; break;
         }
     }
     if (!icons->automatic) {
         int total; Placement *plan = MakePlan(icons,&total);
         if (plan) {
-            if (ResolvePositions(icons,plan,total)) ApplyPlan(icons,plan,total);
+            if(icons->snap) for(i=0;i<total;++i) plan[i].to=GridPoint(icons,plan[i].to);
+            if (ResolvePositions(icons,plan,total,icons->snap)) ApplyPlan(icons,plan,total);
             HeapFree(GetProcessHeap(),0,plan);
         }
         RememberVisible(icons);
@@ -287,11 +290,14 @@ static RECT At(const Placement *p, POINT point)
 {
     RECT r = p->offset; r.left += point.x; r.right += point.x; r.top += point.y; r.bottom += point.y; return r;
 }
-static BOOL FitPlacement(const RECT *area, const Placement *p, POINT *point)
+static BOOL FitPlacement(const RECT *area, const Placement *p, POINT *point, BOOL grid)
 {
     int left = -p->offset.left, right = area->right - p->offset.right;
     int top = -p->offset.top, bottom = area->bottom - p->offset.bottom;
     if (right < left || bottom < top) return FALSE;
+    /* Clamping to a label edge shifts the icon off its grid. A grid candidate
+     * either fits completely or must use another WHOLE cell. */
+    if(grid) return point->x>=left && point->x<=right && point->y>=top && point->y<=bottom;
     point->x = Clamp(point->x,left,right); point->y = Clamp(point->y,top,bottom); return TRUE;
 }
 static BOOL FreePosition(const Placement *plan, int count, int index, POINT point)
@@ -307,22 +313,22 @@ static BOOL FreePosition(const Placement *plan, int count, int index, POINT poin
 }
 static int Distance(POINT a, POINT b)
 { int x = a.x - b.x, y = a.y - b.y; return (x < 0 ? -x : x) + (y < 0 ? -y : y); }
-static void TryPosition(const RECT *area, const Placement *plan, int count, int index, POINT candidate, POINT *best, int *score)
+static void TryPosition(const RECT *area, const Placement *plan, int count, int index, POINT candidate, POINT *best, int *score, BOOL grid)
 {
-    if (FitPlacement(area,&plan[index],&candidate) && FreePosition(plan,count,index,candidate)) {
+    if (FitPlacement(area,&plan[index],&candidate,grid) && FreePosition(plan,count,index,candidate)) {
         int distance = Distance(candidate,plan[index].to);
         if (distance < *score) { *score = distance; *best = candidate; }
     }
 }
 static void TryCell(DesktopIcons *icons, const RECT *area, const Placement *plan, int count, int index,
-    int x, int y, int columns, int rows, POINT *best, int *score)
+    int x, int y, int columns, int rows, POINT *best, int *score, BOOL grid)
 {
     POINT point;
     if (x < 0 || y < 0 || x >= columns || y >= rows) return;
-    point.x = x * icons->width + (icons->width - GetSystemMetrics(SM_CXICON)) / 2; point.y = y * icons->height + 4;
-    TryPosition(area,plan,count,index,point,best,score);
+    point.x = x * icons->width + (icons->width - IconWidth(icons)) / 2; point.y = y * icons->height + 4;
+    TryPosition(area,plan,count,index,point,best,score,grid);
 }
-static BOOL FindFreePosition(DesktopIcons *icons, const RECT *area, Placement *plan, int count, int index)
+static BOOL FindFreePosition(DesktopIcons *icons, const RECT *area, Placement *plan, int count, int index, BOOL grid)
 {
     POINT best = plan[index].to, center = GridPoint(icons,best); int score = 0x7fffffff, i, radius, d;
     int columns = area->right / icons->width + 1, rows = area->bottom / icons->height + 1;
@@ -330,17 +336,17 @@ static BOOL FindFreePosition(DesktopIcons *icons, const RECT *area, Placement *p
     int cy = Clamp((center.y - 4) / icons->height,0,rows-1);
     /* A displaced neighbour can use the vacated position of a dragged icon. */
     for (i = 0; i < count; ++i) if (plan[i].moving) {
-        POINT point = icons->snap ? GridPoint(icons,plan[i].from) : plan[i].from;
-        TryPosition(area,plan,count,index,point,&best,&score);
+        POINT point = grid ? GridPoint(icons,plan[i].from) : plan[i].from;
+        TryPosition(area,plan,count,index,point,&best,&score,grid);
     }
     for (radius = 0; radius < columns || radius < rows; ++radius) {
         for (d = -radius; d <= radius; ++d) {
-            TryCell(icons,area,plan,count,index,cx+d,cy-radius,columns,rows,&best,&score);
-            if (radius) TryCell(icons,area,plan,count,index,cx+d,cy+radius,columns,rows,&best,&score);
+            TryCell(icons,area,plan,count,index,cx+d,cy-radius,columns,rows,&best,&score,grid);
+            if (radius) TryCell(icons,area,plan,count,index,cx+d,cy+radius,columns,rows,&best,&score,grid);
         }
         for (d = -radius+1; d < radius; ++d) {
-            TryCell(icons,area,plan,count,index,cx-radius,cy+d,columns,rows,&best,&score);
-            TryCell(icons,area,plan,count,index,cx+radius,cy+d,columns,rows,&best,&score);
+            TryCell(icons,area,plan,count,index,cx-radius,cy+d,columns,rows,&best,&score,grid);
+            TryCell(icons,area,plan,count,index,cx+radius,cy+d,columns,rows,&best,&score,grid);
         }
         if (score != 0x7fffffff && radius * (icons->width < icons->height ? icons->width : icons->height) > score + icons->width + icons->height) break;
     }
@@ -365,21 +371,21 @@ static Placement *MakePlan(DesktopIcons *icons, int *count)
     }
     return plan;
 }
-static BOOL ResolvePositions(DesktopIcons *icons, Placement *plan, int count)
+static BOOL ResolvePositions(DesktopIcons *icons, Placement *plan, int count, BOOL grid)
 {
     RECT area; int i; GetClientRect(icons->list,&area);
     /* Moving items have priority. Reserve all unaffected neighbours before
      * searching, so clearing one overlap does not shuffle unrelated icons. */
     for (i = 0; i < count; ++i) if (plan[i].moving) {
         POINT fitted = plan[i].to;
-        if (!FitPlacement(&area,&plan[i],&fitted) || fitted.x != plan[i].to.x || fitted.y != plan[i].to.y || !FreePosition(plan,count,i,plan[i].to)) return FALSE;
+        if (!FitPlacement(&area,&plan[i],&fitted,grid) || fitted.x != plan[i].to.x || fitted.y != plan[i].to.y || !FreePosition(plan,count,i,plan[i].to)) return FALSE;
         plan[i].fixed = TRUE;
     }
     for (i = 0; i < count; ++i) if (!plan[i].moving) {
-        if (FitPlacement(&area,&plan[i],&plan[i].to) && FreePosition(plan,count,i,plan[i].to)) plan[i].fixed = TRUE;
+        if (FitPlacement(&area,&plan[i],&plan[i].to,grid) && FreePosition(plan,count,i,plan[i].to)) plan[i].fixed = TRUE;
     }
     for (i = 0; i < count; ++i) if (!plan[i].fixed) {
-        if (!FindFreePosition(icons,&area,plan,count,i)) return FALSE;
+        if (!FindFreePosition(icons,&area,plan,count,i,grid)) return FALSE;
         plan[i].fixed = TRUE;
     }
     return TRUE;
@@ -492,6 +498,15 @@ static POINT DragDelta(DesktopIcons *icons, POINT point, BOOL snap)
     GetClientRect(icons->list,&area);
     delta.x = Clamp(delta.x,-bounds.left,area.right-bounds.right < -bounds.left ? -bounds.left : area.right-bounds.right);
     delta.y = Clamp(delta.y,-bounds.top,area.bottom-bounds.bottom < -bounds.top ? -bounds.top : area.bottom-bounds.bottom);
+    if(snap) {
+        POINT anchor=icons->drag[icons->dragAnchor].point, target={anchor.x+delta.x,anchor.y+delta.y};
+        target=GridPoint(icons,target);
+        if(target.x-anchor.x < -bounds.left) target.x+=icons->width;
+        if(target.x-anchor.x > area.right-bounds.right) target.x-=icons->width;
+        if(target.y-anchor.y < -bounds.top) target.y+=icons->height;
+        if(target.y-anchor.y > area.bottom-bounds.bottom) target.y-=icons->height;
+        delta.x=target.x-anchor.x; delta.y=target.y-anchor.y;
+    }
     return delta;
 }
 static void EndDrag(DesktopIcons *icons, BOOL commit)
@@ -512,7 +527,7 @@ static void EndDrag(DesktopIcons *icons, BOOL commit)
                 if (index >= count) break;
                 plan[index].moving = TRUE; plan[index].to.x = icons->drag[i].point.x+delta.x; plan[index].to.y = icons->drag[i].point.y+delta.y;
             }
-            if (i == icons->dragCount && ResolvePositions(icons,plan,count)) ApplyPlan(icons,plan,count);
+            if (i == icons->dragCount && ResolvePositions(icons,plan,count,icons->snap)) ApplyPlan(icons,plan,count);
             else commit = FALSE; /* No room: leave the complete original layout. */
             HeapFree(GetProcessHeap(),0,plan);
         } else commit = FALSE;
@@ -599,7 +614,7 @@ void DesktopIconsLineUp(DesktopIcons *icons)
         plan = MakePlan(icons,&count);
         if (!plan) return;
         for (i = 0; i < count; ++i) plan[i].to = GridPoint(icons,plan[i].to);
-        if (ResolvePositions(icons,plan,count)) ApplyPlan(icons,plan,count);
+        if (ResolvePositions(icons,plan,count,TRUE)) ApplyPlan(icons,plan,count);
         HeapFree(GetProcessHeap(),0,plan);
     }
     icons->ready = TRUE; icons->pending = FALSE; SaveOrReport(icons);
