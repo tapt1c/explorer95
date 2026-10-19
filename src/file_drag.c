@@ -285,6 +285,21 @@ FileDrop *FileDropRegister(HWND window, HWND owner, void *context, FileDropResol
     if(fallback) IDropTarget_AddRef(fallback);
     result=RegisterDragDrop(window,&target->iface);
     RenderTraceShell("drop-register",result,GetDlgCtrlID(window),fallback!=NULL);
+    /* Win95 Shell32 can register the owned ListView itself, while Wine only
+     * registers its parent. Keep that native target as our delegate, otherwise
+     * desktop self-drops bypass local placement and may create shortcuts. */
+    if(result==DRAGDROP_E_ALREADYREGISTERED && fallback) {
+        result=RevokeDragDrop(window);
+        RenderTraceShell("drop-revoke-native",result,GetDlgCtrlID(window),0);
+        if(SUCCEEDED(result)) {
+            result=RegisterDragDrop(window,&target->iface);
+            RenderTraceShell("drop-register-owned",result,GetDlgCtrlID(window),0);
+            if(FAILED(result)) {
+                HRESULT restored=RegisterDragDrop(window,fallback);
+                RenderTraceShell("drop-restore-native",restored,GetDlgCtrlID(window),0);
+            }
+        }
+    }
     if(FAILED(result)) { TargetRelease(&target->iface); return NULL; }
     return target;
 }

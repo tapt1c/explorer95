@@ -814,6 +814,14 @@ explorer95.exe --settings="C:\EX95TEST\Explorer95.ini"
   по кэшированным данным текущей папки; не перечисляйте другие диски/сеть.
   Виртуальные цели рабочего стола сохраняют native IDropTarget из IShellView;
   собственный target регистрируется только на child ListView.
+  Shell32 Win95 может заранее зарегистрировать и сам child ListView.
+  FileDropRegister обрабатывает DRAGDROP_E_ALREADYREGISTERED только при наличии
+  сохранённого native fallback этого собственного view: снимает его регистрацию
+  и ставит собственный target, продолжая делегировать виртуальные цели native.
+  При ошибке повторной регистрации восстанавливает fallback; без fallback
+  существующая регистрация не меняется. Не снимайте target с чужих окон.
+  FileDropRegistrationTests проверяет настоящий OLE: заранее зарегистрированное
+  окно, отказ без fallback, замену с сохранённым делегатом и баланс ссылок.
   Не используйте частные lParam системного ListView в качестве PIDL.
 - Не полагайтесь на успех произвольного IShellFolder IDropTarget как доказательство
   переноса: Wine 10 shfldr_fs.c возвращает S_OK, но Copy/Move/Link там — заглушки.

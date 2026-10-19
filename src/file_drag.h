@@ -12,6 +12,8 @@ typedef void (*FileDropFeedback)(void *context, POINT screen, DWORD effect);
 /* A source may place its own desktop icons without a filesystem operation,
  * including virtual objects with no CF_HDROP. TRUE consumes this target. */
 typedef BOOL (*FileDropLocal)(void *context, POINT screen, DWORD keys, BOOL drop, DWORD *effect);
+/* A fallback is the retained native target of this application's owned view.
+ * An existing registration may be replaced; failure restores the fallback. */
 FileDrop *FileDropRegister(HWND window, HWND owner, void *context, FileDropResolve resolve, FileDropFeedback feedback, FileDropNotify leave, FileDropNotify completed, IDropTarget *fallback);
 void FileDropSetLocal(FileDrop *target, FileDropLocal local);
 void FileDropRevoke(FileDrop *target);
