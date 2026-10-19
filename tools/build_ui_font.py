@@ -10,6 +10,7 @@ import sys
 from fontTools import subset
 from fontTools.ttLib import TTFont
 from fontTools.ttLib.tables._c_m_a_p import CmapSubtable
+from fontTools.ttLib.tables._n_a_m_e import makeName
 
 font = TTFont(sys.argv[1], recalcTimestamp=False)
 cmap = font.getBestCmap().copy()
@@ -30,6 +31,12 @@ for name in font['name'].names:
                    4:'Explorer95 UI', 6:'Explorer95UI', 16:'Explorer95 UI',17:'Regular'}.get(name.nameID)
     if replacement:
         name.string = replacement.encode(name.getEncoding())
+# Windows 95 selects name records for the active Microsoft cmap encoding.
+# The symbol cmap must have matching Microsoft Symbol (3,0) names, not only
+# Unicode (3,1) names as modern font engines tolerate.
+for name in list(font['name'].names):
+    if name.platformID == 3 and name.platEncID == 1:
+        font['name'].names.append(makeName(name.toUnicode(),name.nameID,3,0,name.langID))
 symbol = CmapSubtable.newSubtable(4)
 symbol.platformID, symbol.platEncID, symbol.language = 3,0,0
 symbol.cmap = {point:glyph for point,glyph in cmap.items() if point in points}

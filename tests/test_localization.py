@@ -47,7 +47,16 @@ class LocalizationTests(unittest.TestCase):
             mappings.append((platform,encoding,struct.unpack_from('>H',cmap,offset)[0]))
         self.assertIn((3,0,4),mappings)
         self.assertIn((3,1,4),mappings)
-        self.assertIn('Explorer95 UI'.encode('utf-16-be'),tables[b'name'])
+        names=tables[b'name']; records=[]
+        _,count,strings=struct.unpack_from('>HHH',names,0)
+        for i in range(count):
+            platform,encoding,language,name_id,length,offset=struct.unpack_from('>6H',names,6+i*12)
+            records.append((platform,encoding,name_id,names[strings+offset:strings+offset+length]))
+        family='Explorer95 UI'.encode('utf-16-be')
+        # Modern renderers accept Unicode-only names for symbol cmaps. Win95
+        # needs matching Microsoft Symbol names as well as Unicode names.
+        self.assertIn((3,0,1,family),records)
+        self.assertIn((3,1,1,family),records)
         self.assertIn(b'SIL OPEN FONT LICENSE',(ROOT/'resources/LiberationSans-LICENSE.txt').read_bytes())
 
 if __name__=='__main__': unittest.main()

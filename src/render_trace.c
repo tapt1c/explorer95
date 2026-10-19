@@ -68,7 +68,7 @@ void RenderTraceTrayDetail(DWORD stage, DWORD error, DWORD detail, DWORD value)
 void RenderTraceOpen(void)
 {
     char path[MAX_PATH], text[200]; DWORD length; int end; HDC dc;
-    if (!RenderTraceRequested()) return;
+    if (traceFile != INVALID_HANDLE_VALUE || !RenderTraceRequested()) return;
     length = GetModuleFileNameA(NULL, path, MAX_PATH);
     if (!length || length >= MAX_PATH) return;
     end = length; while (end && path[end - 1] != '\\') --end;

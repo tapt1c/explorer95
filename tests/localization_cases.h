@@ -1,4 +1,5 @@
 #include "../src/localization.h"
+#include "../src/font_resource.h"
 static BOOL LanguageWideEqual(HWND window,const WCHAR *expected)
 {
     WCHAR actual[160]; int i; ZeroMemory(actual,sizeof(actual)); GetWindowTextW(window,actual,160);
@@ -7,9 +8,51 @@ static BOOL LanguageWideEqual(HWND window,const WCHAR *expected)
 }
 static LRESULT CALLBACK LanguageProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
 { return DefWindowProcA(window,message,wp,lp); }
+static void LanguageFontResourceTests(const char *directory)
+{
+    UiFontResource resource; char file[MAX_PATH],wrapper[MAX_PATH],temp[MAX_PATH],tmp[MAX_PATH],missing[MAX_PATH];
+    DWORD tempLength=GetEnvironmentVariableA("TEMP",temp,MAX_PATH),tmpLength=GetEnvironmentVariableA("TMP",tmp,MAX_PATH);
+    Check(tempLength<MAX_PATH && tmpLength<MAX_PATH,"the font fixture can preserve its process temporary-directory settings");
+    Check(SetEnvironmentVariableA("TEMP",directory) && SetEnvironmentVariableA("TMP",directory),"use only our temporary directory for the classic font resource fixture");
+    Check(UiFontResourceOpen(&resource,TRUE),"the real Win95 font backend creates and registers a scalable-font FOT wrapper");
+    Check(resource.wrapper && resource.registered && resource.file[0] && lstrcmpiA(resource.file,resource.registration),
+        "legacy registration keeps distinct owned TTF and FOT files");
+    lstrcpyA(file,resource.file); lstrcpyA(wrapper,resource.registration);
+    Check(GetFileAttributesA(file)!=INVALID_FILE_ATTRIBUTES && GetFileAttributesA(wrapper)!=INVALID_FILE_ATTRIBUTES,
+        "both temporary font files exist until the registered font is released");
+    {
+        LOGFONTA face; char actual[LF_FACESIZE]; ZeroMemory(&face,sizeof(face));
+        face.lfHeight=-11; face.lfCharSet=SYMBOL_CHARSET; lstrcpyA(face.lfFaceName,UI_FONT_FACE);
+        HFONT font=CreateFontIndirectA(&face); HDC dc=GetDC(NULL); HFONT old=SelectObject(dc,font);
+        Check(font && GetTextFaceA(dc,sizeof(actual),actual) && !lstrcmpA(actual,UI_FONT_FACE),"FOT registration selects the actual bundled face instead of silently substituting a system font");
+        HDC a=CreateCompatibleDC(dc),b=CreateCompatibleDC(dc); RECT rect={0,0,160,32};
+        HBITMAP bitmapA=CreateCompatibleBitmap(dc,160,32),bitmapB=CreateCompatibleBitmap(dc,160,32);
+        HGDIOBJ ba=SelectObject(a,bitmapA),bb=SelectObject(b,bitmapB),fa=SelectObject(a,font),fb=SelectObject(b,font);
+        FillRect(a,&rect,(HBRUSH)(COLOR_WINDOW+1)); FillRect(b,&rect,(HBRUSH)(COLOR_WINDOW+1));
+        SetTextColor(a,0); SetTextColor(b,0); SetBkMode(a,TRANSPARENT); SetBkMode(b,TRANSPARENT);
+        DrawTextA(a,"\xcf\xf3\xf1\xea",-1,&rect,DT_SINGLELINE|DT_NOPREFIX);
+        DrawTextW(b,L"\u041f\u0443\u0441\u043a",-1,&rect,DT_SINGLELINE|DT_NOPREFIX);
+        int x,y,ink=0,different=0;
+        for(y=0;y<32;++y) for(x=0;x<160;++x) { COLORREF color=GetPixel(a,x,y); if(color!=GetSysColor(COLOR_WINDOW)) ++ink; if(color!=GetPixel(b,x,y)) ++different; }
+        Check(ink>20 && different<20,"the FOT-loaded symbol face draws actual Cyrillic through ANSI GDI on an English locale");
+        SelectObject(a,fa); SelectObject(b,fb); SelectObject(a,ba); SelectObject(b,bb); DeleteObject(bitmapA); DeleteObject(bitmapB); DeleteDC(a); DeleteDC(b);
+        SelectObject(dc,old); DeleteObject(font); ReleaseDC(NULL,dc);
+    }
+    UiFontResourceClose(&resource);
+    Check(GetFileAttributesA(file)==INVALID_FILE_ATTRIBUTES && GetFileAttributesA(wrapper)==INVALID_FILE_ATTRIBUTES,
+        "closing the classic font resource removes both of its own files");
+    UiFontResourceClose(&resource);
+    wsprintfA(missing,"%s\\missing font temp",directory);
+    Check(SetEnvironmentVariableA("TEMP",missing) && SetEnvironmentVariableA("TMP",missing),"select a nonexistent directory owned by this fixture for the failure case");
+    BOOL opened=UiFontResourceOpen(&resource,TRUE);
+    Check(SetEnvironmentVariableA("TEMP",tempLength ? temp : NULL) && SetEnvironmentVariableA("TMP",tmpLength ? tmp : NULL),"restore the original process temporary-directory settings");
+    Check(!opened && !lstrcmpA(resource.stage,"font.temp.reserve") && resource.error && !resource.file[0] && !resource.registration[0] && !resource.registered,
+        "a real temporary-file failure reports its exact stage and retains no font registration or file ownership");
+}
 static void LanguageTests(const char *directory)
 {
     char profile[MAX_PATH],text[64],face[64]; LOGFONTA font; WNDCLASSA cls; HWND window,button,edit; HMENU menu;
+    LanguageFontResourceTests(directory);
     wsprintfA(profile,"%s\\language-unit.ini",directory);
     Check(UiReadLanguage(profile)==0,"a missing language preference preserves English");
     Check(WritePrivateProfileStringA("Interface","Language","invalid",profile) && UiReadLanguage(profile)==0,"an invalid language falls back to English");
@@ -68,17 +111,44 @@ static void LanguageTests(const char *directory)
     Check(UiLanguage()==0 && !lstrcmpA(UiText("Start"),"Start"),"language teardown restores the English test state");
     Check(DeleteFileA(profile),"remove only the language unit fixture");
 }
+static void LanguageFontTrace(const char *path)
+{
+    HANDLE file=CreateFileA(path,GENERIC_READ,FILE_SHARE_READ,NULL,OPEN_EXISTING,0,NULL);
+    Check(file!=INVALID_HANDLE_VALUE,"the isolated Russian launch writes its own startup trace");
+    DWORD size=GetFileSize(file,NULL),bytes=0,offset=0; UINT stage;
+    Check(size>100 && size<=512UL*1024,"the font trace stays within the existing diagnostic size limit");
+    char *contents=HeapAlloc(GetProcessHeap(),0,size+1);
+    Check(contents && ReadFile(file,contents,size,&bytes,NULL) && bytes==size,"read font loading diagnostics after the Russian process exits");
+    CloseHandle(file);
+    const char *stages[]={"shell stage=font.resource result=00000000", "shell stage=font.write result=00000000",
+        "shell stage=font.register result=00000000", "shell stage=font.ready result=00000000",
+        "shell stage=exit.ole ","shell stage=font.remove result=00000000","shell stage=exit.done "};
+    for(stage=0;stage<sizeof(stages)/sizeof(stages[0]);++stage) {
+        DWORD length=lstrlenA(stages[stage]); BOOL found=FALSE;
+        while(offset+length<=bytes) {
+            DWORD j=0; while(j<length && contents[offset+j]==stages[stage][j]) ++j;
+            ++offset; if(j==length) { found=TRUE; break; }
+        }
+        Check(found,stages[stage]);
+    }
+    HeapFree(GetProcessHeap(),0,contents);
+    Check(DeleteFileA(path),"remove only the trace beside our copied bilingual fixture executable");
+}
 static void LanguageRestartTests(const char *directory,const char *executable)
 {
     char folder[MAX_PATH],profile[MAX_PATH],command[MAX_PATH*3],key[16]; STARTUPINFOA startup; HWND bar,properties,dialog;
     wsprintfA(folder,"%s\\language restart",directory); Check(CreateDirectoryA(folder,NULL),"create a separate profile for bilingual restart testing");
     wsprintfA(profile,"%s\\Explorer95.ini",folder);
-    char probe[MAX_PATH],renamed[MAX_PATH]; wsprintfA(probe,"%s\\Copy",folder);
+    char probe[MAX_PATH],renamed[MAX_PATH],ownExe[MAX_PATH],trace[MAX_PATH];
+    wsprintfA(ownExe,"%s\\bilingual.exe",folder);
+    Check(CopyFileA(executable,ownExe,TRUE),"copy the executable into our own directory so startup diagnostics cannot overwrite another log");
+    wsprintfA(trace,"%s\\EX95REND.LOG",folder);
+    wsprintfA(probe,"%s\\Copy",folder);
     HANDLE fixture=CreateFileA(probe,GENERIC_WRITE,0,NULL,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL);
     Check(fixture!=INVALID_HANDLE_VALUE,"create a native filename equal to an English UI label"); CloseHandle(fixture);
     Check(WritePrivateProfileStringA("Interface","Language","ru",profile),"save the Russian language in the isolated profile");
     ZeroMemory(&startup,sizeof(startup)); startup.cb=sizeof(startup);
-    wsprintfA(command,"\"%s\" --settings=\"%s\" --open=\"%s\"",executable,profile,folder);
+    wsprintfA(command,"\"%s\" --settings=\"%s\" --open=\"%s\" --trace-render",ownExe,profile,folder);
     Check(CreateProcessA(NULL,command,NULL,NULL,FALSE,0,NULL,NULL,&startup,&process),"launch the real application in Russian");
     bar=WaitFor("Explorer95.Taskbar",NULL); Check(bar!=NULL,"the Russian taskbar starts"); PumpFor(500);
     Check(LanguageWideEqual(GetDlgItem(bar,100),L"\u041f\u0443\u0441\u043a"),"the actual Start button reads Пуск on an English system locale");
@@ -120,11 +190,14 @@ static void LanguageRestartTests(const char *directory,const char *executable)
     Check(!lstrcmpA(key,"en") && LanguageWideEqual(GetDlgItem(bar,100),L"\u041f\u0443\u0441\u043a"),"Apply persists English while the running Russian shell keeps a consistent language");
     PostMessageA(bar,WM_CLOSE,0,0); Check(WaitForGuiProcess(process.hProcess,5000)==WAIT_OBJECT_0,"the Russian shell releases its font and exits");
     CloseHandle(process.hThread); CloseHandle(process.hProcess);
+    LanguageFontTrace(trace);
+    wsprintfA(command,"\"%s\" --settings=\"%s\" --open=\"%s\"",ownExe,profile,folder);
     Check(CreateProcessA(NULL,command,NULL,NULL,FALSE,0,NULL,NULL,&startup,&process),"restart the same profile with saved English");
     bar=WaitFor("Explorer95.Taskbar",NULL); Check(bar!=NULL,"the English taskbar restarts"); PumpFor(500);
     Check(LanguageWideEqual(GetDlgItem(bar,100),L"Start"),"English returns after restart, without leaving the Russian default caption in the profile");
     PostMessageA(bar,WM_CLOSE,0,0); Check(WaitForGuiProcess(process.hProcess,5000)==WAIT_OBJECT_0,"the English restart exits cleanly");
     CloseHandle(process.hThread); CloseHandle(process.hProcess);
+    Check(DeleteFileA(ownExe),"remove only our copied bilingual executable");
     Check(DeleteFileA(renamed),"remove only the bilingual rename fixture");
     char path[MAX_PATH]; wsprintfA(path,"%s.DIP",profile); DeleteFileA(path); Check(DeleteFileA(profile),"remove the isolated bilingual settings file");
     wsprintfA(path,"%s\\Quick Launch",folder); Check(RemoveDirectoryA(path) && RemoveDirectoryA(folder),"remove only the bilingual restart profile directories");

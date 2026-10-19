@@ -200,6 +200,7 @@ void start(void)
         SetForegroundWindow(previous);
         ExitProcess(0);
     }
+    RenderTraceOpen();
     {
         char profile[MAX_PATH],base[MAX_PATH];
         if(FolderSettingsPath(GetCommandLineA(),profile)) profile[0]=0;
@@ -216,8 +217,10 @@ void start(void)
     icon = LoadIconA(instance, "EXPLORER95");
     if (!icon) icon = LoadIconA(NULL, IDI_APPLICATION);
     if (!RegisterClassFor(RUN_CLASS, RunProc, (HBRUSH)(COLOR_BTNFACE + 1), icon) ||
-        !BrowserRegister(instance, uiFont))
-        ExitProcess(1);
+        !BrowserRegister(instance, uiFont)) {
+        if(SUCCEEDED(ole)) OleUninitialize();
+        UiShutdown(); RenderTraceClose(); ExitProcess(1);
+    }
     host.instance = instance; host.font = uiFont;
     host.openFolder = BrowserOpen; host.specialPath = SpecialPath; host.showRun = ShowRun; host.closeFolders = BrowserShutdown;
     host.openRequest = BrowserOpenRequest;

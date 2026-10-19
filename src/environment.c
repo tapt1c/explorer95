@@ -1068,7 +1068,6 @@ static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
 HWND EnvironmentCreate(const EnvironmentHost *callbacks)
 {
     APPBARDATA data;
-    RenderTraceOpen();
     env.host = *callbacks; if (!SettingsPath()) return NULL;
     NativeViewSetHost(callbacks); PaintColorsChanged(&desktopColors); EnvRefreshStartItems();
     SystemParametersInfoA(SPI_GETWORKAREA, 0, &env.originalArea, 0);

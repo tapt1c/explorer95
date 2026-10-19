@@ -3,6 +3,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include "localization.h"
 #include "paint.h"
+#include "font_resource.h"
 #include <stdarg.h>
 
 typedef struct UiEntry { const char *english; const WCHAR *russian; char *ansi; } UiEntry;
@@ -24,7 +25,8 @@ static const WCHAR codepage[128]={
 };
 
 static BOOL legacy;
-static char strings[65536],fontPath[MAX_PATH];
+static char strings[65536];
+static UiFontResource fontResource;
 static UINT stringBytes;
 typedef struct UiCachedFont { LOGFONTA source; HFONT font; } UiCachedFont;
 static UiCachedFont fonts[32];
@@ -119,29 +121,14 @@ int UiReadLanguage(const char *profile)
     return !lstrcmpiA(value,"ru") ? 1 : 0;
 }
 int UiLanguage(void) { return language; }
-static BOOL LoadFont(void)
-{
-    HRSRC resource=FindResourceA(NULL,MAKEINTRESOURCEA(202),RT_RCDATA); HGLOBAL loaded;
-    const void *bytes; DWORD size,written; char temp[MAX_PATH],target[MAX_PATH]; HANDLE file; int length;
-    if(!resource || !(loaded=LoadResource(NULL,resource)) || !(bytes=LockResource(loaded)) || !(size=SizeofResource(NULL,resource))) return FALSE;
-    if(!GetTempPathA(MAX_PATH,temp) || !GetTempFileNameA(temp,"E9F",0,target)) return FALSE;
-    file=CreateFileA(target,GENERIC_WRITE,0,NULL,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,NULL);
-    if(file==INVALID_HANDLE_VALUE) { DeleteFileA(target); return FALSE; }
-    BOOL okay=WriteFile(file,bytes,size,&written,NULL) && written==size; CloseHandle(file);
-    if(!okay) { DeleteFileA(target); return FALSE; }
-    lstrcpyA(fontPath,target); length=lstrlenA(fontPath);
-    if(length<4) { DeleteFileA(target); fontPath[0]=0; return FALSE; }
-    lstrcpyA(fontPath+length-4,".ttf");
-    if(!MoveFileA(target,fontPath)) { DeleteFileA(target); fontPath[0]=0; return FALSE; }
-    if(!AddFontResourceA(fontPath)) { DeleteFileA(fontPath); fontPath[0]=0; return FALSE; }
-    return TRUE;
-}
 BOOL UiInitialize(const char *profile)
 {
     language=UiReadLanguage(profile); legacy=!!(GetVersion()&0x80000000UL);
     if(!language) return TRUE;
-    if(!fontPath[0] && !LoadFont()) {
-        language=0; MessageBoxA(NULL,"Cannot load the bundled Cyrillic font. Explorer95 will use English. Check that the temporary folder is writable.","Explorer95 language",MB_OK|MB_ICONEXCLAMATION); return FALSE;
+    if(!fontResource.registered && !UiFontResourceOpen(&fontResource,legacy)) {
+        char message[384]; language=0;
+        wsprintfA(message,"Cannot load the bundled Cyrillic font. Explorer95 will use English.\r\n\r\nStage: %s\r\nWindows error: %lu (0 = no extended error reported).\r\nRun with --trace-render to record the font loading stages.",fontResource.stage,fontResource.error);
+        MessageBoxA(NULL,message,"Explorer95 language",MB_OK|MB_ICONEXCLAMATION); return FALSE;
     }
     if(!legacy) {
         HMODULE user=GetModuleHandleA("user32.dll"),gdi=GetModuleHandleA("gdi32.dll");
@@ -172,7 +159,7 @@ HFONT UiFont(HFONT original)
         if(j==(int)sizeof(font)) return fonts[i].font;
     }
     if(fontCount==32) return original;
-    fonts[fontCount].source=font; font.lfCharSet=SYMBOL_CHARSET; lstrcpyA(font.lfFaceName,"Explorer95 UI");
+    fonts[fontCount].source=font; font.lfCharSet=SYMBOL_CHARSET; lstrcpyA(font.lfFaceName,UI_FONT_FACE);
     fonts[fontCount].font=CreateFontIndirectA(&font);
     return fonts[fontCount].font ? fonts[fontCount++].font : original;
 }
@@ -622,7 +609,7 @@ void UiShutdown(void)
 {
     int i; for(i=0;i<fontCount;++i) if(fonts[i].font) DeleteObject(fonts[i].font);
     fontCount=0;
-    if(fontPath[0]) { RemoveFontResourceA(fontPath); DeleteFileA(fontPath); fontPath[0]=0; }
+    UiFontResourceClose(&fontResource);
     for(i=0;i<(int)ENTRY_COUNT;++i) entries[i].ansi=NULL;
     ZeroMemory(formatted,sizeof(formatted)); stringBytes=0; language=0; setWide=NULL; sendWide=NULL; drawWide=NULL; extentWide=NULL; registerWide=NULL; defaultWide=NULL; setLongWide=NULL; callWide=NULL;
 }
