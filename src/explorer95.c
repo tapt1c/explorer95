@@ -210,7 +210,7 @@ void start(void)
     host.openFolder = BrowserOpen; host.specialPath = SpecialPath; host.showRun = ShowRun; host.closeFolders = BrowserShutdown;
     host.openRequest = BrowserOpenRequest;
     bar = EnvironmentCreate(&host);
-    if (!bar) { EnvironmentShutdown(); ExitProcess(1); }
+    if (!bar) { EnvironmentShutdown(); RenderTraceClose(); ExitProcess(1); }
     ReleaseMutex(startup); CloseHandle(startup);
     if (requested) EnvironmentOpenRequest(&request);
     while (GetMessageA(&message, NULL, 0, 0) > 0) {
@@ -230,6 +230,8 @@ void start(void)
         DispatchMessageA(&message);
     }
     EnvironmentShutdown(); BrowserShutdown();
+    RenderTraceShutdown("exit.ole",S_OK,0);
     if (SUCCEEDED(ole)) OleUninitialize();
+    RenderTraceShutdown("exit.done",S_OK,0); RenderTraceClose();
     ExitProcess(0);
 }

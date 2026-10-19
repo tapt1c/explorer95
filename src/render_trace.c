@@ -2,13 +2,25 @@
 #include "render_trace.h"
 static HANDLE traceFile = INVALID_HANDLE_VALUE;
 static DWORD traceBytes;
-static void WriteTrace(const char *text)
+static BOOL shutdownTrace;
+static void WriteTraceBounded(const char *text, DWORD limit)
 {
     DWORD length = lstrlenA(text), written;
     if (traceFile == INVALID_HANDLE_VALUE) return;
-    if (traceBytes + length > 512UL * 1024) { RenderTraceClose(); return; }
+    if (traceBytes + length > limit) return;
     if (!WriteFile(traceFile, text, length, &written, NULL) || written != length) { RenderTraceClose(); return; }
     traceBytes += written;
+}
+static void WriteTrace(const char *text) { WriteTraceBounded(text,504UL*1024); }
+void RenderTraceShutdown(const char *stage, HRESULT result, DWORD detail)
+{
+    char text[180];
+    if(traceFile==INVALID_HANDLE_VALUE) return;
+    /* Closing an individual folder also logs view.exit.*. It must not use
+     * the final shutdown reserve while the shell is still running. */
+    if(stage[0]=='e' && stage[1]=='x' && stage[2]=='i' && stage[3]=='t' && stage[4]=='.') shutdownTrace=TRUE;
+    wsprintfA(text,"%lu shell stage=%s result=%08lx a=%lu b=0\r\n",GetTickCount(),stage,(DWORD)result,detail);
+    WriteTraceBounded(text,(shutdownTrace ? 512UL : 504UL)*1024);
 }
 BOOL RenderTraceRequested(void)
 {
@@ -66,7 +78,7 @@ void RenderTraceOpen(void)
     if (traceFile == INVALID_HANDLE_VALUE) {
         MessageBoxA(NULL, "Cannot create EX95REND.LOG beside Explorer95. Rendering trace is disabled.", "Explorer95 diagnostics", MB_OK | MB_ICONEXCLAMATION); return;
     }
-    traceBytes = 0; dc = GetDC(NULL);
+    traceBytes = 0; shutdownTrace=FALSE; dc = GetDC(NULL);
     wsprintfA(text, "Explorer95 render trace 2; shell COM delete; desktop bottom guard; OS=%08lx screen=%dx%d bpp=%d start=%lu\r\n",
         GetVersion(), GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN), GetDeviceCaps(dc, BITSPIXEL) * GetDeviceCaps(dc, PLANES), GetTickCount());
     ReleaseDC(NULL, dc); WriteTrace(text);

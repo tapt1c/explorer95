@@ -23,7 +23,7 @@ static POINT DropBackgroundPoint(HWND list)
     if(origin.x+rect.right>GetSystemMetrics(SM_CXSCREEN)) rect.right=GetSystemMetrics(SM_CXSCREEN)-origin.x;
     point.x=rect.right-18; point.y=rect.bottom-18; ClientToScreen(list,&point); return point;
 }
-static void DragMouseFeedback(HWND source, POINT start, HWND target, POINT end, UINT modifier, int choice, int highlight, BOOL pixels, const POINT *via)
+static void DragMouseFeedback(HWND source, POINT start, HWND target, POINT end, UINT modifier, int choice, int highlight, BOOL pixels, const POINT *via, HWND closeBar)
 {
     HWND frame=source; int i; BOOL right=choice>=2;
     RECT feedback={0,0,1,1}; DWORD before=0;
@@ -108,6 +108,16 @@ static void DragMouseFeedback(HWND source, POINT start, HWND target, POINT end, 
           mouse_event(MOUSEEVENTF_MOVE|MOUSEEVENTF_ABSOLUTE,end.x*65535/(GetSystemMetrics(SM_CXSCREEN)-1),end.y*65535/(GetSystemMetrics(SM_CYSCREEN)-1),0,0); PumpFor(100);
           Check(SendMessageA(target,LVM_GETITEMSTATE,highlight,LVIS_DROPHILITED)&LVIS_DROPHILITED,"returning to the accepted item restores feedback during the same drag"); }
     }
+    if(closeBar) {
+        DWORD result;
+        Check(GetAsyncKeyState(VK_LBUTTON)&0x8000,"shutdown is requested during the active drag, before releasing the source button");
+        Check(PostMessageA(closeBar,WM_CLOSE,0,0),"post close only to the shell process owned by this test");
+        result=WaitForGuiProcess(process.hProcess,5000);
+        mouse_event(MOUSEEVENTF_LEFTUP,0,0,0,0); PumpFor(50);
+        if(result!=WAIT_OBJECT_0) EnumWindows(ShutdownWindowInfo,0);
+        Check(result==WAIT_OBJECT_0,"closing the taskbar cancels the active OLE drag and exits within the original deadline");
+        return;
+    }
     if(modifier) { DWORD started=GetTickCount(); int stable=0;
         do {
             if(!(GetAsyncKeyState(modifier)&0x8000)) { keybd_event(modifier,(BYTE)MapVirtualKeyA(modifier,0),0,0); stable=0; }
@@ -128,7 +138,7 @@ static void DragMouseFeedback(HWND source, POINT start, HWND target, POINT end, 
         "drop or Escape clears the temporary target highlight");
 }
 static void DragMouse(HWND source, POINT start, HWND target, POINT end, UINT modifier, int choice)
-{ DragMouseFeedback(source,start,target,end,modifier,choice,-1,FALSE,NULL); }
+{ DragMouseFeedback(source,start,target,end,modifier,choice,-1,FALSE,NULL,NULL); }
 static void WaitDragFile(const char *path, BOOL present)
 {
     DWORD started=GetTickCount(); while(Exists(path)!=present && GetTickCount()-started<5000) PumpFor(30);
@@ -139,6 +149,47 @@ static void WaitDragRow(HWND list, const char *name, BOOL present)
     DWORD started=GetTickCount(); int index;
     do { PumpFor(50); index=NativeItemIndex(list,name); } while((index>=0)!=present && GetTickCount()-started<4000);
     Check((index>=0)==present,"drag completion refreshes the affected list without F5");
+}
+static BOOL CALLBACK CloseDragMinimize(HWND window, LPARAM desktop)
+{
+    DWORD owner; char kind[80]; GetWindowThreadProcessId(window,&owner); GetClassNameA(window,kind,sizeof(kind));
+    if(owner==process.dwProcessId && window!=(HWND)desktop && lstrcmpA(kind,"Explorer95.Taskbar") && lstrcmpA(kind,"Explorer95.Start") && IsWindowVisible(window))
+        ShowWindow(window,SW_MINIMIZE);
+    return TRUE;
+}
+static void CloseDuringDesktopDrag(HWND bar, HWND desktop, const char *settings)
+{
+    LPITEMIDLIST pidl; char directory[MAX_PATH],name[64],folder[64],path[MAX_PATH],destination[MAX_PATH];
+    HWND list; HANDLE file; POINT start,end; int target;
+    BOOL automatic=GetPrivateProfileIntA("Desktop","AutoArrange",0,settings)!=0;
+    BOOL locked=GetPrivateProfileIntA("Desktop","LockIcons",0,settings)!=0;
+    BOOL visible=GetPrivateProfileIntA("Desktop","ShowIcons",1,settings)!=0;
+    Check(SUCCEEDED(OleInitialize(NULL)),"initialize the close-during-drag fixture");
+    Check(SUCCEEDED(SHGetSpecialFolderLocation(NULL,CSIDL_DESKTOPDIRECTORY,&pidl)),"resolve only the test desktop for shutdown fixtures");
+    Check(SHGetPathFromIDListA(pidl,directory),"read the test desktop directory"); CoTaskMemFree(pidl); OleUninitialize();
+    wsprintfA(name,"ex95-close-%lu.tmp",GetCurrentProcessId()); wsprintfA(folder,"ex95-close-%lu",GetCurrentProcessId());
+    wsprintfA(path,"%s\\%s",directory,name); wsprintfA(destination,"%s\\%s",directory,folder);
+    Check(CreateDirectoryA(destination,NULL),"create only our own accepting folder for closing during OLE");
+    file=CreateFileA(path,GENERIC_WRITE,0,NULL,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL);
+    Check(file!=INVALID_HANDLE_VALUE,"create only our own source for closing during OLE"); CloseHandle(file);
+    if(automatic) SendMessageA(desktop,WM_COMMAND,0x8005,0);
+    if(locked) SendMessageA(desktop,WM_COMMAND,0x8011,0);
+    Check(visible,"the shutdown drag fixture starts with visible desktop icons");
+    if(IsWindowVisible(FindWindowA("Explorer95.Start",NULL))) SendMessageA(GetDlgItem(bar,100),BM_CLICK,0,0);
+    EnumWindows(CloseDragMinimize,(LPARAM)desktop); SetForegroundWindow(desktop);
+    list=FindWindowExA(FindWindowExA(desktop,NULL,NULL,NULL),NULL,WC_LISTVIEWA,NULL);
+    Check(list!=NULL,"find the shell's actual desktop ListView before shutdown");
+    PostMessageA(list,WM_KEYDOWN,VK_F5,0); WaitDragRow(list,name,TRUE); WaitDragRow(list,folder,TRUE); PumpFor(400);
+    target=NativeItemIndex(list,folder);
+    /* These public messages carry coordinates inline, not a foreign pointer. */
+    ListView_SetItemPosition(list,NativeItemIndex(list,name),150,140); ListView_SetItemPosition(list,target,390,140); PumpFor(100);
+    start=DragItemPoint(list,name); end=DropItemPoint(list,folder);
+    DragMouseFeedback(list,start,list,end,0,0,target,FALSE,NULL,bar);
+    Check(Exists(path) && Exists(destination),"close cancels the operation before moving or deleting its source");
+    Check(DeleteFileA(path) && RemoveDirectoryA(destination),"remove only our own intact shutdown fixtures after the process exits");
+    Check(WritePrivateProfileStringA("Desktop","AutoArrange",automatic ? "1" : "0",settings) &&
+        WritePrivateProfileStringA("Desktop","LockIcons",locked ? "1" : "0",settings) &&
+        WritePrivateProfileStringA("Desktop","ShowIcons",visible ? "1" : "0",settings),"preserve the previous profile choices for the restart checks");
 }
 static void FileDragTests(HWND bar, HWND desktop, HWND source, const char *fixture, const char *settings)
 {
@@ -162,7 +213,7 @@ static void FileDragTests(HWND bar, HWND desktop, HWND source, const char *fixtu
     wsprintfA(original,"%s\\copy-me",from); wsprintfA(result,"%s\\copy-me",to); WaitDragFile(result,TRUE);
     Check(Exists(original),"Ctrl-drag copies without deleting the original"); WaitDragRow(targetList,"copy-me",TRUE);
     start=DragItemPoint(list,"move-me"); end=DropItemPoint(targetList,"inside");
-    DragMouseFeedback(list,start,targetList,end,VK_SHIFT,FALSE,NativeItemIndex(targetList,"inside"),FALSE,NULL);
+    DragMouseFeedback(list,start,targetList,end,VK_SHIFT,FALSE,NativeItemIndex(targetList,"inside"),FALSE,NULL,NULL);
     wsprintfA(original,"%s\\move-me",from); wsprintfA(result,"%s\\move-me",childPath); WaitDragFile(result,TRUE); WaitDragFile(original,FALSE); WaitDragRow(list,"move-me",FALSE);
     start=DragItemPoint(list,"cancel-me"); end=DropBackgroundPoint(targetList); DragMouse(list,start,targetList,end,0,TRUE);
     wsprintfA(original,"%s\\cancel-me",from); wsprintfA(result,"%s\\cancel-me",to);
@@ -198,7 +249,7 @@ static void FileDragTests(HWND bar, HWND desktop, HWND source, const char *fixtu
             SendMessageA(desktop,WM_COMMAND,pass ? 0x8061 : 0x8060,0); PumpFor(400);
             start=DragItemPoint(desktopList,desktopName); end=DropItemPoint(desktopList,info.szDisplayName);
             index=NativeItemIndex(desktopList,info.szDisplayName);
-            DragMouseFeedback(desktopList,start,desktopList,end,0,1,index,pass!=0,NULL);
+            DragMouseFeedback(desktopList,start,desktopList,end,0,1,index,pass!=0,NULL,NULL);
             Check(Exists(result),"cancelled Recycle Bin hover leaves the desktop source intact");
             {
                 POINT before=DragItemPoint(desktopList,info.szDisplayName), waypoint=DropItemPoint(desktopList,folderName), after;
@@ -206,11 +257,11 @@ static void FileDragTests(HWND bar, HWND desktop, HWND source, const char *fixtu
                 /* A desktop ListView can cover the whole screen underneath
                  * the appbar. Keep the placement point visibly above it. */
                 end.x=GetSystemMetrics(SM_CXSCREEN)-110-pass*120; end.y=GetSystemMetrics(SM_CYSCREEN)-110-pass*80;
-                DragMouseFeedback(desktopList,before,desktopList,end,0,1,-1,FALSE,&waypoint);
+                DragMouseFeedback(desktopList,before,desktopList,end,0,1,-1,FALSE,&waypoint,NULL);
                 after=DropItemPoint(desktopList,info.szDisplayName);
                 Check(after.x==before.x && after.y==before.y,"Escape after returning from a folder target preserves the original virtual icon position");
                 before=DragItemPoint(desktopList,info.szDisplayName);
-                DragMouseFeedback(desktopList,before,desktopList,end,0,0,-1,FALSE,&waypoint);
+                DragMouseFeedback(desktopList,before,desktopList,end,0,0,-1,FALSE,&waypoint,NULL);
                 dialog=FindWindowA("#32770","Shortcut"); if(dialog) GetWindowThreadProcessId(dialog,&owner);
                 if(dialog && owner==process.dwProcessId) { SendMessageA(dialog,WM_COMMAND,IDNO,0); Check(FALSE,"moving a virtual desktop icon back to empty space must not offer to create a shortcut"); }
                 after=DropItemPoint(desktopList,info.szDisplayName);

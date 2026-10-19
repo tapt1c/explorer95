@@ -41,6 +41,7 @@ BOOL FileDragDeferClose(HWND window)
     int i;
     if(!active) return FALSE;
     cancelled=TRUE;
+    RenderTraceShutdown("exit.defer-drag",S_OK,deferredCount);
     for(i=0;i<deferredCount;++i) if(deferred[i]==window) return TRUE;
     if(deferredCount<16) deferred[deferredCount++]=window;
     return TRUE;
@@ -55,6 +56,7 @@ HRESULT FileDragStart(IDataObject *data, BOOL right, DWORD *effect)
     active=TRUE; cancelled=FALSE;
     result=DoDragDrop(data,&source.iface,DROPEFFECT_COPY|DROPEFFECT_MOVE|DROPEFFECT_LINK,effect);
     active=FALSE; RenderTraceShell("drag-result",result,*effect,0);
+    if(deferredCount) RenderTraceShutdown("exit.drag-returned",result,*effect);
     for(i=0;i<deferredCount;++i) if(IsWindow(deferred[i])) PostMessageA(deferred[i],WM_CLOSE,0,0);
     deferredCount=0;
     return result;

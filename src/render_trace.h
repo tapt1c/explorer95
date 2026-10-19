@@ -8,5 +8,7 @@ void RenderTraceClose(void);
 void RenderTraceEvent(const char *surface, HWND window, UINT message, WPARAM wp, LPARAM lp);
 void RenderTraceTray(DWORD stage, DWORD error, DWORD value);
 void RenderTraceShell(const char *stage, HRESULT result, DWORD first, DWORD second);
+/* Uses space reserved within the same 512 KiB log for shutdown diagnostics. */
+void RenderTraceShutdown(const char *stage, HRESULT result, DWORD detail);
 void RenderTraceTrayDetail(DWORD stage, DWORD error, DWORD detail, DWORD value);
 #endif

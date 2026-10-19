@@ -1044,6 +1044,8 @@ static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
         DragFinish(drop); RefreshQuick(); return 0;
     }
     case WM_CLOSE:
+        RenderTraceShutdown("exit.request",S_OK,0);
+        if(FileDragDeferClose(window)) return 0;
         /* Keep the appbar HWND valid until registrations and the other shell
          * windows have been cleaned up outside this procedure. */
         PostQuitMessage(0); return 0;
@@ -1128,6 +1130,7 @@ void EnvironmentShutdown(void)
     APPBARDATA data; int i;
     if (env.closing) return;
     env.closing = TRUE;
+    RenderTraceShutdown("exit.begin",S_OK,0);
     folderHead = folderCount = 0;
     ShutdownClose(); EndQuickResize(FALSE); QuickHover(NULL);
     KillTimer(env.bar, 1); KillTimer(env.bar, 2); winPending = FALSE; DragAcceptFiles(env.bar, FALSE);
@@ -1137,19 +1140,26 @@ void EnvironmentShutdown(void)
     if (hotkeyRightWin) UnregisterHotKey(env.bar, 4);
     /* Browser windows own shell objects too: release them while the desktop
      * and its shell services are still alive. */
+    RenderTraceShutdown("exit.folders",S_OK,0);
     if (env.host.closeFolders) env.host.closeFolders();
     SetPropA(env.bar, "Explorer95.ShutdownStage", (HANDLE)1);
+    RenderTraceShutdown("exit.start",S_OK,0);
     StartDestroy();
     SetPropA(env.bar, "Explorer95.ShutdownStage", (HANDLE)2);
+    RenderTraceShutdown("exit.tray",S_OK,0);
     TrayDestroy();
     SetPropA(env.bar, "Explorer95.ShutdownStage", (HANDLE)3);
+    RenderTraceShutdown("exit.desktop",S_OK,0);
     { NativeView *desktop = env.desktopView; env.desktopView = NULL; NativeViewDestroy(desktop); }
     SetPropA(env.bar, "Explorer95.ShutdownStage", (HANDLE)4);
+    RenderTraceShutdown("exit.desktop-window",S_OK,0);
     if (env.desktop) DestroyWindow(env.desktop);
     SetPropA(env.bar, "Explorer95.ShutdownStage", (HANDLE)5);
+    RenderTraceShutdown("exit.properties",S_OK,0);
     if (env.properties) DestroyWindow(env.properties);
     if (bridge) DestroyWindow(bridge);
     SetPropA(env.bar, "Explorer95.ShutdownStage", (HANDLE)6);
+    RenderTraceShutdown("exit.appbar",S_OK,0);
     if (env.appbar) {
         ZeroMemory(&data, sizeof(data)); data.cbSize = sizeof(data); data.hWnd = env.bar; SHAppBarMessage(ABM_REMOVE, &data);
     } else if (env.primary) SystemParametersInfoA(SPI_SETWORKAREA, 0, &env.originalArea, SPIF_SENDCHANGE);
@@ -1159,9 +1169,12 @@ void EnvironmentShutdown(void)
     if (explorerIcon) DestroyIcon(explorerIcon);
     if (explorerLargeIcon) DestroyIcon(explorerLargeIcon);
     SetPropA(env.bar, "Explorer95.ShutdownStage", (HANDLE)7);
+    RenderTraceShutdown("exit.taskbar",S_OK,0);
     if (IsWindow(env.bar)) DestroyWindow(env.bar);
     env.bar = NULL;
-    PaintBufferFree(&barBuffer); PaintBufferFree(&barButtonBuffer); PaintBufferFree(&gripBuffer); PaintShutdown(); RenderTraceClose();
+    RenderTraceShutdown("exit.paint",S_OK,0);
+    PaintBufferFree(&barBuffer); PaintBufferFree(&barButtonBuffer); PaintBufferFree(&gripBuffer); PaintShutdown();
+    RenderTraceShutdown("exit.environment.done",S_OK,0);
 }
 
 /* The classic shell uses the system caption font in bold for Start. The

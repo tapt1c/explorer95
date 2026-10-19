@@ -1911,7 +1911,9 @@ void start(void)
     EnvironmentTests(bar, browser, child, menu, settings);
 shutdown:
     PostMessageA(child, WM_CLOSE, 0, 0);
-    PostMessageA(bar, WM_CLOSE, 0, 0);
+    PumpFor(100);
+    if(group==GROUP_BROWSER || group==GROUP_FULL) CloseDuringDesktopDrag(bar,desktop,settings);
+    else PostMessageA(bar, WM_CLOSE, 0, 0);
     { DWORD result = WaitForGuiProcess(process.hProcess, 5000);
       if (result != WAIT_OBJECT_0) { Log("Shutdown: process did not exit within five seconds\r\n"); EnumWindows(ShutdownWindowInfo, 0); }
       Check(result == WAIT_OBJECT_0, "Exit shuts down application"); }
@@ -1991,10 +1993,29 @@ shutdown:
         lstrcpynA(path, executable, end + 1); lstrcatA(path, "EX95REND.LOG");
         file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
         if (file != INVALID_HANDLE_VALUE) {
-            size = GetFileSize(file, NULL); ReadFile(file, header, sizeof(prefix) - 1, &read, NULL); header[read] = 0; CloseHandle(file);
+            size = GetFileSize(file, NULL); ReadFile(file, header, sizeof(prefix) - 1, &read, NULL); header[read] = 0;
         }
         Check(read == sizeof(prefix) - 1 && !lstrcmpA(header, prefix) && size > 200 && size <= 512UL * 1024,
               "opt-in rendering trace records window events in a bounded log beside the running EXE");
+        {
+            const char *stages[]={"shell stage=exit.request ","shell stage=exit.begin ","shell stage=exit.desktop ",
+                "shell stage=view.exit.drop ","shell stage=view.exit.deactivate ","shell stage=view.exit.destroyed ",
+                "shell stage=view.exit.done ","shell stage=exit.environment.done ","shell stage=exit.ole ","shell stage=exit.done "};
+            char *contents=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,size+1); DWORD bytes,offset=0; UINT stage;
+            Check(contents && ReadFile(file,contents,size,&bytes,NULL),"read the bounded trace through its final shutdown stages");
+            /* The file is already past the fixed header; locate each stage in
+             * order, proving that tracing survives until OleUninitialize returns. */
+            for(stage=0;stage<sizeof(stages)/sizeof(stages[0]);++stage) {
+                DWORD length=lstrlenA(stages[stage]); BOOL found=FALSE;
+                while(offset+length<=bytes) {
+                    DWORD j=0; while(j<length && contents[offset+j]==stages[stage][j]) ++j;
+                    ++offset; if(j==length) { found=TRUE; break; }
+                }
+                Check(found,stages[stage]);
+            }
+            HeapFree(GetProcessHeap(),0,contents);
+        }
+        CloseHandle(file);
         Check(DeleteFileA(path), "diagnostic trace fixture removed after the file handle closes");
     }
 cleanup:

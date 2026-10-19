@@ -826,9 +826,12 @@ NativeView *NativeViewCreate(HWND parent, LPCITEMIDLIST absolute, BOOL desktop)
 void NativeViewDestroy(NativeView *view)
 {
     if (!view) return;
+    RenderTraceShutdown("view.exit.drop",S_OK,view->desktop);
     FileDropRevoke(view->fileDrop); view->fileDrop=NULL;
+    RenderTraceShutdown("view.exit.icons",S_OK,view->desktop);
     if (view->icons) { DesktopIcons *icons = view->icons; view->icons = NULL; DesktopIconsDestroy(icons); }
     if (IsWindow(view->list) && view->oldList) {
+        RenderTraceShutdown("view.exit.list",S_OK,view->desktop);
         if (view->desktop) {
             /* Restore distinct native slots and their original ownership policy
              * before Shell32 tears the view down. Never destroy system lists. */
@@ -840,23 +843,32 @@ void NativeViewDestroy(NativeView *view)
         RemovePropA(view->list, property);
     }
     if (IsWindow(view->window) && view->oldView) {
+        RenderTraceShutdown("view.exit.subclass",S_OK,view->desktop);
         SetWindowLongPtrA(view->window, GWLP_WNDPROC, (LONG_PTR)view->oldView);
         RemovePropA(view->window, property);
     }
     if (view->view) {
+        HRESULT result;
         if (view->desktop) SetPropA(view->parent, "Explorer95.ViewDestroyStage", (HANDLE)1);
-        IShellView_UIActivate(view->view, SVUIA_DEACTIVATE);
+        RenderTraceShutdown("view.exit.deactivate",S_OK,view->desktop);
+        result=IShellView_UIActivate(view->view, SVUIA_DEACTIVATE);
+        RenderTraceShutdown("view.exit.deactivated",result,view->desktop);
         if (view->desktop) SetPropA(view->parent, "Explorer95.ViewDestroyStage", (HANDLE)2);
-        IShellView_DestroyViewWindow(view->view);
+        RenderTraceShutdown("view.exit.destroy",S_OK,view->desktop);
+        result=IShellView_DestroyViewWindow(view->view);
+        RenderTraceShutdown("view.exit.destroyed",result,view->desktop);
         if (view->desktop) SetPropA(view->parent, "Explorer95.ViewDestroyStage", (HANDLE)3);
+        RenderTraceShutdown("view.exit.release",S_OK,view->desktop);
         IShellView_Release(view->view); view->view = NULL;
     }
     if (view->desktop) SetPropA(view->parent, "Explorer95.ViewDestroyStage", (HANDLE)4);
+    RenderTraceShutdown("view.exit.folder",S_OK,view->desktop);
     if (view->folder) IShellFolder_Release(view->folder);
     if (view->wallpaper) DeleteObject(view->wallpaper);
     if(view->desktopScaledImages) ImageList_Destroy(view->desktopScaledImages);
     if(view->desktopOverlayImages) ImageList_Destroy(view->desktopOverlayImages);
     PaintBufferFree(&view->background); PaintBufferFree(&view->desktopFrame);
+    RenderTraceShutdown("view.exit.done",S_OK,view->desktop);
     Release(&view->browser);
 }
 
