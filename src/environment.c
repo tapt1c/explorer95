@@ -112,6 +112,7 @@ BOOL EnvRegister(const char *name, WNDPROC proc, HBRUSH brush, UINT style)
     WNDCLASSA cls; ZeroMemory(&cls, sizeof(cls));
     cls.style = CS_DBLCLKS | style; cls.hInstance = env.host.instance; cls.lpfnWndProc = proc;
     cls.hCursor = LoadCursorA(NULL, IDC_ARROW); cls.hbrBackground = brush; cls.lpszClassName = name;
+    cls.hIcon = LoadIconA(env.host.instance, "EXPLORER95");
     return RegisterClassA(&cls) != 0;
 }
 static int Clamp(int value, int low, int high) { return value < low ? low : value > high ? high : value; }
@@ -164,7 +165,6 @@ static BOOL SettingsPath(void)
     env.options.startItems = GetPrivateProfileIntA("Start", "VisibleItems", ((1U << 12) - 1) | (1U << 13), env.ini);
     if (GetPrivateProfileIntA("Start", "ItemsVersion", 0, env.ini) < 2) env.options.startItems |= 1U << 13;
     GetPrivateProfileStringA("Start", "ButtonLabel", "Start", env.options.startLabel, sizeof(env.options.startLabel), env.ini);
-    if (!env.options.startLabel[0]) lstrcpyA(env.options.startLabel, "Start");
     return TRUE;
 }
 
@@ -621,7 +621,8 @@ void EnvApplyOptions(void)
     style &= ~(WS_BORDER | WS_THICKFRAME);
     /* Draw the classic raised bar ourselves; a thick frame eats client height. */
     SetWindowLongA(env.bar, GWL_STYLE, style);
-    SetWindowTextA(env.startButton, env.options.startLabel); StartRefresh();
+    /* Preserve a native accessible name when only the flag is painted. */
+    SetWindowTextA(env.startButton, env.options.startLabel[0] ? env.options.startLabel : "Start"); StartRefresh();
     env.hidden = FALSE; RefreshQuick(); EnvPositionBar(); UpdateTasks(); EnvLayoutBar();
     InvalidateRect(quickGrip, NULL, FALSE);
     if (env.desktopView) {
@@ -1157,6 +1158,7 @@ static HFONT CreateStartFont(void)
 }
 int EnvStartLabelWidth(const char *label)
 {
+    if (!label[0]) return 26;
     HDC dc = GetDC(env.bar); SIZE size = {0, 0}; HFONT old, font = CreateStartFont();
     old = SelectObject(dc, font ? font : env.host.font);
     GetTextExtentPoint32A(dc, label, lstrlenA(label), &size);
@@ -1173,7 +1175,8 @@ void EnvPaintStartButton(HDC dc, const RECT *bounds, const char *label, BOOL dow
     HFONT font = CreateStartFont(), old;
     FillRect(dc, &frame, (HBRUSH)(COLOR_BTNFACE + 1));
     DrawFrameControl(dc, &frame, DFC_BUTTON, DFCS_BUTTONPUSH | (down ? DFCS_PUSHED : 0));
-    PaintStartLogo(dc, frame.left + 3 + offset, frame.top + (frame.bottom - frame.top - 16) / 2 + offset);
+    PaintStartLogo(dc, label[0] ? frame.left + 3 + offset : frame.left + (frame.right - frame.left - 16) / 2 + offset,
+        frame.top + (frame.bottom - frame.top - 16) / 2 + offset);
     old = SelectObject(dc, font ? font : env.host.font);
     SetBkMode(dc, TRANSPARENT); SetTextColor(dc, GetSysColor(COLOR_BTNTEXT));
     text.left += 23 + offset; text.right -= 3 - offset;
@@ -1257,7 +1260,7 @@ BOOL EnvDrawBarButton(const DRAWITEMSTRUCT *item)
     GetWindowTextA(item->hwndItem, label, sizeof(label));
     if (item->CtlID == ID_START) {
         /* Keep Start latched while focus is inside its popup. */
-        EnvPaintStartButton(item->hDC, &item->rcItem, label, down || IsWindowVisible(env.start), focus);
+        EnvPaintStartButton(item->hDC, &item->rcItem, env.options.startLabel, down || IsWindowVisible(env.start), focus);
     } else if (index >= 0 && index < taskCount) {
         if(env.options.taskTiles) EnvPaintTaskTile(item->hDC,&item->rcItem,tasks[index].icon,tasks[index].count,down||tasks[index].active,focus);
         else EnvPaintTaskButton(item->hDC, &item->rcItem, label, tasks[index].icon, down || tasks[index].active, focus);

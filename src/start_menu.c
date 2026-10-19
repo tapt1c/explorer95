@@ -5,6 +5,7 @@
 typedef struct RecentProgram { char path[MAX_PATH], arguments[512]; } RecentProgram;
 typedef struct ProgramItem { char path[MAX_PATH], label[MAX_PATH]; BOOL folder, fresh; HICON icon; LPITEMIDLIST pidl; } ProgramItem;
 static RecentProgram recent[RECENT_LIMIT];
+static char recentShortcuts[RECENT_LIMIT][MAX_PATH];
 static ProgramItem programs[256];
 static int programCount;
 static HWND hovered;
@@ -122,28 +123,44 @@ static void PruneRecent(void)
     ZeroMemory(recent + used, (RECENT_LIMIT - used) * sizeof(*recent));
     if (changed) SaveRecent();
 }
+static void MatchRecent(const char *const *paths, int count, char (*shortcuts)[MAX_PATH])
+{
+    char directory[MAX_PATH], programsDirectory[MAX_PATH], commonDirectory[MAX_PATH];
+    if (!env.host.specialPath(CSIDL_RECENT, directory)) directory[0] = 0;
+    if (!env.host.specialPath(CSIDL_PROGRAMS, programsDirectory)) programsDirectory[0] = 0;
+    if (!env.host.specialPath(CSIDL_COMMON_PROGRAMS, commonDirectory)) commonDirectory[0] = 0;
+    FindProgramHistoryShortcuts(paths, count, directory, programsDirectory, commonDirectory, shortcuts);
+}
 static void UpdateRecent(void)
 {
-    int i; char caption[MAX_PATH];
+    int i; char caption[MAX_PATH]; const char *paths[RECENT_LIMIT];
     PruneRecent();
+    for (i = 0; i < RECENT_LIMIT; ++i) paths[i] = recent[i].path;
+    MatchRecent(paths, RECENT_LIMIT, recentShortcuts);
+    for (i = 0; i < RECENT_LIMIT; ++i) {
+        int j;
+        for (j = 0; j < i; ++j) if (recentShortcuts[i][0] && !lstrcmpiA(recentShortcuts[i],recentShortcuts[j])) {
+            recentShortcuts[i][0] = 0; break;
+        }
+    }
     for (i = 0; i < RECENT_LIMIT; ++i) {
         HWND button = GetDlgItem(env.start, ID_RECENT + i);
         if (recentIcons[i]) DestroyIcon(recentIcons[i]);
         recentIcons[i] = NULL;
-        Caption(recent[i].path, caption, sizeof(caption));
+        Caption(recentShortcuts[i], caption, sizeof(caption));
         SetWindowTextA(button, caption);
-        ShowWindow(button, recent[i].path[0] ? SW_SHOW : SW_HIDE);
-        if (recent[i].path[0]) recentIcons[i] = MenuPathIcon(recent[i].path);
+        ShowWindow(button, recentShortcuts[i][0] ? SW_SHOW : SW_HIDE);
+        if (recentShortcuts[i][0]) recentIcons[i] = MenuPathIcon(recentShortcuts[i]);
     }
     StartRefresh();
 }
 void StartRecord(const char *path, const char *arguments)
 {
     int i, index = RECENT_LIMIT - 1;
-    char directory[MAX_PATH];
-    if (!env.host.specialPath(CSIDL_RECENT, directory)) directory[0] = 0;
-    if (!IsProgramHistoryEntry(path, directory)) return;
-    for (i = 0; i < RECENT_LIMIT; ++i) if (!lstrcmpiA(recent[i].path, path)) { index = i; break; }
+    char shortcut[1][MAX_PATH];
+    MatchRecent(&path, 1, shortcut);
+    if (!shortcut[0][0]) return;
+    for (i = 0; i < RECENT_LIMIT; ++i) if (!lstrcmpiA(recent[i].path, path) || !lstrcmpiA(recentShortcuts[i],shortcut[0])) { index = i; break; }
     for (i = index; i > 0; --i) recent[i] = recent[i - 1];
     lstrcpynA(recent[0].path, path, MAX_PATH);
     lstrcpynA(recent[0].arguments, arguments ? arguments : "", sizeof(recent[0].arguments));
@@ -479,7 +496,7 @@ static void LayoutStart(HWND window)
     MoveWindow(GetDlgItem(window, ID_MOREPINS), 5, geometry.bodyTop + pinShown * row, half - 10, row, TRUE);
     for (i = 0; i < RECENT_LIMIT; ++i) {
         HWND button = GetDlgItem(window, ID_RECENT + i);
-        BOOL show = recent[i].path[0] && visible < geometry.recentRows && StartFindPin(recent[i].path, recent[i].arguments) < 0;
+        BOOL show = recentShortcuts[i][0] && visible < geometry.recentRows && StartFindPin(recent[i].path, recent[i].arguments) < 0;
         ShowWindow(button, show ? SW_SHOW : SW_HIDE);
         if (show) MoveWindow(button, 5, geometry.recentTop + row * visible++, half - 10, row, TRUE);
     }
@@ -526,7 +543,7 @@ void StartRefresh(void)
         loadedIconSize = IconSize(); LoadItemIcons();
         for (i = 0; i < RECENT_LIMIT; ++i) {
             if (recentIcons[i]) DestroyIcon(recentIcons[i]);
-            recentIcons[i] = recent[i].path[0] ? MenuPathIcon(recent[i].path) : NULL;
+            recentIcons[i] = recentShortcuts[i][0] ? MenuPathIcon(recentShortcuts[i]) : NULL;
         }
     }
     for (i = 0; i < PIN_LIMIT; ++i) {
@@ -616,7 +633,7 @@ static void ProgramContext(HWND button, LPARAM coordinates)
     } else if (id >= ID_RECENT && id < ID_RECENT + RECENT_LIMIT && recent[id - ID_RECENT].path[0]) {
         ZeroMemory(&pin, sizeof(pin)); index = id - ID_RECENT; pinned = FALSE;
         lstrcpyA(pin.path, recent[index].path); lstrcpyA(pin.arguments, recent[index].arguments);
-        Caption(pin.path, pin.label, sizeof(pin.label));
+        Caption(recentShortcuts[index], pin.label, sizeof(pin.label));
     } else return;
     if (coordinates == (LPARAM)-1) { RECT rect; GetWindowRect(button, &rect); point.x = rect.left; point.y = rect.bottom; }
     else { point.x = (short)LOWORD(coordinates); point.y = (short)HIWORD(coordinates); }

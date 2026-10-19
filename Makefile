@@ -60,11 +60,11 @@ build/ui64/tray_hook.dll: build/obj64/src/tray_hook.o build/obj64/src/tray_image
 	@mkdir -p $(@D)
 	$(CC64) $(CFLAGS_COMMON) -shared -nostdlib $(filter %.o,$^) -Wl,--entry,DllMain -Wl,--kill-at -lcomctl32 -lgdi32 -luser32 -lkernel32 -o $@
 
-build/resources.o: src/explorer95.rc resources/Bitmap143.bmp build/tray_hook.dll build/obj32/.flags Makefile
+build/resources.o: src/explorer95.rc resources/Bitmap143.bmp resources/explorer95.ico build/tray_hook.dll build/obj32/.flags Makefile
 	@mkdir -p $(@D)
 	$(WINDRES) --preprocessor="$(CC)" --preprocessor-arg=-E --preprocessor-arg=-xc -I. -i $< -o $@
 
-build/ui64/resources.o: src/explorer95.rc resources/Bitmap143.bmp build/ui64/tray_hook.dll build/obj64/.flags Makefile
+build/ui64/resources.o: src/explorer95.rc resources/Bitmap143.bmp resources/explorer95.ico build/ui64/tray_hook.dll build/obj64/.flags Makefile
 	@mkdir -p $(@D)
 	$(WINDRES64) --preprocessor="$(CC64)" --preprocessor-arg=-E --preprocessor-arg=-xc -I. -i $< -o $@
 

@@ -201,7 +201,8 @@ void start(void)
     ole = OleInitialize(NULL);
     InitCommonControls();
     uiFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
-    icon = LoadIconA(NULL, IDI_APPLICATION);
+    icon = LoadIconA(instance, "EXPLORER95");
+    if (!icon) icon = LoadIconA(NULL, IDI_APPLICATION);
     if (!RegisterClassFor(RUN_CLASS, RunProc, (HBRUSH)(COLOR_BTNFACE + 1), icon) ||
         !BrowserRegister(instance, uiFont))
         ExitProcess(1);

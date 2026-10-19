@@ -193,7 +193,6 @@ static void PreviewTaskbar(HDC dc, const RECT *bounds, BOOL sampleTasks)
     if (rows < 1) rows = 1;
     int buttonHeight = EnvBarButtonHeight((Checked(env.properties,ID_TASKTILES) ? 44 : large ? 40 : 28) * rows, rows);
     GetDlgItemTextA(env.properties, ID_STARTLABEL, label, sizeof(label));
-    if (!label[0]) lstrcpyA(label, "Start");
     startWidth = EnvStartLabelWidth(label);
     FillRect(dc, bounds, (HBRUSH)(COLOR_BTNFACE + 1)); DrawEdge(dc, &part, EDGE_RAISED, BF_TOP);
     SetRect(&part, bounds->left + 2, bounds->top + 3, bounds->left + 2 + startWidth, bounds->top + 3 + buttonHeight);

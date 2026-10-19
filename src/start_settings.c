@@ -235,7 +235,7 @@ void StartSettingsCreate(HWND window)
     control = Control(window, START_GENERAL, "COMBOBOX", "", WS_TABSTOP | CBS_DROPDOWNLIST, ID_STARTSTYLE, 252, 184, 232, 100);
     SendMessageA(control, CB_ADDSTRING, 0, (LPARAM)"Two-column Start menu"); SendMessageA(control, CB_ADDSTRING, 0, (LPARAM)"Classic Start menu");
     SendMessageA(control, CB_SETCURSEL, env.options.classicStart, 0);
-    Control(window, START_GENERAL, "STATIC", "Start button text:", 0, 0, 30, 224, 110, 20);
+    Control(window, START_GENERAL, "STATIC", "Start text (optional):", 0, 0, 30, 224, 110, 20);
     control = Control(window, START_GENERAL, "EDIT", env.options.startLabel, WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL, ID_STARTLABEL, 144, 220, 340, 23);
     SendMessageA(control, EM_LIMITTEXT, 31, 0);
     Control(window, START_GENERAL, "STATIC", "Recent programs:", 0, 0, 30, 257, 110, 20);
@@ -354,7 +354,6 @@ BOOL StartSettingsValidate(HWND window, ShellOptions *options)
     options->allowDrop = SendDlgItemMessageA(window, ID_STARTDROP, BM_GETCHECK, 0, 0) == BST_CHECKED;
     options->highlightNew = SendDlgItemMessageA(window, ID_HIGHLIGHTNEW, BM_GETCHECK, 0, 0) == BST_CHECKED;
     GetDlgItemTextA(window, ID_STARTLABEL, options->startLabel, sizeof(options->startLabel));
-    if (!options->startLabel[0]) lstrcpyA(options->startLabel, "Start");
     return TRUE;
 }
 BOOL StartSettingsWrite(const char *ini)

@@ -1035,7 +1035,7 @@ BOOL BrowserRegister(HINSTANCE instance, HFONT font)
         if (lstrcmpiA(face, "Marlett")) { DeleteObject(browserSymbols); browserSymbols = NULL; }
     }
     ZeroMemory(&cls, sizeof(cls)); cls.hInstance = instance; cls.hCursor = LoadCursorA(NULL, IDC_ARROW);
-    cls.hIcon = LoadIconA(NULL, IDI_APPLICATION); cls.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1); cls.lpfnWndProc = BrowserProc;
+    cls.hIcon = LoadIconA(instance, "EXPLORER95"); cls.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1); cls.lpfnWndProc = BrowserProc;
     cls.lpszClassName = BROWSER_CLASS; if (!RegisterClassA(&cls)) return FALSE;
     cls.lpszClassName = BROWSER_NAMESPACE_CLASS; if (!RegisterClassA(&cls)) return FALSE;
     cls.lpszClassName = optionsClass; cls.lpfnWndProc = OptionsProc;

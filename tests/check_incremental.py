@@ -15,7 +15,7 @@ def main():
     root = Path(__file__).resolve().parents[1]
     with tempfile.TemporaryDirectory(prefix="explorer95-build-") as temp:
         work = Path(temp)
-        for name in ("Makefile", "src/start_layout.c", "src/start_layout.h", "src/explorer95.rc", "resources/Bitmap143.bmp",
+        for name in ("Makefile", "src/start_layout.c", "src/start_layout.h", "src/explorer95.rc", "resources/Bitmap143.bmp", "resources/explorer95.ico",
                      "src/tray_hook.c", "src/tray_mirror.h", "src/tray_image.c"):
             target = work / name
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -55,6 +55,9 @@ def main():
         bitmap = work / "resources/Bitmap143.bmp"
         bitmap.write_bytes(bitmap.read_bytes())
         run("bitmap changes rebuild only resources", 0, 1)
+        icon = work / "resources/explorer95.ico"
+        icon.write_bytes(icon.read_bytes())
+        run("application icon changes rebuild only resources", 0, 1)
         source = work / "src/start_layout.c"
         source.write_text(source.read_text() + "\n/* source probe */\n")
         run("one source change rebuilds only that object", 1, 0)

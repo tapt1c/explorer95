@@ -16,6 +16,7 @@
 
 static PROCESS_INFORMATION process;
 static HWND child;
+static char programsShortcut[MAX_PATH];
 static void PumpFor(DWORD duration);
 static void NativeSelectItem(HWND list, int index);
 typedef enum TestGroup { GROUP_FULL, GROUP_CORE, GROUP_MENU, GROUP_BROWSER } TestGroup;
@@ -271,6 +272,17 @@ static void DesktopLabelPaintTests(void)
 
 static void PaintTests(void)
 {
+    {
+        int size;
+        for (size = 16; size <= 32; size *= 2) {
+            HICON icon = LoadImageA(GetModuleHandleA(NULL),"EXPLORER95",IMAGE_ICON,size,size,0);
+            ICONINFO info; BITMAP bitmap;
+            Check(icon && GetIconInfo(icon,&info),"load the embedded palette application icon with a native Win95 API");
+            Check(GetObjectA(info.hbmColor,sizeof(bitmap),&bitmap) && bitmap.bmWidth == size && bitmap.bmHeight == size,
+                "application icon contains native 16px and 32px images instead of requiring PNG decoding");
+            DeleteObject(info.hbmColor); DeleteObject(info.hbmMask); DestroyIcon(icon);
+        }
+    }
     DesktopLabelPaintTests();
     HDC screen = GetDC(NULL), source = CreateCompatibleDC(screen);
     HBITMAP logo = (HBITMAP)LoadImageA(GetModuleHandleA(NULL), MAKEINTRESOURCEA(143), IMAGE_BITMAP, 0, 0, 0);
@@ -386,6 +398,32 @@ static void HistoryTests(const char *directory, const char *module, const char *
     file = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
     if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
     Check(!IsProgramHistoryEntry(path, NULL), "malformed shortcuts are excluded without a resolution dialog"); DeleteFileA(path);
+    {
+        static char programs[MAX_PATH], common[MAX_PATH], nested[MAX_PATH], installed[MAX_PATH], shared[MAX_PATH], other[MAX_PATH], shortPath[MAX_PATH];
+        static char matches[5][MAX_PATH]; const char *paths[5];
+        wsprintfA(programs,"%s\\Programs",directory); wsprintfA(common,"%s\\Common Programs",directory);
+        Check(CreateDirectoryA(programs,NULL) && CreateDirectoryA(common,NULL),"create isolated user and shared All Programs roots");
+        wsprintfA(nested,"%s\\Tools",programs); CreateDirectoryA(nested,NULL);
+        wsprintfA(installed,"%s\\Installed app.lnk",nested); Check(Shortcut(installed,module),"install an application shortcut in a nested Programs folder");
+        wsprintfA(other,"%s\\Unlisted app.exe",directory); Check(CopyFileA(module,other,TRUE),"prepare an executable outside All Programs");
+        paths[0]=module; paths[1]=appLink; paths[2]=document; paths[3]=docLink; paths[4]=other;
+        Check(FindProgramHistoryShortcuts(paths,5,recent,programs,common,matches) && !lstrcmpiA(matches[0],installed) &&
+            !lstrcmpiA(matches[1],installed) && !matches[2][0] && !matches[3][0] && !matches[4][0],
+            "any launch of a listed executable matches its Programs shortcut; documents and unlisted executables stay hidden");
+        wsprintfA(shared,"%s\\Shared app.lnk",common); Check(Shortcut(shared,other),"install a common All Users program shortcut");
+        Check(FindProgramHistoryShortcuts(paths,5,recent,programs,common,matches) && !lstrcmpiA(matches[4],shared),
+            "All Users programs also qualify without changing the original launch path");
+        Check(GetShortPathNameA(module,shortPath,MAX_PATH) > 0,"obtain the executable's DOS path for shortcut identity"); paths[0]=shortPath;
+        Check(FindProgramHistoryShortcuts(paths,5,recent,programs,common,matches) && !lstrcmpiA(matches[0],installed),
+            "DOS and long executable paths match the same installed shortcut");
+        SetFileAttributesA(installed,FILE_ATTRIBUTE_HIDDEN);
+        Check(FindProgramHistoryShortcuts(paths,5,recent,programs,common,matches) && !matches[0][0] && !matches[1][0],
+            "hidden Programs entries do not qualify for the visible recent-program list");
+        SetFileAttributesA(installed,FILE_ATTRIBUTE_NORMAL); DeleteFileA(installed);
+        Check(FindProgramHistoryShortcuts(paths,5,recent,programs,common,matches) && !matches[0][0] && !matches[1][0] && matches[4][0],
+            "removing a Programs shortcut removes its target from the visible membership snapshot");
+        DeleteFileA(shared); DeleteFileA(other); RemoveDirectoryA(nested); RemoveDirectoryA(programs); RemoveDirectoryA(common);
+    }
     WritePrivateProfileStringA("Recent", "Format", "2", settings);
     WritePrivateProfileStringA("Recent", "Program0", docLink, settings);
     WritePrivateProfileStringA("Recent", "Program1", document, settings);
@@ -1278,6 +1316,18 @@ static HWND StartSettingsTests(HWND bar, HWND menu, const char *settings)
     GetWindowTextA(GetDlgItem(bar, 100), title, sizeof(title));
     Check(!lstrcmpA(title, "Start") && GetPrivateProfileIntA("Taskbar", "TaskWidth", 160, settings) == 160, "Cancel discards changes across Start and taskbar tabs");
     GetWindowTextA(GetDlgItem(menu, 800), title, sizeof(title)); Check(title[0] != 0, "Cancel also discards pending program-history clearing");
+    properties = OpenSettings(bar); SettingsPage(properties,1,0);
+    SetDlgItemTextA(properties,625,""); SendMessageA(properties,WM_COMMAND,0x3021,0);
+    GetWindowRect(GetDlgItem(bar,100),&rect);
+    GetPrivateProfileStringA("Start","ButtonLabel","missing",value,sizeof(value),settings);
+    GetWindowTextA(GetDlgItem(bar,100),title,sizeof(title));
+    Check(!value[0] && rect.right - rect.left == 26 && !lstrcmpA(title,"Start"),
+        "blank Start text persists as an icon-only button with a compact width and native accessible name");
+    SettingsPage(properties,0,-1); PumpFor(80); SettingsPaintingTests(properties,bar);
+    SaveScreen("build\\start-icon-only.bmp");
+    SendMessageA(properties,WM_COMMAND,IDCANCEL,0); properties = OpenSettings(bar); SettingsPage(properties,1,0);
+    GetDlgItemTextA(properties,625,value,sizeof(value)); Check(!value[0],"reopening Start settings retains the explicitly blank caption");
+    SetDlgItemTextA(properties,625,"Start"); SendMessageA(properties,WM_COMMAND,0x3021,0); SendMessageA(properties,WM_COMMAND,IDCANCEL,0);
     properties = OpenSettings(bar); SettingsPage(properties, 1, 2);
     SetWindowTextA(GetDlgItem(properties, 625), "Launch & Go");
     SendDlgItemMessageA(properties, 654, BM_SETCHECK, BST_UNCHECKED, 0); SendDlgItemMessageA(properties, 653, BM_SETCHECK, BST_UNCHECKED, 0);
@@ -1355,6 +1405,24 @@ static HWND StartSettingsTests(HWND bar, HWND menu, const char *settings)
     return properties;
 }
 
+static void RecentMembershipUiTests(HWND bar, HWND menu, const char *settings)
+{
+    int i, visible = 0; char module[MAX_PATH], saved[MAX_PATH], name[MAX_PATH];
+    GetModuleFileNameA(NULL,module,MAX_PATH);
+    if (IsWindowVisible(menu)) SendMessageA(GetDlgItem(bar,100),BM_CLICK,0,0);
+    Check(DeleteFileA(programsShortcut),"temporarily remove only our installed Programs fixture");
+    SendMessageA(GetDlgItem(bar,100),BM_CLICK,0,0);
+    for (i = 0; i < 30; ++i) if (IsWindowVisible(GetDlgItem(menu,800 + i))) ++visible;
+    GetPrivateProfileStringA("Recent","Program0","",saved,sizeof(saved),settings);
+    Check(!visible && !lstrcmpiA(saved,module),"removing the Programs shortcut hides old recent rows while preserving their saved launch commands");
+    SendMessageA(GetDlgItem(bar,100),BM_CLICK,0,0);
+    Check(SUCCEEDED(OleInitialize(NULL)) && Shortcut(programsShortcut,module),"restore only our own Programs shortcut"); OleUninitialize();
+    SendMessageA(GetDlgItem(bar,100),BM_CLICK,0,0); GetWindowTextA(GetDlgItem(menu,800),name,sizeof(name));
+    name[24] = 0;
+    Check(IsWindowVisible(GetDlgItem(menu,800)) && !IsWindowVisible(GetDlgItem(menu,801)) && !lstrcmpA(name,"Explorer95 smoke program"),
+        "Run launches of an installed program return to recents with the All Programs shortcut's label");
+    SendMessageA(GetDlgItem(bar,100),BM_CLICK,0,0);
+}
 static void EnvironmentTests(HWND bar, HWND browser, HWND childWindow, HWND menu, const char *settings)
 {
     typedef struct Packet { DWORD signature, operation; NOTIFYICONDATAA icon; } Packet;
@@ -1368,6 +1436,7 @@ static void EnvironmentTests(HWND bar, HWND browser, HWND childWindow, HWND menu
     Check(title[0] != 0, "Run updates the recent-program list in Start");
     GetPrivateProfileStringA("Recent", "Program0", "", value, sizeof(value), settings);
     Check(value[0] != 0, "recent-program history is persisted");
+    RecentMembershipUiTests(bar,menu,settings);
 
     CheckStartFits(bar, menu);
     ContextPinTest(bar, menu, settings);
@@ -1650,6 +1719,16 @@ void start(void)
     if (group != GROUP_BROWSER) { LayoutTests(); HistoryTests(settingsDir, module, settings); ShellFeatureTests(); }
     if (group == GROUP_FULL || group == GROUP_CORE) { PaintTests(); ConfigTests(settingsDir); DesktopIconTests(settingsDir); FolderHandlerTests(module,settings); FolderSelectionTests(); DragDataTests(); NativeViewMessageTests(); TrayMirrorTests(); TrayMirrorCrossProcessTests(); }
     if (group == GROUP_CORE) goto cleanup;
+    {
+        LPITEMIDLIST programs; char directory[MAX_PATH];
+        Check(SUCCEEDED(OleInitialize(NULL)),"initialize COM for the installed-program UI fixture");
+        Check(SUCCEEDED(SHGetSpecialFolderLocation(NULL,CSIDL_PROGRAMS,&programs)),"locate this isolated test user's Programs folder");
+        Check(SHGetPathFromIDListA(programs,directory),"obtain the Programs fixture directory"); CoTaskMemFree(programs);
+        wsprintfA(programsShortcut,"%s\\Explorer95 smoke program %lu.lnk",directory,GetCurrentProcessId());
+        Check(GetFileAttributesA(programsShortcut) == INVALID_FILE_ATTRIBUTES && Shortcut(programsShortcut,module),
+            "create only our own uniquely named All Programs shortcut for Run/history integration");
+        OleUninitialize();
+    }
     wsprintfA(command, "\"%s\" --settings=\"%s\"", executable, settings);
     if (group != GROUP_MENU) wsprintfA(command,"\"%s\" --settings=\"%s\" --open=\"%s\"",executable,settings,fixture);
     ZeroMemory(&startup, sizeof(startup)); startup.cb = sizeof(startup);
@@ -1694,7 +1773,7 @@ void start(void)
     }
     if (group == GROUP_MENU) {
         menu = FindWindowA("Explorer95.Start", NULL);
-        CheckStartFits(bar, menu); ContextPinTest(bar, menu, settings);
+        CheckStartFits(bar, menu); RecentMembershipUiTests(bar,menu,settings); ContextPinTest(bar, menu, settings);
         dialog = StartSettingsTests(bar, menu, settings);
         SendMessageA(dialog, WM_COMMAND, IDCANCEL, 0);
         ShutdownStyleTests(bar, settings);
@@ -1802,6 +1881,19 @@ shutdown:
         SystemParametersInfoA(SPI_GETWORKAREA, 0, &work, 0);
         Check(EqualRect(&work, &originalWork), "exit restores the original desktop work area");
     }
+    if (group == GROUP_FULL || group == GROUP_MENU) {
+        char caption[32]; RECT button;
+        GetPrivateProfileStringA("Start","ButtonLabel","Start",caption,sizeof(caption),settings);
+        Check(WritePrivateProfileStringA("Start","ButtonLabel","",settings),"save an explicitly blank Start caption before a real restart");
+        wsprintfA(command,"\"%s\" --settings=\"%s\"",executable,settings);
+        Check(CreateProcessA(NULL,command,NULL,NULL,FALSE,0,NULL,NULL,&startup,&process),"restart the shell with an icon-only Start profile");
+        bar = WaitFor("Explorer95.Taskbar",NULL); GetWindowRect(GetDlgItem(bar,100),&button);
+        Check(bar && button.right - button.left == 26,"the real restarted shell retains the compact icon-only Start button");
+        PostMessageA(bar,WM_CLOSE,0,0);
+        Check(WaitForGuiProcess(process.hProcess,5000) == WAIT_OBJECT_0,"icon-only restart exits cleanly");
+        CloseHandle(process.hThread); CloseHandle(process.hProcess);
+        WritePrivateProfileStringA("Start","ButtonLabel",caption,settings);
+    }
     if (group != GROUP_FULL) goto cleanup;
     wsprintfA(command, "\"%s\" --settings=\"%s\" --trace-render", executable, settings);
     Check(CreateProcessA(NULL, command, NULL, NULL, FALSE, 0, NULL, NULL, &startup, &process), "restart with saved profile");
@@ -1823,7 +1915,7 @@ shutdown:
     menu = FindWindowA("Explorer95.Start", NULL);
     GetWindowTextA(GetDlgItem(menu, 800), actual, sizeof(actual));
     Check(actual[0] != 0, "recent programs survive restart");
-    SendMessageA(menu, WM_COMMAND, 801, 0);
+    SendMessageA(menu, WM_COMMAND, 800, 0);
     child = WaitFor("Explorer95.SmokeChild", "Explorer95 smoke child");
     Check(child != NULL && SendMessageA(child, WM_APP + 35, 0, 0), "reloaded recent command preserves fully quoted arguments");
     PostMessageA(child, WM_CLOSE, 0, 0);
@@ -1857,6 +1949,7 @@ shutdown:
         Check(DeleteFileA(path), "diagnostic trace fixture removed after the file handle closes");
     }
 cleanup:
+    if (programsShortcut[0]) Check(DeleteFileA(programsShortcut), "remove only our own All Programs shortcut");
     wsprintfA(path, "%s.DIP", settings); DeleteFileA(path);
     DeleteFileA(settings);
     wsprintfA(path, "%s\\history-document.txt", settingsDir); DeleteFileA(path);
