@@ -159,7 +159,7 @@ HFONT UiFont(HFONT original)
         if(j==(int)sizeof(font)) return fonts[i].font;
     }
     if(fontCount==32) return original;
-    fonts[fontCount].source=font; font.lfCharSet=SYMBOL_CHARSET; lstrcpyA(font.lfFaceName,UI_FONT_FACE);
+    fonts[fontCount].source=font; font.lfCharSet=SYMBOL_CHARSET; lstrcpyA(font.lfFaceName,fontResource.face);
     fonts[fontCount].font=CreateFontIndirectA(&font);
     return fonts[fontCount].font ? fonts[fontCount++].font : original;
 }

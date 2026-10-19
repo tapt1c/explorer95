@@ -22,21 +22,24 @@ static BOOL Failed(UiFontResource *font,const char *stage,DWORD error)
     RenderTraceShell(stage,error ? HRESULT_FROM_WIN32(error) : E_FAIL,0,error);
     UiFontResourceClose(font); return FALSE;
 }
-static BOOL Verify(void)
+static BOOL Verify(const char *expected)
 {
     LOGFONTA face; TEXTMETRICA metrics; char name[LF_FACESIZE]; BOOL okay=FALSE;
     HDC dc=GetDC(NULL); HFONT font,old;
-    if(!dc) return FALSE;
+    if(!dc) { RenderTraceShell("font.face.dc",E_FAIL,0,0); return FALSE; }
     ZeroMemory(&face,sizeof(face)); face.lfHeight=-11; face.lfWeight=FW_NORMAL;
-    face.lfCharSet=SYMBOL_CHARSET; lstrcpyA(face.lfFaceName,UI_FONT_FACE);
+    face.lfCharSet=SYMBOL_CHARSET; lstrcpyA(face.lfFaceName,expected);
     font=CreateFontIndirectA(&face);
+    if(!font) RenderTraceShell("font.face.create",E_FAIL,0,0);
     if(font) {
         old=SelectObject(dc,font);
         if(old) {
-            okay=GetTextFaceA(dc,sizeof(name),name) && !lstrcmpA(name,UI_FONT_FACE) &&
-                GetTextMetricsA(dc,&metrics) && metrics.tmCharSet==SYMBOL_CHARSET;
+            BOOL named=GetTextFaceA(dc,sizeof(name),name)!=0,measured=GetTextMetricsA(dc,&metrics);
+            RenderTraceFontFace(named ? name : "(unavailable)",measured ? metrics.tmCharSet : 0xffffffffUL,
+                measured ? metrics.tmPitchAndFamily : 0);
+            okay=named && !lstrcmpiA(name,expected) && measured && metrics.tmCharSet==SYMBOL_CHARSET;
             SelectObject(dc,old);
-        }
+        } else RenderTraceShell("font.face.select",E_FAIL,0,0);
         DeleteObject(font);
     }
     ReleaseDC(NULL,dc); return okay;
@@ -46,7 +49,8 @@ BOOL UiFontResourceOpen(UiFontResource *font,BOOL win9x)
     HRSRC resource; HGLOBAL loaded; const void *bytes; DWORD size,written,length;
     char temp[MAX_PATH],target[MAX_PATH],shortName[MAX_PATH]; HANDLE file;
     ZeroMemory(font,sizeof(*font));
-    resource=FindResourceA(NULL,MAKEINTRESOURCEA(202),RT_RCDATA);
+    font->face=win9x ? UI_FONT_WIN95_FACE : UI_FONT_FACE;
+    resource=FindResourceA(NULL,MAKEINTRESOURCEA(win9x ? 204 : 202),RT_RCDATA);
     if(!resource || !(loaded=LoadResource(NULL,resource)) || !(bytes=LockResource(loaded)) || !(size=SizeofResource(NULL,resource)))
         return Failed(font,"font.resource",GetLastError());
     RenderTraceShell("font.resource",S_OK,size,win9x);
@@ -73,7 +77,7 @@ BOOL UiFontResourceOpen(UiFontResource *font,BOOL win9x)
         if(length<4) return Failed(font,"font.shortpath",ERROR_INVALID_NAME);
         lstrcpyA(target+length-4,".fot");
         SetLastError(ERROR_SUCCESS);
-        if(!CreateScalableFontResourceA(1,target,shortName,NULL)) return Failed(font,"font.fot.create",GetLastError());
+        if(!CreateScalableFontResourceA(0,target,shortName,NULL)) return Failed(font,"font.fot.create",GetLastError());
         font->wrapper=TRUE; lstrcpyA(font->registration,target);
         RenderTraceShell("font.fot.create",S_OK,1,0);
     } else lstrcpyA(font->registration,font->file);
@@ -83,6 +87,6 @@ BOOL UiFontResourceOpen(UiFontResource *font,BOOL win9x)
     int count=AddFontResourceA(font->registration);
     if(!count) return Failed(font,"font.register",GetLastError());
     font->registered=TRUE; RenderTraceShell("font.register",S_OK,count,font->wrapper);
-    if(!Verify()) return Failed(font,"font.face",0);
+    if(!Verify(font->face)) return Failed(font,"font.face",0);
     font->stage="font.ready"; RenderTraceShell(font->stage,S_OK,1,font->wrapper); return TRUE;
 }

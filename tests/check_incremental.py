@@ -62,6 +62,9 @@ def main():
         font = work / "resources/Explorer95UI.ttf"
         font.write_bytes(font.read_bytes())
         run("Cyrillic font changes rebuild only resources", 0, 1)
+        legacy_font = work / "resources/Explorer95UI95.ttf"
+        legacy_font.write_bytes(legacy_font.read_bytes())
+        run("Win95 symbol font changes rebuild only resources", 0, 1)
         command.append("build/obj32/src/localization.o")
         run("initial catalogue compiles its single object", 1, 0)
         run("unchanged catalogue compiles nothing", 0, 0)

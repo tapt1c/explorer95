@@ -51,6 +51,17 @@ void RenderTraceShell(const char *stage, HRESULT result, DWORD first, DWORD seco
         GetTickCount(), stage, (DWORD)result, first, second);
     WriteTrace(text);
 }
+void RenderTraceFontFace(const char *face,DWORD charset,DWORD flags)
+{
+    char safe[LF_FACESIZE],text[160]; int i;
+    if(traceFile==INVALID_HANDLE_VALUE) return;
+    for(i=0;i<LF_FACESIZE-1 && face[i];++i) {
+        BYTE ch=(BYTE)face[i]; safe[i]=ch>=32 && ch<127 && ch!='"' ? ch : '?';
+    }
+    safe[i]=0;
+    wsprintfA(text,"%lu font.face.selected name=\"%s\" charset=%lu flags=%lu\r\n",GetTickCount(),safe,charset,flags);
+    WriteTrace(text);
+}
 void RenderTraceTray(DWORD stage, DWORD error, DWORD value)
 {
     char text[120];

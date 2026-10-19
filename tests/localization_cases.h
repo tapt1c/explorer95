@@ -8,26 +8,38 @@ static BOOL LanguageWideEqual(HWND window,const WCHAR *expected)
 }
 static LRESULT CALLBACK LanguageProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
 { return DefWindowProcA(window,message,wp,lp); }
+static int CALLBACK LanguageFontEnum(const LOGFONTA *font,const TEXTMETRICA *metrics,DWORD type,LPARAM data)
+{
+    (void)metrics; (void)type;
+    if(!lstrcmpiA(font->lfFaceName,UI_FONT_WIN95_FACE) && font->lfCharSet==SYMBOL_CHARSET) *(BOOL *)data=TRUE;
+    return 1;
+}
 static void LanguageFontResourceTests(const char *directory)
 {
-    UiFontResource resource; char file[MAX_PATH],wrapper[MAX_PATH],temp[MAX_PATH],tmp[MAX_PATH],missing[MAX_PATH];
+    UiFontResource resource,reference; char file[MAX_PATH],wrapper[MAX_PATH],temp[MAX_PATH],tmp[MAX_PATH],missing[MAX_PATH];
     DWORD tempLength=GetEnvironmentVariableA("TEMP",temp,MAX_PATH),tmpLength=GetEnvironmentVariableA("TMP",tmp,MAX_PATH);
     Check(tempLength<MAX_PATH && tmpLength<MAX_PATH,"the font fixture can preserve its process temporary-directory settings");
     Check(SetEnvironmentVariableA("TEMP",directory) && SetEnvironmentVariableA("TMP",directory),"use only our temporary directory for the classic font resource fixture");
     Check(UiFontResourceOpen(&resource,TRUE),"the real Win95 font backend creates and registers a scalable-font FOT wrapper");
     Check(resource.wrapper && resource.registered && resource.file[0] && lstrcmpiA(resource.file,resource.registration),
         "legacy registration keeps distinct owned TTF and FOT files");
+    Check(!lstrcmpA(resource.face,UI_FONT_WIN95_FACE),"Win95 selects its dedicated symbol family instead of the NT mixed-encoding font");
+    { BOOL visible=FALSE; HDC dc=GetDC(NULL);
+      EnumFontFamiliesA(dc,UI_FONT_WIN95_FACE,LanguageFontEnum,(LPARAM)&visible); ReleaseDC(NULL,dc);
+      Check(visible,"the temporary Win95 symbol family is enumerable by the font mapper instead of hidden by a private FOT flag"); }
+    Check(UiFontResourceOpen(&reference,FALSE),"load the independent Unicode font as the Cyrillic raster reference");
     lstrcpyA(file,resource.file); lstrcpyA(wrapper,resource.registration);
     Check(GetFileAttributesA(file)!=INVALID_FILE_ATTRIBUTES && GetFileAttributesA(wrapper)!=INVALID_FILE_ATTRIBUTES,
         "both temporary font files exist until the registered font is released");
     {
         LOGFONTA face; char actual[LF_FACESIZE]; ZeroMemory(&face,sizeof(face));
-        face.lfHeight=-11; face.lfCharSet=SYMBOL_CHARSET; lstrcpyA(face.lfFaceName,UI_FONT_FACE);
+        face.lfHeight=-11; face.lfCharSet=SYMBOL_CHARSET; lstrcpyA(face.lfFaceName,resource.face);
         HFONT font=CreateFontIndirectA(&face); HDC dc=GetDC(NULL); HFONT old=SelectObject(dc,font);
-        Check(font && GetTextFaceA(dc,sizeof(actual),actual) && !lstrcmpA(actual,UI_FONT_FACE),"FOT registration selects the actual bundled face instead of silently substituting a system font");
+        Check(font && GetTextFaceA(dc,sizeof(actual),actual) && !lstrcmpA(actual,UI_FONT_WIN95_FACE),"FOT registration selects the actual bundled face instead of silently substituting a system font");
         HDC a=CreateCompatibleDC(dc),b=CreateCompatibleDC(dc); RECT rect={0,0,160,32};
         HBITMAP bitmapA=CreateCompatibleBitmap(dc,160,32),bitmapB=CreateCompatibleBitmap(dc,160,32);
-        HGDIOBJ ba=SelectObject(a,bitmapA),bb=SelectObject(b,bitmapB),fa=SelectObject(a,font),fb=SelectObject(b,font);
+        lstrcpyA(face.lfFaceName,reference.face); HFONT unicode=CreateFontIndirectA(&face);
+        HGDIOBJ ba=SelectObject(a,bitmapA),bb=SelectObject(b,bitmapB),fa=SelectObject(a,font),fb=SelectObject(b,unicode);
         FillRect(a,&rect,(HBRUSH)(COLOR_WINDOW+1)); FillRect(b,&rect,(HBRUSH)(COLOR_WINDOW+1));
         SetTextColor(a,0); SetTextColor(b,0); SetBkMode(a,TRANSPARENT); SetBkMode(b,TRANSPARENT);
         DrawTextA(a,"\xcf\xf3\xf1\xea",-1,&rect,DT_SINGLELINE|DT_NOPREFIX);
@@ -36,9 +48,9 @@ static void LanguageFontResourceTests(const char *directory)
         for(y=0;y<32;++y) for(x=0;x<160;++x) { COLORREF color=GetPixel(a,x,y); if(color!=GetSysColor(COLOR_WINDOW)) ++ink; if(color!=GetPixel(b,x,y)) ++different; }
         Check(ink>20 && different<20,"the FOT-loaded symbol face draws actual Cyrillic through ANSI GDI on an English locale");
         SelectObject(a,fa); SelectObject(b,fb); SelectObject(a,ba); SelectObject(b,bb); DeleteObject(bitmapA); DeleteObject(bitmapB); DeleteDC(a); DeleteDC(b);
-        SelectObject(dc,old); DeleteObject(font); ReleaseDC(NULL,dc);
+        SelectObject(dc,old); DeleteObject(font); DeleteObject(unicode); ReleaseDC(NULL,dc);
     }
-    UiFontResourceClose(&resource);
+    UiFontResourceClose(&reference); UiFontResourceClose(&resource);
     Check(GetFileAttributesA(file)==INVALID_FILE_ATTRIBUTES && GetFileAttributesA(wrapper)==INVALID_FILE_ATTRIBUTES,
         "closing the classic font resource removes both of its own files");
     UiFontResourceClose(&resource);
@@ -121,7 +133,7 @@ static void LanguageFontTrace(const char *path)
     Check(contents && ReadFile(file,contents,size,&bytes,NULL) && bytes==size,"read font loading diagnostics after the Russian process exits");
     CloseHandle(file);
     const char *stages[]={"shell stage=font.resource result=00000000", "shell stage=font.write result=00000000",
-        "shell stage=font.register result=00000000", "shell stage=font.ready result=00000000",
+        "shell stage=font.register result=00000000", "font.face.selected name=\"Explorer95 UI\" charset=2", "shell stage=font.ready result=00000000",
         "shell stage=exit.ole ","shell stage=font.remove result=00000000","shell stage=exit.done "};
     for(stage=0;stage<sizeof(stages)/sizeof(stages[0]);++stage) {
         DWORD length=lstrlenA(stages[stage]); BOOL found=FALSE;

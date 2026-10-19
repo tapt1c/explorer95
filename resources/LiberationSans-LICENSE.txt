@@ -1,5 +1,6 @@
-Explorer95 UI is a modified, subsetted Liberation Sans font.
-Modifications: renamed family and a Windows symbol cmap for CP1251 UI bytes.
+Explorer95 UI and Explorer95 UI 95 are modified, subsetted Liberation Sans fonts.
+Modifications: renamed families and Windows symbol cmaps for CP1251 UI bytes.
+Explorer95 UI 95 has only the legacy symbol cmap, without Unicode/layout tables.
 The original copyright notices and SIL OFL 1.1 licence follow.
 
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/

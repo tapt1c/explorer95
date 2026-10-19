@@ -10,5 +10,7 @@ void RenderTraceTray(DWORD stage, DWORD error, DWORD value);
 void RenderTraceShell(const char *stage, HRESULT result, DWORD first, DWORD second);
 /* Uses space reserved within the same 512 KiB log for shutdown diagnostics. */
 void RenderTraceShutdown(const char *stage, HRESULT result, DWORD detail);
+/* Only the font face selected for our own UI, never window/user text. */
+void RenderTraceFontFace(const char *face, DWORD charset, DWORD flags);
 void RenderTraceTrayDetail(DWORD stage, DWORD error, DWORD detail, DWORD value);
 #endif
