@@ -15,6 +15,8 @@
 #include "shell_new.h"
 #include "file_drag.h"
 
+#define DESKTOP_REFRESH_MESSAGE (WM_APP + 35)
+
 struct NativeView {
     IShellBrowser browser;
     ICommDlgBrowser dialog;
@@ -35,13 +37,32 @@ struct NativeView {
     BOOL tiled, backgroundDirty, sized;
     PaintBuffer background, desktopFrame;
     BOOL paintingDesktop, desktopRedrawDisabled, desktopFramePending;
-    int desktopMutationDepth;
+    BOOL desktopRefreshing, desktopRefreshPending, desktopRefreshPosted;
+    int desktopMutationDepth, desktopCallDepth;
     DesktopIcons *icons;
 };
 
 static EnvironmentHost host;
 static const char property[] = "Explorer95.NativeView";
 static BOOL OpenSelection(NativeView *view);
+static BOOL DesktopBusy(NativeView *view)
+{
+    return view->paintingDesktop || view->desktopMutationDepth || view->desktopCallDepth || view->fileDragging || view->desktopRefreshing;
+}
+static void ResumeDesktop(NativeView *view)
+{
+    if (!view->desktop || DesktopBusy(view)) return;
+    if (view->desktopFramePending && !view->desktopRedrawDisabled) InvalidateRect(view->list,NULL,TRUE);
+    /* Post only on leaving the outer operation. Posting from a busy callback
+     * would let the shell's nested message pump consume and repost forever. */
+    if (view->desktopRefreshPending && !view->desktopRefreshPosted)
+        view->desktopRefreshPosted=PostMessageA(view->list,DESKTOP_REFRESH_MESSAGE,0,0);
+}
+static void BeginDesktopCall(NativeView *view) { if(view->desktop) ++view->desktopCallDepth; }
+static void EndDesktopCall(NativeView *view)
+{
+    if(view->desktop && !--view->desktopCallDepth) ResumeDesktop(view);
+}
 static void NotifyState(NativeView *view)
 {
     if (view->navigate && !view->statePending) {
@@ -277,16 +298,22 @@ static void PaintBackground(NativeView *view, HDC target, HWND window)
  * is the original Win95 control painting contract, also used by layout restore. */
 static void PaintDesktopFrame(NativeView *view, HWND window)
 {
-    PAINTSTRUCT paint; RECT area; HDC target=BeginPaint(window,&paint),dc; int saved;
-    if(!target) { EndPaint(window,&paint); return; }
+    PAINTSTRUCT paint; RECT area; HDC target,dc; int saved;
+    /* Internal/reentrant WM_PAINT can have no damaged pixels. Forcing a print
+     * in that case calls shell callbacks again and can perpetually invalidate
+     * the desktop. Do not enter BeginPaint recursively while a frame is live. */
+    if(!GetUpdateRect(window,NULL,FALSE)) { ValidateRect(window,NULL); return; }
     /* Shell callbacks can pump messages after releasing an item's PIDL but
      * before Common Controls removes the item. Preserve the completed frame
      * until mutations and a source OLE drag have fully returned. */
-    if(view->paintingDesktop || view->desktopRedrawDisabled || view->desktopMutationDepth || view->fileDragging) {
-        view->desktopFramePending=TRUE; EndPaint(window,&paint); return;
+    if(DesktopBusy(view) || view->desktopRedrawDisabled) {
+        view->desktopFramePending=TRUE; ValidateRect(window,NULL); return;
     }
     view->desktopFramePending=FALSE;
-    view->paintingDesktop=TRUE; GetClientRect(window,&area);
+    /* BeginPaint/EndPaint can themselves send synchronous window messages. */
+    view->paintingDesktop=TRUE; target=BeginPaint(window,&paint);
+    if(!target) { EndPaint(window,&paint); view->paintingDesktop=FALSE; ResumeDesktop(view); return; }
+    GetClientRect(window,&area);
     dc=PaintBufferBegin(&view->desktopFrame,target,&area); saved=SaveDC(dc);
     if(saved) IntersectClipRect(dc,paint.rcPaint.left,paint.rcPaint.top,paint.rcPaint.right,paint.rcPaint.bottom);
     PaintBackground(view,dc,window); PaintDesktopLabelShadows(window,dc);
@@ -296,8 +323,8 @@ static void PaintDesktopFrame(NativeView *view, HWND window)
     CallWindowProcA(view->oldList,window,WM_PRINTCLIENT,(WPARAM)dc,PRF_CLIENT);
     if(saved) RestoreDC(dc,saved);
     if(dc!=target) PaintBufferEnd(&view->desktopFrame,target,&paint.rcPaint);
-    view->paintingDesktop=FALSE; EndPaint(window,&paint);
-    if(view->desktopFramePending) InvalidateRect(window,NULL,TRUE);
+    EndPaint(window,&paint); view->paintingDesktop=FALSE;
+    ResumeDesktop(view);
 }
 
 /* Route filesystem and virtual folders through our browser. Shell IDList Array
@@ -459,7 +486,9 @@ static LRESULT CALLBACK Subclass(HWND window, UINT message, WPARAM wp, LPARAM lp
     if (!view) return DefWindowProcA(window, message, wp, lp);
     original = window == view->list ? view->oldList : view->oldView;
     RenderTraceEvent(view->desktop ? (window == view->list ? "desktop-list" : "desktop-view") : "folder-view", window, message, wp, lp);
-    if (NativeViewMenuMessage(view, message, wp, lp)) return 0;
+    BeginDesktopCall(view);
+    { BOOL handled=NativeViewMenuMessage(view,message,wp,lp);
+      EndDesktopCall(view); if(handled) return 0; }
     /* Original Win95 views do not consistently delegate default folder verbs
      * through BrowseObject. Consume real activation before ShellExecute can
      * open Explorer.exe; navigation itself remains queued outside this view.
@@ -477,10 +506,20 @@ static LRESULT CALLBACK Subclass(HWND window, UINT message, WPARAM wp, LPARAM lp
         }
         if (hit && OpenSelection(view)) return 0;
     }
-    if (view->desktop && window == view->window && message == WM_NOTIFY &&
-        DesktopIconsBeginDrag(view->icons, (const NMLISTVIEW *)lp)) return 0;
+    if (view->desktop && window == view->window && message == WM_NOTIFY) {
+        BOOL handled; BeginDesktopCall(view);
+        handled=DesktopIconsBeginDrag(view->icons,(const NMLISTVIEW *)lp);
+        EndDesktopCall(view); if(handled) return 0;
+    }
     if (view->desktop && window == view->list) {
-        if (DesktopIconsMessage(view->icons, message, wp, lp)) return message == WM_ERASEBKGND;
+        if (message == DESKTOP_REFRESH_MESSAGE) {
+            view->desktopRefreshPosted=FALSE;
+            if(view->desktopRefreshPending) NativeViewRefresh(view);
+            return 0;
+        }
+        { BOOL handled; BeginDesktopCall(view);
+          handled=DesktopIconsMessage(view->icons,message,wp,lp);
+          EndDesktopCall(view); if(handled) return message==WM_ERASEBKGND; }
         if (message == LVM_INSERTITEMA || message == LVM_INSERTITEMW || message == LVM_DELETEITEM ||
             message == LVM_DELETEALLITEMS || message == LVM_SETITEMTEXTA || message == LVM_SETITEMTEXTW || message == WM_SIZE)
             { view->fileHover=-1; DesktopIconsChanged(view->icons); }
@@ -533,17 +572,31 @@ static LRESULT CALLBACK Subclass(HWND window, UINT message, WPARAM wp, LPARAM lp
         if(desktopMutation) ++view->desktopMutationDepth;
         if(desktopRedraw && !wp) view->desktopRedrawDisabled=TRUE;
         if (refresh) ++view->operationDepth;
-        LRESULT result = CallWindowProcA(original, window, message, wp, lp);
-        if(desktopMutation && !--view->desktopMutationDepth && view->desktopFramePending)
-            InvalidateRect(window,NULL,TRUE);
+        BeginDesktopCall(view);
+        LVITEMA mainItem; LPARAM forwarded=lp;
+        /* Item data belongs to the main item. Some installed views leave
+         * iSubItem unspecified in a data-only update (Wine's rename path
+         * does so after releasing the old data). Never turn that into a
+         * failed subitem update retaining a dangling item value. Treat the
+         * value as opaque: the shell still owns its allocation and lifetime. */
+        if(view->desktop && window==view->list && (message==LVM_SETITEMA || message==LVM_SETITEMW) &&
+           lp && ((LVITEMA *)lp)->mask==LVIF_PARAM && ((LVITEMA *)lp)->iSubItem) {
+            ZeroMemory(&mainItem,sizeof(mainItem)); mainItem.mask=LVIF_PARAM;
+            mainItem.iItem=((LVITEMA *)lp)->iItem; mainItem.lParam=((LVITEMA *)lp)->lParam;
+            forwarded=(LPARAM)&mainItem;
+        }
+        LRESULT result = CallWindowProcA(original, window, message, wp, forwarded);
+        if(desktopMutation && !--view->desktopMutationDepth) ResumeDesktop(view);
         if(desktopRedraw && wp) {
             view->desktopRedrawDisabled=FALSE; InvalidateRect(window,NULL,TRUE);
+            ResumeDesktop(view);
         }
         /* The native context menu has now returned from InvokeCommand and
          * its confirmation. Never refresh from WM_EXITMENULOOP: that runs
          * before the shell command, including inside its modal confirmation. */
         if (refresh && !--view->operationDepth) BrowserRecycleBinsChanged();
         if (shellDrag) DesktopIconsAfterShellAction(view->icons);
+        EndDesktopCall(view);
         return result;
     }
 }
@@ -740,15 +793,28 @@ void NativeViewDesktopSettingsChanged(NativeView *view)
 }
 void NativeViewRefresh(NativeView *view)
 {
-    if (!view || view->fileDragging) return;
+    if (!view) return;
+    if (view->desktop && DesktopBusy(view)) {
+        view->desktopRefreshPending=TRUE;
+        RenderTraceShell("desktop.refresh.defer",S_OK,view->paintingDesktop,view->desktopCallDepth);
+        return;
+    }
+    if (view->fileDragging) return;
+    if (view->desktop) {
+        view->desktopRefreshPending=FALSE; view->desktopRefreshing=TRUE;
+        RenderTraceShell("desktop.refresh.begin",S_OK,0,0);
+    }
     view->refreshPending = FALSE;
-    if (view->icons && !DesktopIconsBeginRefresh(view->icons)) return;
+    if (view->icons && !DesktopIconsBeginRefresh(view->icons)) {
+        view->desktopRefreshing=FALSE; ResumeDesktop(view); return;
+    }
     if (view->desktop) ReadWallpaper(view);
     IShellView_Refresh(view->view);
     if (view->recycleBin) RenderTraceShell("recycle.refresh", S_OK, ListView_GetItemCount(view->list), ListView_GetSelectedCount(view->list));
     DesktopIconsEndRefresh(view->icons);
     InvalidateRect(view->list, NULL, TRUE);
     NotifyState(view);
+    view->desktopRefreshing=FALSE; ResumeDesktop(view);
 }
 void NativeViewArrange(NativeView *view, BOOL autoArrange)
 {
@@ -804,7 +870,7 @@ static void DesktopFileDrag(void *context)
     view->fileDragging=TRUE; ++view->operationDepth;
     result=FileDragStart(data,FALSE,&effect); IDataObject_Release(data);
     --view->operationDepth; view->fileDragging=FALSE; view->fileHover=-1;
-    if(view->desktopFramePending) InvalidateRect(view->list,NULL,TRUE);
+    ResumeDesktop(view);
     if(result==DRAGDROP_S_DROP && effect) { PostMessageA(view->list,WM_KEYDOWN,VK_F5,0); BrowserRecycleBinsChanged(); }
 }
 static void DesktopDropLeave(void *context)
@@ -821,9 +887,12 @@ static BOOL DesktopDropResolve(void *context, POINT screen, char *path)
     ZeroMemory(&hit,sizeof(hit)); hit.pt=client;
     if(ListView_HitTest(view->list,&hit)>=0 && DesktopFileTarget(view,screen)) {
         /* Virtual folders (e.g. Recycle Bin) keep their original native target. */
-        if(!view->fileHoverPath[0]) { DesktopDropLeave(view); return FALSE; }
+        if(!view->fileHoverPath[0]) { RenderTraceShell("desktop.drop.virtual",S_OK,hit.iItem,hit.flags); DesktopDropLeave(view); return FALSE; }
         lstrcpyA(path,view->fileHoverPath); index=hit.iItem;
-    } else if(!host.specialPath || !host.specialPath(CSIDL_DESKTOPDIRECTORY,path)) return FALSE;
+    } else if(!host.specialPath || !host.specialPath(CSIDL_DESKTOPDIRECTORY,path)) {
+        RenderTraceShell("desktop.drop.no-path",E_FAIL,hit.iItem,hit.flags); return FALSE;
+    }
+    RenderTraceShell("desktop.drop.resolve",S_OK,hit.iItem,hit.flags);
     if(index!=view->dropIndex) { DesktopDropLeave(view); view->dropIndex=index;
         if(index>=0) ListView_SetItemState(view->list,index,LVIS_DROPHILITED,LVIS_DROPHILITED); }
     return TRUE;

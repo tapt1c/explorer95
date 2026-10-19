@@ -59,7 +59,7 @@ ALLOWED = {
         AppendMenuA CreateMenu CreatePopupMenu CreateWindowExA DefWindowProcA
         CallWindowProcA CopyIcon DestroyIcon DrawIconEx ExitWindowsEx FindWindowExA
         DestroyMenu DestroyWindow DispatchMessageA DrawEdge DrawFrameControl DrawFocusRect DrawTextA
-        BeginPaint EndPaint EnumWindows EnumChildWindows FillRect FindWindowA
+        BeginPaint EndPaint GetUpdateRect ValidateRect EnumWindows EnumChildWindows FillRect FindWindowA
         UnionRect GetDC ReleaseDC GetClassLongA GetCapture GetClassNameA GetClientRect GetCursorPos GetDlgItem
         GetDlgItemTextA GetFocus GetForegroundWindow GetKeyState GetAsyncKeyState GetMessageA GetParent
         GetDlgCtrlID GetDlgItemInt GetMenuItemCount GetMenuState GetMenuStringA GetPropA GetSystemMenu InsertMenuA

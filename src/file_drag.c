@@ -224,6 +224,7 @@ static HRESULT STDMETHODCALLTYPE TargetDrop(IDropTarget *self, IDataObject *data
 {
     FileDrop *target=(FileDrop *)self; HRESULT result=S_OK;
     if(ResolveTarget(target,keys,point,effect)) {
+        RenderTraceShell("drop-dispatch",S_OK,target->delegate!=NULL,*effect);
         target->dropping=TRUE;
         if(target->delegate) {
             IDropTarget *delegate=target->delegate; IDropTarget_AddRef(delegate);
@@ -249,12 +250,14 @@ static HRESULT STDMETHODCALLTYPE TargetDrop(IDropTarget *self, IDataObject *data
 static IDropTargetVtbl targetMethods={TargetQuery,TargetAdd,TargetRelease,TargetEnter,TargetOver,TargetLeave,TargetDrop};
 FileDrop *FileDropRegister(HWND window, HWND owner, void *context, FileDropResolve resolve, FileDropNotify leave, FileDropNotify completed, IDropTarget *fallback)
 {
-    FileDrop *target=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,sizeof(*target));
+    HRESULT result; FileDrop *target=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,sizeof(*target));
     if(!target) return NULL;
     target->iface.lpVtbl=&targetMethods; target->refs=1; target->window=window; target->owner=owner;
     target->context=context; target->resolve=resolve; target->leave=leave; target->completed=completed; target->fallback=fallback;
     if(fallback) IDropTarget_AddRef(fallback);
-    if(FAILED(RegisterDragDrop(window,&target->iface))) { TargetRelease(&target->iface); return NULL; }
+    result=RegisterDragDrop(window,&target->iface);
+    RenderTraceShell("drop-register",result,GetDlgCtrlID(window),fallback!=NULL);
+    if(FAILED(result)) { TargetRelease(&target->iface); return NULL; }
     return target;
 }
 void FileDropRevoke(FileDrop *target)

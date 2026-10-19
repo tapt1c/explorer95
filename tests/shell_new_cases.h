@@ -22,7 +22,9 @@ static void NewTestBytes(const char *path, const BYTE *expected, DWORD count)
     BYTE data[64]; DWORD bytes, i; HANDLE file;
     { DWORD started = GetTickCount();
         do {
-            file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+            /* The .lnk placeholder exists before the asynchronous wizard
+             * writes it. Polling must not deny that writer access. */
+            file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
             if (file != INVALID_HANDLE_VALUE) {
                 if (GetFileSize(file, NULL) == count) break;
                 CloseHandle(file); file = INVALID_HANDLE_VALUE;
@@ -51,7 +53,8 @@ static BOOL ShellNewChildMode(const char *line)
     path[length] = 0;
     if (GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES && (GetFileAttributesA(path) & FILE_ATTRIBUTE_DIRECTORY))
         lstrcatA(path, "\\Command result.cmd");
-    file = CreateFileA(path, GENERIC_WRITE, 0, NULL,
+    /* Allow the parent to observe the reserved file while we finish it. */
+    file = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ, NULL,
         length > 4 && !lstrcmpiA(path + lstrlenA(path) - 4, ".lnk") ? OPEN_EXISTING : CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
     if (file == INVALID_HANDLE_VALUE) ExitProcess(3);
     WriteFile(file, "command", 7, &written, NULL); CloseHandle(file);
@@ -136,12 +139,24 @@ static void NewTestKey(BYTE key)
 {
     keybd_event(key, 0, 0, 0); keybd_event(key, 0, KEYEVENTF_KEYUP, 0); PumpFor(60);
 }
+static BOOL CALLBACK NewTestPopup(HWND window, LPARAM count)
+{
+    char kind[32]={0}; DWORD owner=0;
+    GetWindowThreadProcessId(window,&owner); GetClassNameA(window,kind,sizeof(kind));
+    if(owner==process.dwProcessId && IsWindowVisible(window) && !lstrcmpA(kind,"#32768")) ++*(int *)count;
+    return TRUE;
+}
+static int NewTestPopups(void)
+{
+    int count=0; EnumWindows(NewTestPopup,(LPARAM)&count); return count;
+}
 static void BrowserNewContextTests(HWND browser, const char *directory)
 {
     HWND list = GetDlgItem(browser, ID_FILES), popup = NULL;
     RECT rect; POINT point; DWORD started; char created[MAX_PATH];
     /* A click on empty space must offer New even if another item was selected. */
-    ListView_SetItemState(list, 0, LVIS_SELECTED, LVIS_SELECTED);
+    NativeSelectItem(list,0);
+    Check(SendMessageA(list,LVM_GETSELECTEDCOUNT,0,0)==1,"New context fixture starts with one actual selection in the application process");
     GetClientRect(list, &rect); point.x = rect.right - 8; point.y = rect.bottom - 8; ClientToScreen(list, &point);
     SetForegroundWindow(browser);
     /* Activate by real input too: an asynchronous synthetic WM_CONTEXTMENU
@@ -157,7 +172,11 @@ static void BrowserNewContextTests(HWND browser, const char *directory)
     SetCursorPos(GetSystemMetrics(SM_CXSCREEN)-3,2); PumpFor(80);
     /* HMENU inspection does not cross process boundaries on every shell;
      * select the real submenu with input and verify its filesystem effect. */
-    NewTestKey(VK_END); NewTestKey(VK_UP); NewTestKey(VK_RIGHT); NewTestKey(VK_HOME); NewTestKey(VK_RETURN);
+    NewTestKey(VK_END); NewTestKey(VK_UP); NewTestKey(VK_RIGHT);
+    started=GetTickCount();
+    while(NewTestPopups()<2 && GetTickCount()-started<3000) PumpFor(20);
+    Check(NewTestPopups()>=2,"the real New submenu is visible before choosing Folder");
+    NewTestKey(VK_HOME); NewTestKey(VK_RETURN);
     wsprintfA(created, "%s\\New Folder", directory); started = GetTickCount();
     while (GetFileAttributesA(created) == INVALID_FILE_ATTRIBUTES && GetTickCount() - started < 3000) PumpFor(20);
     Check(GetFileAttributesA(created) != INVALID_FILE_ATTRIBUTES && (GetFileAttributesA(created) & FILE_ATTRIBUTE_DIRECTORY),

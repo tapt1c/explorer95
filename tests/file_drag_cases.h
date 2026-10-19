@@ -3,6 +3,9 @@ static POINT DragItemPoint(HWND list, const char *name)
 {
     int index=NativeItemIndex(list,name); RECT rect; POINT point; void *remote;
     Check(index>=0,"find the exact drag fixture in the public ListView"); NativeSelectItem(list,index);
+    /* Resizing/activation can leave a deferred native layout. Read the icon
+     * rectangle after it settles, rather than dragging from its old label. */
+    PumpFor(100);
     remote=VirtualAllocEx(process.hProcess,NULL,sizeof(rect),MEM_COMMIT|MEM_RESERVE,PAGE_READWRITE);
     ZeroMemory(&rect,sizeof(rect)); rect.left=LVIR_ICON;
     Check(remote && WriteProcessMemory(process.hProcess,remote,&rect,sizeof(rect),NULL) &&
@@ -21,10 +24,25 @@ static void DragMouse(HWND source, POINT start, HWND target, POINT end, UINT mod
 {
     HWND frame=source; int i; BOOL right=choice>=2;
     while(GetParent(frame)) frame=GetParent(frame);
-    SetForegroundWindow(frame); SetCursorPos(start.x,start.y); PumpFor(100);
+    SetForegroundWindow(frame);
+    mouse_event(MOUSEEVENTF_MOVE|MOUSEEVENTF_ABSOLUTE,start.x*65535/(GetSystemMetrics(SM_CXSCREEN)-1),start.y*65535/(GetSystemMetrics(SM_CYSCREEN)-1),0,0); PumpFor(100);
     Check(WindowFromPoint(start)==source,"file drag begins over the visible source icon");
+    { LVHITTESTINFO hit; void *remote; SIZE_T bytes; int index;
+      ZeroMemory(&hit,sizeof(hit)); hit.pt=start; ScreenToClient(source,&hit.pt);
+      remote=VirtualAllocEx(process.hProcess,NULL,sizeof(hit),MEM_COMMIT|MEM_RESERVE,PAGE_READWRITE);
+      Check(remote && WriteProcessMemory(process.hProcess,remote,&hit,sizeof(hit),&bytes),"marshal drag-start hit testing after activation and layout");
+      index=(int)SendMessageA(source,LVM_HITTEST,0,(LPARAM)remote);
+      Check(ReadProcessMemory(process.hProcess,remote,&hit,sizeof(hit),&bytes),"read the native drag-start hit result");
+      VirtualFreeEx(process.hProcess,remote,0,MEM_RELEASE);
+      if(index<0 || !(hit.flags&LVHT_ONITEMICON)) { char note[100]; wsprintfA(note,"Drag start %ld,%ld item=%d flags=%lx\r\n",start.x,start.y,index,hit.flags); Log(note); }
+      Check(index>=0 && (hit.flags&LVHT_ONITEMICON),"file drag starts on the actual icon, not an old layout or a label-edit target"); }
     mouse_event(right ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_LEFTDOWN,0,0,0,0); PumpFor(50);
-    SetCursorPos(start.x+12,start.y+5); PumpFor(100);
+    Check(!!(GetAsyncKeyState(right ? VK_RBUTTON : VK_LBUTTON)&0x8000),"drag button is held before the initial threshold movement");
+    /* Keep pointer movement and buttons in the same injected input stream.
+     * SetCursorPos generates X11 warp events with physical button-up state. */
+    mouse_event(MOUSEEVENTF_MOVE|MOUSEEVENTF_ABSOLUTE,(start.x+12)*65535/(GetSystemMetrics(SM_CXSCREEN)-1),(start.y+5)*65535/(GetSystemMetrics(SM_CYSCREEN)-1),0,0);
+    PumpFor(100);
+    Check(!!(GetAsyncKeyState(right ? VK_RBUTTON : VK_LBUTTON)&0x8000),"drag button remains held while crossing the native threshold");
     Check(GetForegroundWindow()==frame,"drag source owns keyboard focus before modifier input");
     for(i=1;i<=5;++i) {
         LONG x=start.x+(end.x-start.x)*i/5,y=start.y+(end.y-start.y)*i/5;
@@ -37,7 +55,11 @@ static void DragMouse(HWND source, POINT start, HWND target, POINT end, UINT mod
         wsprintfA(note,"Drop point %ld,%ld target bounds %ld,%ld,%ld,%ld actual %s\r\n",end.x,end.y,bounds.left,bounds.top,bounds.right,bounds.bottom,kind); Log(note);
     }
     Check(WindowFromPoint(end)==target,"file drop reaches the intended visible target surface");
-    if(modifier) { keybd_event(modifier,(BYTE)MapVirtualKeyA(modifier,0),0,0); PumpFor(80);
+    if(modifier) { DWORD started=GetTickCount(); int stable=0;
+        do {
+            if(!(GetAsyncKeyState(modifier)&0x8000)) { keybd_event(modifier,(BYTE)MapVirtualKeyA(modifier,0),0,0); stable=0; }
+            PumpFor(20); stable=(GetAsyncKeyState(modifier)&0x8000) ? stable+1 : 0;
+        } while(stable<2 && GetTickCount()-started<1000);
         Check(!!(GetAsyncKeyState(modifier)&0x8000),"drag modifier is held before releasing the file over the destination"); }
 
     if(choice==1) { keybd_event(VK_ESCAPE,(BYTE)MapVirtualKeyA(VK_ESCAPE,0),0,0); PumpFor(100); keybd_event(VK_ESCAPE,(BYTE)MapVirtualKeyA(VK_ESCAPE,0),KEYEVENTF_KEYUP,0); PumpFor(60); }
@@ -70,10 +92,12 @@ static void FileDragTests(HWND bar, HWND desktop, HWND source, const char *fixtu
     Check(CreateDirectoryA(from,NULL) && CreateDirectoryA(to,NULL) && CreateDirectoryA(childPath,NULL),"create isolated OLE source and destination folders");
     for(i=0;i<3;++i) { HANDLE file; wsprintfA(original,"%s\\%s",from,names[i]); file=CreateFileA(original,GENERIC_WRITE,0,NULL,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL);
         Check(file!=INVALID_HANDLE_VALUE,"create only our own drag file"); CloseHandle(file); }
-    GetWindowRect(source,&saved); Navigate(source,from); SendMessageA(source,WM_COMMAND,ID_FOLDERS_CLOSE,0); SendMessageA(source,WM_COMMAND,ID_VIEW_DETAILS,0);
+    GetWindowRect(source,&saved); Navigate(source,from); SendMessageA(source,WM_COMMAND,ID_FOLDERS_CLOSE,0);
+    SendMessageA(source,WM_COMMAND,ID_TASKS,0); SendMessageA(source,WM_COMMAND,ID_VIEW_DETAILS,0);
     SendMessageA(bar,WM_COMMAND,ID_EXPLORER,0); target=WaitFor(BROWSER_CLASS,NULL);
     Check(target && target!=source,"drag destination is a separate Explorer95 window"); targetList=GetDlgItem(target,ID_FILES);
-    Navigate(target,to); SendMessageA(target,WM_COMMAND,ID_FOLDERS_CLOSE,0); SendMessageA(target,WM_COMMAND,ID_VIEW_DETAILS,0);
+    Navigate(target,to); SendMessageA(target,WM_COMMAND,ID_FOLDERS_CLOSE,0);
+    SendMessageA(target,WM_COMMAND,ID_TASKS,0); SendMessageA(target,WM_COMMAND,ID_VIEW_DETAILS,0);
     ShowWindow(source,SW_RESTORE); ShowWindow(target,SW_RESTORE);
     MoveWindow(source,0,0,GetSystemMetrics(SM_CXSCREEN)/2,GetSystemMetrics(SM_CYSCREEN)-75,TRUE);
     MoveWindow(target,GetSystemMetrics(SM_CXSCREEN)/2,0,GetSystemMetrics(SM_CXSCREEN)/2,GetSystemMetrics(SM_CYSCREEN)-75,TRUE); PumpFor(120);
@@ -106,6 +130,7 @@ static void FileDragTests(HWND bar, HWND desktop, HWND source, const char *fixtu
     Check(DeleteFileA(result) && DeleteFileA(original),"remove desktop round-trip files from their actual destinations");
     PostMessageA(target,WM_CLOSE,0,0); PumpFor(100); ShowWindow(source,SW_RESTORE); Navigate(source,fixture);
     MoveWindow(source,8,8,GetSystemMetrics(SM_CXSCREEN)-16,GetSystemMetrics(SM_CYSCREEN)-65,TRUE);
+    SendMessageA(source,WM_COMMAND,ID_FOLDERS_CLOSE,0);
     wsprintfA(original,"%s\\copy-me",from); Check(DeleteFileA(original),"remove source copy fixture");
     wsprintfA(original,"%s\\cancel-me",from); Check(DeleteFileA(original),"remove cancelled source fixture");
     wsprintfA(result,"%s\\copy-me",to); Check(DeleteFileA(result),"remove copied destination fixture");

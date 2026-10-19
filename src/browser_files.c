@@ -362,7 +362,14 @@ BOOL BrowserFilesCreateDrop(Browser *browser)
 static void DragFiles(Browser *browser, BOOL right)
 {
     IDataObject *data; DWORD effect; HRESULT result;
-    if(browser->busy || browser->native || browser->concealed || ListView_GetEditControl(browser->files)) return;
+    if(browser->busy || browser->native || browser->concealed) {
+        RenderTraceShell("drag-reject",S_FALSE,browser->busy,(browser->native ? 1 : 0)|(browser->concealed ? 2 : 0));
+        return;
+    }
+    if(ListView_GetEditControl(browser->files)) {
+        RenderTraceShell("drag-reject",S_FALSE,0,4);
+        return;
+    }
     data=SelectionObject(browser,&IID_IDataObject); RenderTraceShell("drag-data",data ? S_OK : E_FAIL,0,0); if(!data) return;
     browser->busy=TRUE;
     result=FileDragStart(data,right,&effect);

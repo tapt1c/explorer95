@@ -136,6 +136,33 @@ static BOOL nativeDeletePaint, nativeDeleteFrameRetained;
 static HWND nativeDesktopList;
 static RECT nativeDesktopItem;
 static DWORD nativeDesktopFrame;
+static WNDPROC nativeRefreshOriginal;
+static NativeView *nativeRefreshView;
+static BOOL nativeRefreshTrigger, nativeRefreshCallback, nativeRefreshReentered;
+static int nativeRefreshClears;
+static BOOL nativeDisplayRefresh;
+/* Reproduce the installed view's data-only rename update with an unspecified
+ * subitem. These values stay opaque and borrowed; restore the original before
+ * pumping messages or destroying the view. Neither allocation is freed here. */
+static void NativeDesktopItemDataTest(HWND list)
+{
+    LVITEMA first,second,update,read; int i;
+    ZeroMemory(&first,sizeof(first)); first.mask=LVIF_PARAM;
+    second=first; second.iItem=1;
+    Check(SendMessageA(list,LVM_GETITEMA,0,(LPARAM)&first) &&
+        SendMessageA(list,LVM_GETITEMA,0,(LPARAM)&second) && first.lParam!=second.lParam,
+        "borrow two distinct opaque native item values without interpreting or releasing them");
+    for(i=0;i<2;++i) {
+        BOOL updated,readBack,restored;
+        update=first; update.iSubItem=i ? -37 : 37; update.lParam=second.lParam;
+        updated=SendMessageA(list,i ? LVM_SETITEMW : LVM_SETITEMA,0,(LPARAM)&update);
+        read=first; read.lParam=0; readBack=SendMessageA(list,LVM_GETITEMA,0,(LPARAM)&read);
+        restored=SendMessageA(list,LVM_SETITEMA,0,(LPARAM)&first);
+        Check(restored,"restore the borrowed item value before any native view teardown");
+        Check(updated && readBack && read.lParam==second.lParam && update.iSubItem==(i ? -37 : 37),
+            "data-only ANSI and Unicode updates reach the main item despite an unspecified subitem, preserving the caller's structure");
+    }
+}
 static DWORD NativeDesktopPixels(HWND list, const RECT *area)
 {
     HDC dc=GetDC(list); DWORD hash=2166136261U; int x,y;
@@ -150,6 +177,12 @@ static LRESULT CALLBACK NativeDesktopObserver(HWND window, UINT message, WPARAM 
 {
     LRESULT result;
     if(message==WM_NOTIFY && ((NMHDR *)lp)->code==NM_DBLCLK) ++nativeBackgroundClicks;
+    if(nativeDisplayRefresh && message==WM_NOTIFY &&
+       (((NMHDR *)lp)->code==LVN_GETDISPINFOA || ((NMHDR *)lp)->code==LVN_GETDISPINFOW)) {
+        nativeDisplayRefresh=FALSE; nativeRefreshCallback=TRUE;
+        NativeViewRefresh(nativeRefreshView); NativeViewRefresh(nativeRefreshView);
+        nativeRefreshCallback=FALSE;
+    }
     result=CallWindowProcA(nativeDesktopOriginal,window,message,wp,lp);
     if(nativeDeletePaint && message==WM_NOTIFY && ((NMHDR *)lp)->code==LVN_DELETEITEM) {
         nativeDeletePaint=FALSE;
@@ -157,6 +190,49 @@ static LRESULT CALLBACK NativeDesktopObserver(HWND window, UINT message, WPARAM 
         nativeDeleteFrameRetained=NativeDesktopPixels(nativeDesktopList,&nativeDesktopItem)==nativeDesktopFrame;
     }
     return result;
+}
+static LRESULT CALLBACK NativeRefreshObserver(HWND window, UINT message, WPARAM wp, LPARAM lp)
+{
+    if(message==LVM_DELETEALLITEMS) {
+        ++nativeRefreshClears;
+        if(nativeRefreshCallback) nativeRefreshReentered=TRUE;
+    }
+    /* The shadow pass asks the real control for its font while building the
+     * frame. A shell extension/message pump may request F5 at this point. */
+    if(message==WM_GETFONT && nativeRefreshTrigger) {
+        nativeRefreshTrigger=FALSE; nativeRefreshCallback=TRUE;
+        NativeViewRefresh(nativeRefreshView); NativeViewRefresh(nativeRefreshView);
+        nativeRefreshCallback=FALSE;
+    }
+    return CallWindowProcA(nativeRefreshOriginal,window,message,wp,lp);
+}
+static void NativeDesktopRefreshPaintTest(NativeView *view)
+{
+    HWND list=NativeViewList(view); DWORD started;
+    nativeRefreshView=view; nativeRefreshTrigger=TRUE; nativeRefreshCallback=nativeRefreshReentered=FALSE;
+    nativeRefreshClears=0;
+    nativeRefreshOriginal=(WNDPROC)SetWindowLongPtrA(list,GWLP_WNDPROC,(LONG_PTR)NativeRefreshObserver);
+    ValidateRect(list,NULL); SendMessageA(list,WM_PAINT,0,0);
+    Check(nativeRefreshTrigger && !nativeRefreshClears,
+        "desktop paint without damaged pixels does not reenter shell display or refresh callbacks");
+    RedrawWindow(list,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_UPDATENOW);
+    Check(!nativeRefreshTrigger && !nativeRefreshReentered && !nativeRefreshClears,
+        "desktop refresh requested during frame painting never clears the native items inside that frame");
+    started=GetTickCount();
+    do { PumpFor(20); } while((!nativeRefreshClears || !ListView_GetItemCount(list)) && GetTickCount()-started<5000);
+    Check(nativeRefreshClears==1 && ListView_GetItemCount(list)>0,
+        "repeated refresh requests from one paint are coalesced and run after the frame without losing F5");
+    /* A read-only control call also keeps native item pointers live across
+     * its owner callback, even with no paint or structural mutation active. */
+    nativeRefreshClears=0; nativeRefreshReentered=FALSE; nativeDisplayRefresh=TRUE;
+    { char text[MAX_PATH]; ListView_GetItemText(list,0,0,text,sizeof(text));
+      Check(!nativeDisplayRefresh && text[0] && !nativeRefreshReentered && !nativeRefreshClears,
+          "refresh from a native text callback preserves the item until the read-only control call returns"); }
+    started=GetTickCount();
+    do { PumpFor(20); } while((!nativeRefreshClears || !ListView_GetItemCount(list)) && GetTickCount()-started<5000);
+    Check(nativeRefreshClears==1 && ListView_GetItemCount(list)>0,
+        "refresh requested by native display callbacks runs once after the outer control call");
+    SetWindowLongPtrA(list,GWLP_WNDPROC,(LONG_PTR)nativeRefreshOriginal);
 }
 static void NativeDesktopPaintTests(HWND parent)
 {
@@ -211,6 +287,8 @@ static void NativeDesktopPaintTests(HWND parent)
       Check(ListView_DeleteItem(list,0) && ListView_GetItemCount(list)==count-1,"remove one namespace item only from the disposable native view"); }
     Check(!nativeDeletePaint && nativeDeleteFrameRetained,"reentrant paint during native item deletion retains the completed frame without querying released shell data");
     RedrawWindow(list,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_UPDATENOW);
+    NativeDesktopRefreshPaintTest(view);
+    NativeDesktopItemDataTest(list);
     SetWindowLongPtrA(NativeViewWindow(view),GWLP_WNDPROC,(LONG_PTR)nativeDesktopOriginal);
     NativeViewDestroy(view); ShowWindow(parent,SW_HIDE);
 }

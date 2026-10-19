@@ -17,6 +17,7 @@
 static PROCESS_INFORMATION process;
 static HWND child;
 static void PumpFor(DWORD duration);
+static void NativeSelectItem(HWND list, int index);
 typedef enum TestGroup { GROUP_FULL, GROUP_CORE, GROUP_MENU, GROUP_BROWSER } TestGroup;
 
 void *memset(void *destination, int value, size_t count)
@@ -1652,6 +1653,7 @@ void start(void)
     wsprintfA(command, "\"%s\" --settings=\"%s\"", executable, settings);
     if (group != GROUP_MENU) wsprintfA(command,"\"%s\" --settings=\"%s\" --open=\"%s\"",executable,settings,fixture);
     ZeroMemory(&startup, sizeof(startup)); startup.cb = sizeof(startup);
+    if(GetEnvironmentVariableA("EX95_TEST_TRACE",actual,sizeof(actual)) && actual[0]=='1') lstrcatA(command," --trace-render");
     Check(CreateProcessA(NULL, command, NULL, NULL, FALSE, 0, NULL, NULL, &startup, &process), "launch built EXE");
     bar = WaitFor("Explorer95.Taskbar", NULL);
     desktop = WaitFor("Explorer95.Desktop", NULL);
