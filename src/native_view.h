@@ -10,7 +10,7 @@ void NativeViewRefresh(NativeView *view);
 void NativeViewDesktopSettingsChanged(NativeView *view);
 void NativeViewPaintDesktop(NativeView *view, HDC dc, HWND window);
 void NativeViewArrange(NativeView *view, BOOL autoArrange);
-void NativeViewConfigureDesktop(NativeView *view, const char *profile, BOOL automatic, BOOL locked, BOOL snap, int width, int height);
+void NativeViewConfigureDesktop(NativeView *view, const char *profile, BOOL automatic, BOOL locked, BOOL snap, int width, int height, int iconSize);
 void NativeViewLineUp(NativeView *view);
 HWND NativeViewWindow(NativeView *view);
 HWND OpenNativeFolder(LPCITEMIDLIST absolute);

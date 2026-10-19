@@ -293,6 +293,43 @@ static void NativeDesktopPaintTests(HWND parent)
     NativeViewDestroy(view); ShowWindow(parent,SW_HIDE);
 }
 
+static void NativeDesktopIconSizeTests(void)
+{
+    HRESULT ole=OleInitialize(NULL); NativeView *view; HWND parent,list; RECT area={0,0,400,300};
+    char directory[MAX_PATH], profile[MAX_PATH], sidecar[MAX_PATH], name[MAX_PATH]; HIMAGELIST large,small; POINT before,after; int width,height,count,index; LVFINDINFOA find;
+    Check(SUCCEEDED(ole),"initialize OLE for an isolated desktop icon-size view");
+    GetTempPathA(MAX_PATH,directory); Check(GetTempFileNameA(directory,"EIS",0,profile),"reserve an isolated icon-size profile");
+    parent=CreateWindowA("STATIC","Desktop icon sizes",WS_OVERLAPPEDWINDOW|WS_VISIBLE|WS_CLIPCHILDREN,0,0,420,340,NULL,NULL,GetModuleHandleA(NULL),NULL);
+    view=NativeViewCreateEx(parent,NULL,TRUE,0,&area); list=NativeViewList(view);
+    Check(view && list,"create a real Shell32 desktop for 16/32px switching");
+    NativeViewConfigureDesktop(view,profile,FALSE,FALSE,FALSE,80,80,32); DesktopPump();
+    large=ListView_GetImageList(list,LVSIL_NORMAL); small=ListView_GetImageList(list,LVSIL_SMALL); count=ListView_GetItemCount(list);
+    Check(ImageList_GetIconSize(large,&width,&height) && width==32 && height==32 && count>0,"native large desktop artwork is 32 by 32 pixels");
+    ListView_GetItemPosition(list,0,&before); ListView_GetItemText(list,0,0,name,MAX_PATH);
+    NativeViewConfigureDesktop(view,profile,FALSE,FALSE,FALSE,80,80,16); DesktopPump(); ListView_GetItemPosition(list,0,&after);
+    Check(ListView_GetImageList(list,LVSIL_NORMAL)==small && ImageList_GetIconSize(small,&width,&height) && width==16 && height==16 &&
+        before.x==after.x && before.y==after.y && (GetWindowLongA(list,GWL_STYLE)&LVS_TYPEMASK)==LVS_ICON,
+        "small desktop icons keep native labels below and preserve their manual coordinates");
+    Check(ImageList_GetIconSize(large,&width,&height) && width==32 && height==32,"desktop size selection never resizes the shared large image list");
+    ListView_SetImageList(list,large,LVSIL_NORMAL);
+    Check(ListView_GetImageList(list,LVSIL_NORMAL)==small,"a native large-list replacement preserves the selected small desktop size");
+    NativeViewRefresh(view); DesktopPump();
+    Check(ImageList_GetIconSize(ListView_GetImageList(list,LVSIL_NORMAL),&width,&height) && width==16 && height==16 && ListView_GetItemCount(list)==count,
+        "F5 retains the selected desktop icon size and the same namespace objects");
+    NativeViewConfigureDesktop(view,profile,FALSE,FALSE,FALSE,80,80,32); DesktopPump();
+    /* Refresh may reorder native item indices. Follow the same named object. */
+    ZeroMemory(&find,sizeof(find)); find.flags=LVFI_STRING; find.psz=name; index=ListView_FindItem(list,-1,&find);
+    Check(index>=0 && ListView_GetItemPosition(list,index,&after),"find the same desktop object after native refresh reorders its indices");
+    ImageList_GetIconSize(ListView_GetImageList(list,LVSIL_NORMAL),&width,&height);
+    if (width!=32 || height!=32 || before.x!=after.x || before.y!=after.y) {
+        char note[160]; wsprintfA(note,"Desktop size restore: image=%d,%d before=%d,%d after=%d,%d count=%d\r\n",width,height,before.x,before.y,after.x,after.y,ListView_GetItemCount(list)); Log(note);
+    }
+    Check(ImageList_GetIconSize(ListView_GetImageList(list,LVSIL_NORMAL),&width,&height) && width==32 && height==32 &&
+        before.x==after.x && before.y==after.y,"large desktop icons restore native 32px artwork without resetting positions");
+    NativeViewDestroy(view); DestroyWindow(parent);
+    lstrcpyA(sidecar,profile); lstrcatA(sidecar,".DIP"); DeleteFileA(sidecar); DeleteFileA(profile);
+    OleUninitialize();
+}
 static void NativeViewMessageTests(void)
 {
     HRESULT ole = OleInitialize(NULL); HWND parent, list; NativeView *view; RECT rect = {0, 0, 320, 200};
@@ -327,4 +364,5 @@ static void NativeViewMessageTests(void)
     SetWindowLongPtrA(NativeViewWindow(view), GWLP_WNDPROC, (LONG_PTR)nativePositionOriginal);
     NativeViewSetNavigator(view, NULL); NativeViewDestroy(view);
     NativeDesktopPaintTests(parent); DestroyWindow(parent); OleUninitialize();
+    NativeDesktopIconSizeTests();
 }

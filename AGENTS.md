@@ -591,6 +591,23 @@ explorer95.exe --settings="C:\EX95TEST\Explorer95.ini"
   с `DesktopIcons`, а `desktop_icons` отвечает за перенос, сетку и файл позиций.
   Не переносите эту логику в файловый Проводник и не заменяйте системные значки
   собственным списком файлов: должны сохраниться виртуальные объекты Shell32.
+  `[Desktop] IconSize` выбирает 16 или 32, default/неверное значение — 32; настройка
+  независима от Start/Quick Launch/tray. Desktop page и Icon Layout → Icon Size
+  используют один параметр, Apply/Cancel и общий preview.
+  NativeViewConfigureDesktop принимает размер последним аргументом. Для малого
+  режима native Small image list подставляется только в NORMAL-слот desktop ListView:
+  стиль остаётся LVS_ICON и подписи остаются снизу. Системные Small/Large списки
+  имеют одинаковые индексы; их нельзя масштабировать/уничтожать как собственные.
+  Сохраняйте настоящие native handles при LVM_SETIMAGELIST из Shell32, включая F5,
+  и политику владения. Перед teardown восстанавливайте NORMAL и исходный
+  LVS_SHAREIMAGELISTS. LVM_SETIMAGELIST входит в desktopMutationDepth.
+  При смене размера контроллер раскладки удерживает redraw и восстанавливает
+  позиции существующим refresh-путём. Snap/Grid центрируется по фактической ширине
+  активного image list, не всегда SM_CXICON. Ghost использует тот же NORMAL-список.
+  В тестах дождитесь восстановления DesktopIcons (DesktopPump), а после F5
+  сопоставляйте объект по имени: Shell32 может поменять его индекс. Чужой HIMAGELIST
+  нельзя передавать ImageList API из smoke-процесса; читайте LVIR_ICON через память
+  процесса приложения. ImageList_GetIconSize — исходный API Comctl32 4.0/Win95.
 - Подписи desktop остаются текстом системного ListView. Desktop WM_ERASEBKGND
   только возвращает TRUE: он не должен стирать готовые значки или оставлять
   на экране один фон с тенями до следующего WM_PAINT. В WM_PAINT NativeView

@@ -267,12 +267,19 @@ void DesktopIconsConfigure(DesktopIcons *icons, BOOL automatic, BOOL locked, BOO
     if (!icons->ready || icons->pending) DesktopIconsChanged(icons);
     else if (changed) { Capture(icons); SaveOrReport(icons); }
 }
+static int IconWidth(DesktopIcons *icons)
+{
+    int width, height;
+    if (ImageList_GetIconSize(ListView_GetImageList(icons->list,LVSIL_NORMAL),&width,&height) && width > 0) return width;
+    return GetSystemMetrics(SM_CXICON);
+}
 static POINT GridPoint(DesktopIcons *icons, POINT point)
 {
-    int x = point.x - (icons->width - GetSystemMetrics(SM_CXICON)) / 2, y = point.y - 4;
+    int iconWidth = IconWidth(icons);
+    int x = point.x - (icons->width - iconWidth) / 2, y = point.y - 4;
     x = x >= 0 ? (x + icons->width / 2) / icons->width : -((-x + icons->width / 2) / icons->width);
     y = y >= 0 ? (y + icons->height / 2) / icons->height : -((-y + icons->height / 2) / icons->height);
-    point.x = x * icons->width + (icons->width - GetSystemMetrics(SM_CXICON)) / 2;
+    point.x = x * icons->width + (icons->width - iconWidth) / 2;
     point.y = y * icons->height + 4; return point;
 }
 static RECT At(const Placement *p, POINT point)
@@ -318,7 +325,7 @@ static BOOL FindFreePosition(DesktopIcons *icons, const RECT *area, Placement *p
 {
     POINT best = plan[index].to, center = GridPoint(icons,best); int score = 0x7fffffff, i, radius, d;
     int columns = area->right / icons->width + 1, rows = area->bottom / icons->height + 1;
-    int cx = Clamp((center.x - (icons->width - GetSystemMetrics(SM_CXICON)) / 2) / icons->width,0,columns-1);
+    int cx = Clamp((center.x - (icons->width - IconWidth(icons)) / 2) / icons->width,0,columns-1);
     int cy = Clamp((center.y - 4) / icons->height,0,rows-1);
     /* A displaced neighbour can use the vacated position of a dragged icon. */
     for (i = 0; i < count; ++i) if (plan[i].moving) {

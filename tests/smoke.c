@@ -960,6 +960,18 @@ static HWND OpenSettings(HWND bar)
     HWND window; SendMessageA(bar, WM_COMMAND, 600, 0); window = WaitFor("Explorer95.Properties", NULL);
     Check(window != NULL, "unified environment properties open"); return window;
 }
+static int DesktopIconPixels(HWND list)
+{
+    RECT icon; void *remote; BOOL okay;
+    ZeroMemory(&icon,sizeof(icon)); icon.left=LVIR_ICON;
+    remote=VirtualAllocEx(process.hProcess,NULL,sizeof(icon),MEM_COMMIT|MEM_RESERVE,PAGE_READWRITE);
+    Check(list && remote,"prepare a documented cross-process desktop icon rectangle request");
+    okay=WriteProcessMemory(process.hProcess,remote,&icon,sizeof(icon),NULL) &&
+        SendMessageA(list,LVM_GETITEMRECT,0,(LPARAM)remote) && ReadProcessMemory(process.hProcess,remote,&icon,sizeof(icon),NULL);
+    VirtualFreeEx(process.hProcess,remote,0,MEM_RELEASE);
+    Check(okay,"read the actual desktop icon bounds without using a foreign image-list handle");
+    return icon.right-icon.left;
+}
 static void FolderSettingsTests(HWND bar)
 {
     HWND properties = OpenSettings(bar), install, restore; RECT area, first, second;
@@ -1371,6 +1383,24 @@ static HWND StartSettingsTests(HWND bar, HWND menu, const char *settings)
     Check(visible && !IsWindowVisible(desktopView) && GetPrivateProfileIntA("Desktop", "ShowIcons", -1, settings) == 0, "desktop icon visibility applies and persists without closing the shell view");
     SendDlgItemMessageA(properties, 1010, BM_SETCHECK, BST_CHECKED, 0); SendMessageA(properties, WM_COMMAND, 0x3021, 0);
     Check(IsWindowVisible(desktopView), "desktop icons can be restored from the same window");
+    {
+        HWND list=FindWindowExA(desktopView,NULL,WC_LISTVIEWA,NULL);
+        SendDlgItemMessageA(properties,ID_DESKTOPSIZE,CB_SETCURSEL,0,0);
+        SendMessageA(properties,WM_COMMAND,MAKEWPARAM(ID_DESKTOPSIZE,CBN_SELCHANGE),(LPARAM)GetDlgItem(properties,ID_DESKTOPSIZE));
+        SendMessageA(properties,WM_COMMAND,0x3021,0); PumpFor(400);
+        Check(GetPrivateProfileIntA("Desktop","IconSize",0,settings)==16 && DesktopIconPixels(list)==16 &&
+            GetPrivateProfileIntA("Start","LargeIcons",-1,settings)==1,"Desktop Apply selects native 16px icons independently of large Start icons");
+        SaveScreen("build\\desktop-icons-small.bmp");
+        SendDlgItemMessageA(properties,ID_DESKTOPSIZE,CB_SETCURSEL,1,0); SendMessageA(properties,WM_COMMAND,IDCANCEL,0);
+        properties=OpenSettings(bar); SettingsPage(properties,2,-1);
+        Check(SendDlgItemMessageA(properties,ID_DESKTOPSIZE,CB_GETCURSEL,0,0)==0 && DesktopIconPixels(list)==16,
+            "Cancel discards a desktop size draft while preserving the applied 16px mode");
+        SendMessageA(desktop,WM_COMMAND,0x8061,0); PumpFor(400);
+        Check(GetPrivateProfileIntA("Desktop","IconSize",0,settings)==32 && DesktopIconPixels(list)==32 &&
+            SendDlgItemMessageA(properties,ID_DESKTOPSIZE,CB_GETCURSEL,0,0)==1,"the desktop Icon Size command restores 32px icons and synchronizes an open settings window");
+        SaveScreen("build\\desktop-icons-large.bmp");
+        SendMessageA(desktop,WM_COMMAND,0x8060,0); PumpFor(400);
+    }
     SetDlgItemInt(properties,1032,96,FALSE); SetDlgItemInt(properties,1033,112,FALSE);
     SendDlgItemMessageA(properties,1030,BM_SETCHECK,BST_CHECKED,0); SendDlgItemMessageA(properties,1031,BM_SETCHECK,BST_CHECKED,0);
     SendMessageA(properties,WM_COMMAND,0x3021,0);
@@ -1719,6 +1749,7 @@ void start(void)
     if (group != GROUP_BROWSER) { LayoutTests(); HistoryTests(settingsDir, module, settings); ShellFeatureTests(); }
     if (group == GROUP_FULL || group == GROUP_CORE) { PaintTests(); ConfigTests(settingsDir); DesktopIconTests(settingsDir); FolderHandlerTests(module,settings); FolderSelectionTests(); DragDataTests(); NativeViewMessageTests(); TrayMirrorTests(); TrayMirrorCrossProcessTests(); }
     if (group == GROUP_CORE) goto cleanup;
+    if (group == GROUP_MENU) NativeDesktopIconSizeTests();
     {
         LPITEMIDLIST programs; char directory[MAX_PATH];
         Check(SUCCEEDED(OleInitialize(NULL)),"initialize COM for the installed-program UI fixture");
@@ -1889,6 +1920,15 @@ shutdown:
         Check(CreateProcessA(NULL,command,NULL,NULL,FALSE,0,NULL,NULL,&startup,&process),"restart the shell with an icon-only Start profile");
         bar = WaitFor("Explorer95.Taskbar",NULL); GetWindowRect(GetDlgItem(bar,100),&button);
         Check(bar && button.right - button.left == 26,"the real restarted shell retains the compact icon-only Start button");
+        {
+            HWND desktopList=NULL,desktopWindow; DWORD ready=GetTickCount();
+            do {
+                desktopWindow=FindWindowA("Explorer95.Desktop",NULL);
+                desktopList=FindWindowExA(FindWindowExA(desktopWindow,NULL,"SHELLDLL_DefView",NULL),NULL,WC_LISTVIEWA,NULL);
+                if (!desktopList || !SendMessageA(desktopList,LVM_GETITEMCOUNT,0,0)) PumpFor(20);
+            } while ((!desktopList || !SendMessageA(desktopList,LVM_GETITEMCOUNT,0,0)) && GetTickCount()-ready<3000);
+            Check(DesktopIconPixels(desktopList)==16,"the chosen desktop icon size survives a real shell restart");
+        }
         PostMessageA(bar,WM_CLOSE,0,0);
         Check(WaitForGuiProcess(process.hProcess,5000) == WAIT_OBJECT_0,"icon-only restart exits cleanly");
         CloseHandle(process.hThread); CloseHandle(process.hProcess);

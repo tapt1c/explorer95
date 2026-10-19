@@ -158,6 +158,7 @@ static BOOL SettingsPath(void)
     env.options.snapDesktopIcons = !!GetPrivateProfileIntA("Desktop", "SnapToGrid", FALSE, env.ini);
     env.options.desktopGridX = Clamp(GetPrivateProfileIntA("Desktop", "GridWidth", 80, env.ini), 64, 200);
     env.options.desktopGridY = Clamp(GetPrivateProfileIntA("Desktop", "GridHeight", 80, env.ini), 64, 200);
+    env.options.desktopIconSize = GetPrivateProfileIntA("Desktop", "IconSize", 32, env.ini) == 16 ? 16 : 32;
     env.options.classicShutdown = !!GetPrivateProfileIntA("Desktop", "ClassicShutdown", FALSE, env.ini);
     env.options.traySeconds = Clamp(Option("InactiveSeconds", 60), 5, 3600);
     env.options.largeStartIcons = !!GetPrivateProfileIntA("Start", "LargeIcons", FALSE, env.ini);
@@ -629,7 +630,7 @@ void EnvApplyOptions(void)
         HWND view = NativeViewWindow(env.desktopView);
         ShowWindow(view, env.options.desktopIcons ? SW_SHOWNA : SW_HIDE);
         NativeViewConfigureDesktop(env.desktopView, env.ini, env.options.autoArrange, env.options.lockDesktopIcons,
-            env.options.snapDesktopIcons, env.options.desktopGridX, env.options.desktopGridY);
+            env.options.snapDesktopIcons, env.options.desktopGridX, env.options.desktopGridY, env.options.desktopIconSize);
         InvalidateRect(env.desktop, NULL, FALSE);
     }
 }
@@ -638,13 +639,13 @@ void EnvironmentArrangeDesktop(BOOL automatic)
 {
     env.options.autoArrange = automatic;
     NativeViewConfigureDesktop(env.desktopView, env.ini, automatic, env.options.lockDesktopIcons,
-        env.options.snapDesktopIcons, env.options.desktopGridX, env.options.desktopGridY); EnvSaveOptions();
+        env.options.snapDesktopIcons, env.options.desktopGridX, env.options.desktopGridY, env.options.desktopIconSize); EnvSaveOptions();
     PropertiesDesktopLayoutChanged();
 }
 static const int gridSizes[] = {64, 80, 96, 112, 128, 160, 200};
 HMENU EnvironmentDesktopLayoutMenu(void)
 {
-    HMENU menu = CreatePopupMenu(), horizontal = CreatePopupMenu(), vertical = CreatePopupMenu(); int i;
+    HMENU menu = CreatePopupMenu(), horizontal = CreatePopupMenu(), vertical = CreatePopupMenu(), sizes = CreatePopupMenu(); int i;
     AppendMenuA(menu, MF_STRING | (env.options.autoArrange ? MF_CHECKED : 0), 0x8005, "Auto Arrange");
     AppendMenuA(menu, MF_STRING | (env.options.snapDesktopIcons ? MF_CHECKED : 0), 0x8010, "Snap to Grid");
     AppendMenuA(menu, MF_STRING | (env.options.lockDesktopIcons ? MF_CHECKED : 0), 0x8011, "Lock Icon Positions");
@@ -656,6 +657,9 @@ HMENU EnvironmentDesktopLayoutMenu(void)
     }
     AppendMenuA(menu, MF_POPUP, (UINT_PTR)horizontal, "Horizontal Grid Spacing");
     AppendMenuA(menu, MF_POPUP, (UINT_PTR)vertical, "Vertical Grid Spacing");
+    AppendMenuA(sizes, MF_STRING | (env.options.desktopIconSize == 16 ? MF_CHECKED : 0), 0x8060, "Small (16 x 16)");
+    AppendMenuA(sizes, MF_STRING | (env.options.desktopIconSize == 32 ? MF_CHECKED : 0), 0x8061, "Large (32 x 32)");
+    AppendMenuA(menu, MF_POPUP, (UINT_PTR)sizes, "Icon Size");
     AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
     AppendMenuA(menu, MF_STRING, 0x8012, "Desktop Settings...");
     return menu;
@@ -669,6 +673,7 @@ BOOL EnvironmentDesktopLayoutCommand(UINT command)
     else if (command == 0x8011) env.options.lockDesktopIcons = !env.options.lockDesktopIcons;
     else if (command >= 0x8040 && command < 0x8047) env.options.desktopGridX = gridSizes[command - 0x8040];
     else if (command >= 0x8050 && command < 0x8057) env.options.desktopGridY = gridSizes[command - 0x8050];
+    else if (command == 0x8060 || command == 0x8061) env.options.desktopIconSize = command == 0x8060 ? 16 : 32;
     else return FALSE;
     EnvironmentArrangeDesktop(env.options.autoArrange); return TRUE;
 }

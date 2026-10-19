@@ -40,6 +40,9 @@ struct NativeView {
     BOOL desktopRefreshing, desktopRefreshPending, desktopRefreshPosted;
     int desktopMutationDepth, desktopCallDepth;
     DesktopIcons *icons;
+    HIMAGELIST desktopLargeImages, desktopSmallImages;
+    int desktopIconSize;
+    BOOL sharedDesktopImages;
 };
 
 static EnvironmentHost host;
@@ -567,13 +570,22 @@ static LRESULT CALLBACK Subclass(HWND window, UINT message, WPARAM wp, LPARAM lp
         BOOL desktopMutation=view->desktop && window==view->list &&
             (message==LVM_INSERTITEMA || message==LVM_INSERTITEMW || message==LVM_DELETEITEM || message==LVM_DELETEALLITEMS ||
              message==LVM_SORTITEMS || message==LVM_SETITEMA || message==LVM_SETITEMW ||
-             message==LVM_SETITEMTEXTA || message==LVM_SETITEMTEXTW || message==LVM_ARRANGE || message==WM_SIZE);
+             message==LVM_SETITEMTEXTA || message==LVM_SETITEMTEXTW || message==LVM_SETIMAGELIST || message==LVM_ARRANGE || message==WM_SIZE);
         BOOL desktopRedraw=view->desktop && window==view->list && message==WM_SETREDRAW;
         if(desktopMutation) ++view->desktopMutationDepth;
         if(desktopRedraw && !wp) view->desktopRedrawDisabled=TRUE;
         if (refresh) ++view->operationDepth;
         BeginDesktopCall(view);
         LVITEMA mainItem; LPARAM forwarded=lp;
+        /* Shell32's two system lists share item indices. Select their native
+         * 16/32px artwork only for this desktop, keeping icon-view labels below.
+         * Retain new shell lists across F5 without resizing shared resources. */
+        if (view->desktop && window == view->list && message == LVM_SETIMAGELIST) {
+            if (wp == LVSIL_NORMAL) {
+                if ((HIMAGELIST)lp != view->desktopSmallImages) view->desktopLargeImages = (HIMAGELIST)lp;
+                if (view->desktopIconSize == 16 && lp && view->desktopSmallImages) forwarded = (LPARAM)view->desktopSmallImages;
+            } else if (wp == LVSIL_SMALL) view->desktopSmallImages = (HIMAGELIST)lp;
+        }
         /* Item data belongs to the main item. Some installed views leave
          * iSubItem unspecified in a data-only update (Wine's rename path
          * does so after releasing the old data). Never turn that into a
@@ -586,6 +598,11 @@ static LRESULT CALLBACK Subclass(HWND window, UINT message, WPARAM wp, LPARAM lp
             forwarded=(LPARAM)&mainItem;
         }
         LRESULT result = CallWindowProcA(original, window, message, wp, forwarded);
+        if (view->desktop && window == view->list && message == LVM_SETIMAGELIST && wp == LVSIL_SMALL &&
+            view->desktopIconSize == 16 && lp) {
+            CallWindowProcA(original, window, LVM_SETIMAGELIST, LVSIL_NORMAL, lp);
+            InvalidateRect(window, NULL, TRUE);
+        }
         if(desktopMutation && !--view->desktopMutationDepth) ResumeDesktop(view);
         if(desktopRedraw && wp) {
             view->desktopRedrawDisabled=FALSE; InvalidateRect(window,NULL,TRUE);
@@ -720,7 +737,12 @@ NativeView *NativeViewCreateEx(HWND parent, LPCITEMIDLIST absolute, BOOL desktop
         SetPropA(view->list, property, view);
         view->oldList = (WNDPROC)SetWindowLongPtrA(view->list, GWLP_WNDPROC, (LONG_PTR)Subclass);
         if (desktop) {
-            SetWindowLongA(view->list,GWL_STYLE,GetWindowLongA(view->list,GWL_STYLE)|WS_CLIPCHILDREN);
+            LONG style = GetWindowLongA(view->list,GWL_STYLE);
+            view->sharedDesktopImages = !!(style & LVS_SHAREIMAGELISTS);
+            view->desktopIconSize = 32;
+            view->desktopLargeImages = ListView_GetImageList(view->list,LVSIL_NORMAL);
+            view->desktopSmallImages = ListView_GetImageList(view->list,LVSIL_SMALL);
+            SetWindowLongA(view->list,GWL_STYLE,style | WS_CLIPCHILDREN | LVS_SHAREIMAGELISTS);
             ReadWallpaper(view);
             ListView_SetBkColor(view->list, CLR_NONE);
             ListView_SetTextBkColor(view->list, CLR_NONE);
@@ -746,6 +768,12 @@ void NativeViewDestroy(NativeView *view)
     FileDropRevoke(view->fileDrop); view->fileDrop=NULL;
     if (view->icons) { DesktopIcons *icons = view->icons; view->icons = NULL; DesktopIconsDestroy(icons); }
     if (IsWindow(view->list) && view->oldList) {
+        if (view->desktop) {
+            /* Restore distinct native slots and their original ownership policy
+             * before Shell32 tears the view down. Never destroy system lists. */
+            CallWindowProcA(view->oldList,view->list,LVM_SETIMAGELIST,LVSIL_NORMAL,(LPARAM)view->desktopLargeImages);
+            if (!view->sharedDesktopImages) SetWindowLongA(view->list,GWL_STYLE,GetWindowLongA(view->list,GWL_STYLE) & ~LVS_SHAREIMAGELISTS);
+        }
         SetWindowLongPtrA(view->list, GWLP_WNDPROC, (LONG_PTR)view->oldList);
         RemovePropA(view->list, property);
     }
@@ -902,11 +930,22 @@ static void DesktopDropCompleted(void *context)
     NativeView *view=context;
     PostMessageA(view->list,WM_KEYDOWN,VK_F5,0); BrowserRecycleBinsChanged();
 }
-void NativeViewConfigureDesktop(NativeView *view, const char *profile, BOOL automatic, BOOL locked, BOOL snap, int width, int height)
+void NativeViewConfigureDesktop(NativeView *view, const char *profile, BOOL automatic, BOOL locked, BOOL snap, int width, int height, int iconSize)
 {
     if (!view || !view->desktop || !view->list) return;
     if (!view->icons) view->icons = DesktopIconsCreate(view->list, profile);
     DesktopIconsConfigure(view->icons, automatic, locked, snap, width, height);
+    {
+        HIMAGELIST images = iconSize == 16 ? view->desktopSmallImages : view->desktopLargeImages;
+        if (images && ListView_GetImageList(view->list,LVSIL_NORMAL) != images) {
+            BOOL held; BeginDesktopCall(view);
+            held = DesktopIconsBeginRefresh(view->icons);
+            view->desktopIconSize = iconSize == 16 ? 16 : 32;
+            CallWindowProcA(view->oldList,view->list,LVM_SETIMAGELIST,LVSIL_NORMAL,(LPARAM)images);
+            if (held) DesktopIconsEndRefresh(view->icons);
+            InvalidateRect(view->list,NULL,TRUE); EndDesktopCall(view);
+        }
+    }
     view->fileHover=-1; DesktopIconsSetFileDrag(view->icons,view,DesktopFileTarget,DesktopFileDrag);
     if(!view->fileDrop) {
         IDropTarget *native=NULL; HWND owner=FindWindowA("Explorer95.Taskbar",NULL);
