@@ -1,3 +1,26 @@
+static void TaskbarSizingTest(HWND bar, UINT edge, int step)
+{
+    RECT before, rect; BOOL vertical=edge==ABE_LEFT || edge==ABE_RIGHT; UINT side;
+    SendMessageA(bar,WM_COMMAND,ID_EDGE_MENU+edge,0);
+    GetWindowRect(bar,&before); rect=before;
+    side=edge==ABE_BOTTOM ? WMSZ_TOP : edge==ABE_TOP ? WMSZ_BOTTOM : edge==ABE_LEFT ? WMSZ_RIGHT : WMSZ_LEFT;
+    if(edge==ABE_BOTTOM) rect.top-=step+step/3;
+    else if(edge==ABE_TOP) rect.bottom+=step+step/3;
+    else if(edge==ABE_LEFT) rect.right+=step+step/3;
+    else rect.left-=step+step/3;
+    /* WM_SIZING is a system message below WM_USER: USER32 marshals its RECT
+     * both ways. Unlike LVM_*, it must receive a pointer in THIS process. */
+    Check(SendMessageA(bar,WM_SIZING,side,(LPARAM)&rect),"taskbar accepts and returns its live sizing rectangle");
+    Check(vertical ? rect.right-rect.left==before.right-before.left+step && rect.top==before.top && rect.bottom==before.bottom :
+        rect.bottom-rect.top==before.bottom-before.top+step && rect.left==before.left && rect.right==before.right,
+        "live taskbar sizing snaps to complete rows without stretching along the dock");
+    Check(edge==ABE_BOTTOM ? rect.bottom==before.bottom : edge==ABE_TOP ? rect.top==before.top :
+        edge==ABE_LEFT ? rect.left==before.left : rect.right==before.right,"resizing preserves the fixed dock edge");
+    MoveWindow(bar,rect.left,rect.top,rect.right-rect.left,rect.bottom-rect.top,TRUE);
+    SendMessageA(bar,WM_EXITSIZEMOVE,0,0); GetWindowRect(bar,&before);
+    Check(EqualRect(&before,&rect),"releasing the snapped taskbar keeps the same size and position");
+    SendMessageA(bar,WM_COMMAND,ID_ROWS_MENU+1,0);
+}
 static void DragQuickGrip(HWND grip, int delta, BOOL cancel)
 {
     RECT rect; BOOL vertical; POINT point;
@@ -38,6 +61,10 @@ static void QuickLaunchTests(HWND bar, const char *settings)
     Check(QuickExtent(bar) == initial && GetPrivateProfileIntA("Taskbar", "QuickLaunchSize", 0, settings) == 0,
         "taskbar lock also protects Quick Launch width");
     SendMessageA(bar, WM_COMMAND, 601, 0); GetWindowRect(bar, &before);
+    TaskbarSizingTest(bar,ABE_BOTTOM,28); TaskbarSizingTest(bar,ABE_TOP,28);
+    TaskbarSizingTest(bar,ABE_LEFT,32); TaskbarSizingTest(bar,ABE_RIGHT,32);
+    SendMessageA(bar,WM_COMMAND,ID_EDGE_MENU+ABE_BOTTOM,0);
+    GetWindowRect(bar,&before);
     DragQuickGrip(grip, 70, FALSE); GetWindowRect(bar, &after);
     if (!EqualRect(&before, &after) || QuickExtent(bar) != initial + 70 ||
         GetPrivateProfileIntA("Taskbar", "QuickLaunchSize", 0, settings) != (UINT)(initial + 70)) {

@@ -31,6 +31,7 @@ static void TaskTileTests(HWND bar, const char *settings)
     SendMessageA(properties,WM_COMMAND,ID_TASKTILES,0);
     Check(!IsWindowEnabled(GetDlgItem(properties,ID_WIDTH)),"caption width is disabled only for square tiles");
     SendMessageA(properties,WM_COMMAND,0x3021,0); WaitTileButtons(bar,2,TRUE);
+    TaskbarSizingTest(bar,ABE_BOTTOM,44); WaitTileButtons(bar,2,TRUE);
     Check(GetPrivateProfileIntA("Taskbar","TaskTiles",0,settings)==1,"tile style is persisted by Apply");
     SendDlgItemMessageA(properties,ID_GROUP,BM_SETCHECK,BST_CHECKED,0); SendMessageA(properties,WM_COMMAND,ID_GROUP,0);
     SendMessageA(properties,WM_COMMAND,0x3021,0); WaitTileButtons(bar,1,TRUE); SaveScreen("build/task-tiles.bmp");

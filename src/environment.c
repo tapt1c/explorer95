@@ -1019,8 +1019,22 @@ static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
     case WM_SIZING: {
         RECT *rect = (RECT *)lp;
         BOOL vertical = env.options.edge == ABE_LEFT || env.options.edge == ABE_RIGHT;
+        int unit=env.options.taskTiles ? 44 : env.options.largeIcons ? 40 : 28, full;
         env.options.rows = vertical ? Clamp((rect->right - rect->left - 140 + 16) / 32 + 1, 1, 3) :
-            Clamp((rect->bottom - rect->top + 15) / (env.options.largeIcons ? 40 : 28), 1, 3);
+            Clamp((rect->bottom - rect->top + unit/2) / unit, 1, 3);
+        /* Snap the live sizing rectangle as well as the saved row count.
+         * Otherwise Win95 stretches one-row controls to arbitrary heights
+         * until release, and the final appbar position jumps back. */
+        full=EnvBarThickness(&env.options);
+        if(vertical) {
+            rect->top=env.anchor.top; rect->bottom=env.anchor.bottom;
+            if(env.options.edge==ABE_LEFT) { rect->left=env.anchor.left; rect->right=rect->left+full; }
+            else { rect->right=env.anchor.right; rect->left=rect->right-full; }
+        } else {
+            rect->left=env.anchor.left; rect->right=env.anchor.right;
+            if(env.options.edge==ABE_TOP) { rect->top=env.anchor.top; rect->bottom=rect->top+full; }
+            else { rect->bottom=env.anchor.bottom; rect->top=rect->bottom-full; }
+        }
         return TRUE;
     }
     case WM_EXITSIZEMOVE: EnvSaveOptions(); EnvPositionBar(); return 0;

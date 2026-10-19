@@ -1,8 +1,9 @@
 /* Real mouse/OLE round trips. Every file belongs to this disposable fixture. */
-static POINT DragItemPoint(HWND list, const char *name)
+static POINT FileItemPoint(HWND list, const char *name, BOOL select)
 {
     int index=NativeItemIndex(list,name); RECT rect; POINT point; void *remote;
-    Check(index>=0,"find the exact drag fixture in the public ListView"); NativeSelectItem(list,index);
+    Check(index>=0,"find the exact drag fixture in the public ListView");
+    if(select) NativeSelectItem(list,index);
     /* Resizing/activation can leave a deferred native layout. Read the icon
      * rectangle after it settles, rather than dragging from its old label. */
     PumpFor(100);
@@ -14,15 +15,30 @@ static POINT DragItemPoint(HWND list, const char *name)
     VirtualFreeEx(process.hProcess,remote,0,MEM_RELEASE);
     point.x=(rect.left+rect.right)/2; point.y=(rect.top+rect.bottom)/2; ClientToScreen(list,&point); return point;
 }
+static POINT DragItemPoint(HWND list, const char *name) { return FileItemPoint(list,name,TRUE); }
+static POINT DropItemPoint(HWND list, const char *name) { return FileItemPoint(list,name,FALSE); }
 static POINT DropBackgroundPoint(HWND list)
 {
     RECT rect; POINT origin={0,0},point; GetClientRect(list,&rect); ClientToScreen(list,&origin);
     if(origin.x+rect.right>GetSystemMetrics(SM_CXSCREEN)) rect.right=GetSystemMetrics(SM_CXSCREEN)-origin.x;
     point.x=rect.right-18; point.y=rect.bottom-18; ClientToScreen(list,&point); return point;
 }
-static void DragMouse(HWND source, POINT start, HWND target, POINT end, UINT modifier, int choice)
+static void DragMouseFeedback(HWND source, POINT start, HWND target, POINT end, UINT modifier, int choice, int highlight, BOOL pixels)
 {
     HWND frame=source; int i; BOOL right=choice>=2;
+    RECT feedback={0,0,1,1}; DWORD before=0;
+    if(highlight>=0) {
+        void *remote; RECT client;
+        feedback.left=LVIR_BOUNDS;
+        remote=VirtualAllocEx(process.hProcess,NULL,sizeof(feedback),MEM_COMMIT|MEM_RESERVE,PAGE_READWRITE);
+        Check(remote && WriteProcessMemory(process.hProcess,remote,&feedback,sizeof(feedback),NULL) &&
+            SendMessageA(target,LVM_GETITEMRECT,highlight,(LPARAM)remote) && ReadProcessMemory(process.hProcess,remote,&feedback,sizeof(feedback),NULL),
+            "read the complete visible drop target rectangle");
+        VirtualFreeEx(process.hProcess,remote,0,MEM_RELEASE); GetClientRect(target,&client); IntersectRect(&feedback,&feedback,&client);
+        Check(!SendMessageA(target,LVM_GETITEMSTATE,highlight,LVIS_SELECTED|LVIS_DROPHILITED),
+            "drop target starts unselected without stale feedback");
+        before=NativeDesktopPixels(target,&feedback);
+    }
     while(GetParent(frame)) frame=GetParent(frame);
     SetForegroundWindow(frame);
     mouse_event(MOUSEEVENTF_MOVE|MOUSEEVENTF_ABSOLUTE,start.x*65535/(GetSystemMetrics(SM_CXSCREEN)-1),start.y*65535/(GetSystemMetrics(SM_CYSCREEN)-1),0,0); PumpFor(100);
@@ -55,6 +71,26 @@ static void DragMouse(HWND source, POINT start, HWND target, POINT end, UINT mod
         wsprintfA(note,"Drop point %ld,%ld target bounds %ld,%ld,%ld,%ld actual %s\r\n",end.x,end.y,bounds.left,bounds.top,bounds.right,bounds.bottom,kind); Log(note);
     }
     Check(WindowFromPoint(end)==target,"file drop reaches the intended visible target surface");
+    if(highlight>=0) {
+        DWORD started=GetTickCount();
+        while(!(SendMessageA(target,LVM_GETITEMSTATE,highlight,LVIS_DROPHILITED)&LVIS_DROPHILITED) && GetTickCount()-started<2000) PumpFor(20);
+        Check(SendMessageA(target,LVM_GETITEMSTATE,highlight,LVIS_DROPHILITED)&LVIS_DROPHILITED,
+            "accepted folder or Recycle Bin is highlighted while the drag button is still held");
+        started=GetTickCount();
+        while(pixels && NativeDesktopPixels(target,&feedback)==before && GetTickCount()-started<1000) PumpFor(20);
+        SaveScreen("build/drop-feedback.bmp");
+        /* Wine 10 does not implement native LVIS_DROPHILITED rendering.
+         * Check its state for native controls, and actual pixels for our 48px
+         * composite; neither path may change selection or lose cancellation. */
+        if(pixels) Check(NativeDesktopPixels(target,&feedback)!=before,
+                "drop feedback reaches actual screen pixels before the source OLE loop returns");
+        Check(!SendMessageA(target,LVM_GETITEMSTATE,highlight,LVIS_SELECTED),"drop feedback does not change the target selection");
+        { POINT away=DropBackgroundPoint(target);
+          mouse_event(MOUSEEVENTF_MOVE|MOUSEEVENTF_ABSOLUTE,away.x*65535/(GetSystemMetrics(SM_CXSCREEN)-1),away.y*65535/(GetSystemMetrics(SM_CYSCREEN)-1),0,0); PumpFor(100);
+          Check(!SendMessageA(target,LVM_GETITEMSTATE,highlight,LVIS_DROPHILITED),"moving onto empty space clears the old target highlight");
+          mouse_event(MOUSEEVENTF_MOVE|MOUSEEVENTF_ABSOLUTE,end.x*65535/(GetSystemMetrics(SM_CXSCREEN)-1),end.y*65535/(GetSystemMetrics(SM_CYSCREEN)-1),0,0); PumpFor(100);
+          Check(SendMessageA(target,LVM_GETITEMSTATE,highlight,LVIS_DROPHILITED)&LVIS_DROPHILITED,"returning to the accepted item restores feedback during the same drag"); }
+    }
     if(modifier) { DWORD started=GetTickCount(); int stable=0;
         do {
             if(!(GetAsyncKeyState(modifier)&0x8000)) { keybd_event(modifier,(BYTE)MapVirtualKeyA(modifier,0),0,0); stable=0; }
@@ -71,7 +107,11 @@ static void DragMouse(HWND source, POINT start, HWND target, POINT end, UINT mod
         for(i=0;i<down;++i) { keybd_event(VK_DOWN,0,0,0); keybd_event(VK_DOWN,0,KEYEVENTF_KEYUP,0); }
         keybd_event(VK_RETURN,0,0,0); keybd_event(VK_RETURN,0,KEYEVENTF_KEYUP,0); PumpFor(180);
     }
+    if(highlight>=0) Check(!SendMessageA(target,LVM_GETITEMSTATE,highlight,LVIS_DROPHILITED),
+        "drop or Escape clears the temporary target highlight");
 }
+static void DragMouse(HWND source, POINT start, HWND target, POINT end, UINT modifier, int choice)
+{ DragMouseFeedback(source,start,target,end,modifier,choice,-1,FALSE); }
 static void WaitDragFile(const char *path, BOOL present)
 {
     DWORD started=GetTickCount(); while(Exists(path)!=present && GetTickCount()-started<5000) PumpFor(30);
@@ -83,7 +123,7 @@ static void WaitDragRow(HWND list, const char *name, BOOL present)
     do { PumpFor(50); index=NativeItemIndex(list,name); } while((index>=0)!=present && GetTickCount()-started<4000);
     Check((index>=0)==present,"drag completion refreshes the affected list without F5");
 }
-static void FileDragTests(HWND bar, HWND desktop, HWND source, const char *fixture)
+static void FileDragTests(HWND bar, HWND desktop, HWND source, const char *fixture, const char *settings)
 {
     char from[MAX_PATH],to[MAX_PATH],childPath[MAX_PATH],original[MAX_PATH],result[MAX_PATH],desktopPath[MAX_PATH],desktopName[64];
     HWND target,list=GetDlgItem(source,ID_FILES),targetList,view,desktopList; RECT saved; POINT start,end; int i;
@@ -104,7 +144,8 @@ static void FileDragTests(HWND bar, HWND desktop, HWND source, const char *fixtu
     start=DragItemPoint(list,"copy-me"); end=DropBackgroundPoint(targetList); DragMouse(list,start,targetList,end,VK_CONTROL,FALSE);
     wsprintfA(original,"%s\\copy-me",from); wsprintfA(result,"%s\\copy-me",to); WaitDragFile(result,TRUE);
     Check(Exists(original),"Ctrl-drag copies without deleting the original"); WaitDragRow(targetList,"copy-me",TRUE);
-    start=DragItemPoint(list,"move-me"); end=DragItemPoint(targetList,"inside"); DragMouse(list,start,targetList,end,VK_SHIFT,FALSE);
+    start=DragItemPoint(list,"move-me"); end=DropItemPoint(targetList,"inside");
+    DragMouseFeedback(list,start,targetList,end,VK_SHIFT,FALSE,NativeItemIndex(targetList,"inside"),FALSE);
     wsprintfA(original,"%s\\move-me",from); wsprintfA(result,"%s\\move-me",childPath); WaitDragFile(result,TRUE); WaitDragFile(original,FALSE); WaitDragRow(list,"move-me",FALSE);
     start=DragItemPoint(list,"cancel-me"); end=DropBackgroundPoint(targetList); DragMouse(list,start,targetList,end,0,TRUE);
     wsprintfA(original,"%s\\cancel-me",from); wsprintfA(result,"%s\\cancel-me",to);
@@ -123,6 +164,22 @@ static void FileDragTests(HWND bar, HWND desktop, HWND source, const char *fixtu
     start=DragItemPoint(list,desktopName); GetWindowRect(desktopList,&saved); end.x=110; end.y=saved.bottom-70;
     DragMouse(list,start,desktopList,end,VK_CONTROL,FALSE); wsprintfA(result,"%s\\%s",desktopPath,desktopName); WaitDragFile(result,TRUE); WaitDragRow(desktopList,desktopName,TRUE);
     /* Leaving the desktop switches its smooth placement ghost to native OLE. */
+    ShowWindow(source,SW_MINIMIZE); ShowWindow(target,SW_MINIMIZE); PumpFor(100);
+    {
+        LPITEMIDLIST bin; SHFILEINFOA info; int index, size=GetPrivateProfileIntA("Desktop","IconSize",32,settings), pass;
+        Check(SUCCEEDED(SHGetSpecialFolderLocation(NULL,CSIDL_BITBUCKET,&bin)),"resolve the real Recycle Bin using its public PIDL");
+        ZeroMemory(&info,sizeof(info));
+        Check(SHGetFileInfoA((LPCSTR)bin,0,&info,sizeof(info),SHGFI_PIDL|SHGFI_DISPLAYNAME)!=0,"read the installed Recycle Bin display name");
+        CoTaskMemFree(bin); index=NativeItemIndex(desktopList,info.szDisplayName);
+        Check(index>=0,"find the desktop Recycle Bin without shell-private item data");
+        for(pass=0;pass<2;++pass) {
+            SendMessageA(desktop,WM_COMMAND,pass ? 0x8061 : 0x8060,0); PumpFor(400);
+            start=DragItemPoint(desktopList,desktopName); end=DropItemPoint(desktopList,info.szDisplayName);
+            DragMouseFeedback(desktopList,start,desktopList,end,0,1,index,pass!=0);
+            Check(Exists(result),"cancelled Recycle Bin hover leaves the desktop source intact");
+        }
+        SendMessageA(desktop,WM_COMMAND,size==48 ? 0x8061 : 0x8060,0); PumpFor(400);
+    }
     ShowWindow(source,SW_MINIMIZE); ShowWindow(target,SW_RESTORE);
     MoveWindow(target,GetSystemMetrics(SM_CXSCREEN)/2,0,GetSystemMetrics(SM_CXSCREEN)/2,GetSystemMetrics(SM_CYSCREEN)-75,TRUE); PumpFor(100);
     start=DragItemPoint(desktopList,desktopName); end=DropBackgroundPoint(targetList); DragMouse(desktopList,start,targetList,end,0,FALSE);

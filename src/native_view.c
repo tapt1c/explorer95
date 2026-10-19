@@ -30,7 +30,7 @@ struct NativeView {
     LPITEMIDLIST absolute;
     BOOL desktop, deleting, recycleBin, statePending, refreshPending;
     int operationDepth;
-    BOOL fileDragging; int fileHover; BOOL fileHoverTarget; char fileHoverPath[MAX_PATH];
+    BOOL fileDragging; int fileDragCallDepth, fileHover; BOOL fileHoverTarget; char fileHoverPath[MAX_PATH];
     FileDrop *fileDrop; int dropIndex;
     BOOL (*navigate)(HWND, LPCITEMIDLIST);
     HBITMAP wallpaper;
@@ -82,7 +82,7 @@ static void PaintDesktopOverlays(NativeView *view,HDC dc)
         LVITEMA item; HICON icon; UINT flags=ILD_TRANSPARENT;
         ZeroMemory(&item,sizeof(item)); item.mask=LVIF_IMAGE|LVIF_STATE; item.iItem=i;
         item.stateMask=LVIS_OVERLAYMASK|LVIS_SELECTED|LVIS_CUT|LVIS_DROPHILITED;
-        if(!SendMessageA(view->list,LVM_GETITEMA,0,(LPARAM)&item) || !(item.state&LVIS_OVERLAYMASK) || item.iImage<0 ||
+        if(!SendMessageA(view->list,LVM_GETITEMA,0,(LPARAM)&item) || !(item.state&(LVIS_OVERLAYMASK|LVIS_DROPHILITED)) || item.iImage<0 ||
            !ListView_GetItemRect(view->list,i,&iconRect,LVIR_ICON) || (iconRect.right<=clip.left || iconRect.left>=clip.right || iconRect.bottom<=clip.top || iconRect.top>=clip.bottom)) continue;
         icon=ImageList_GetIcon(view->desktopLargeImages,item.iImage,ILD_TRANSPARENT|(item.state&LVIS_OVERLAYMASK));
         if(!icon) continue;
@@ -98,10 +98,20 @@ static BOOL DesktopBusy(NativeView *view)
 {
     return view->paintingDesktop || view->desktopMutationDepth || view->desktopCallDepth || view->fileDragging || view->desktopRefreshing;
 }
+static BOOL DesktopPaintBusy(NativeView *view)
+{
+    /* The placement controller has returned from all native callbacks before
+     * entering our OLE loop. Its outer call remains on the stack, but stable
+     * items may be painted there. Any NEW native callback/mutation still holds
+     * painting; refresh stays deferred throughout the source drag. */
+    return view->paintingDesktop || view->desktopMutationDepth || view->desktopRefreshing ||
+        view->desktopCallDepth > (view->fileDragging ? view->fileDragCallDepth : 0);
+}
 static void ResumeDesktop(NativeView *view)
 {
-    if (!view->desktop || DesktopBusy(view)) return;
-    if (view->desktopFramePending && !view->desktopRedrawDisabled) InvalidateRect(view->list,NULL,TRUE);
+    if (!view->desktop) return;
+    if (view->desktopFramePending && !view->desktopRedrawDisabled && !DesktopPaintBusy(view)) InvalidateRect(view->list,NULL,TRUE);
+    if (DesktopBusy(view)) return;
     /* Post only on leaving the outer operation. Posting from a busy callback
      * would let the shell's nested message pump consume and repost forever. */
     if (view->desktopRefreshPending && !view->desktopRefreshPosted)
@@ -354,8 +364,9 @@ static void PaintDesktopFrame(NativeView *view, HWND window)
     if(!GetUpdateRect(window,NULL,FALSE)) { ValidateRect(window,NULL); return; }
     /* Shell callbacks can pump messages after releasing an item's PIDL but
      * before Common Controls removes the item. Preserve the completed frame
-     * until mutations and a source OLE drag have fully returned. */
-    if(DesktopBusy(view) || view->desktopRedrawDisabled) {
+     * until the native mutation/callback has returned. The stable source OLE
+     * loop can paint drop feedback without allowing a refresh. */
+    if(DesktopPaintBusy(view) || view->desktopRedrawDisabled) {
         view->desktopFramePending=TRUE; ValidateRect(window,NULL); return;
     }
     view->desktopFramePending=FALSE;
@@ -906,13 +917,13 @@ void NativeViewArrange(NativeView *view, BOOL autoArrange)
     SetWindowLongPtrA(view->list, GWL_STYLE, style);
     if (autoArrange) ListView_Arrange(view->list, LVA_DEFAULT);
 }
-static BOOL DesktopFileTarget(void *context, POINT screen)
+static BOOL DesktopTarget(NativeView *view, POINT screen, BOOL excludeSelection)
 {
-    NativeView *view=context; HWND hitWindow=WindowFromPoint(screen); LVHITTESTINFO hit;
+    LVHITTESTINFO hit;
     IEnumIDList *items=NULL; LPITEMIDLIST item; ULONG fetched; char label[MAX_PATH];
-    if(hitWindow && hitWindow!=view->window && hitWindow!=view->list && !IsChild(view->window,hitWindow)) return TRUE;
     ScreenToClient(view->list,&screen); ZeroMemory(&hit,sizeof(hit)); hit.pt=screen;
-    if(ListView_HitTest(view->list,&hit)<0 || (ListView_GetItemState(view->list,hit.iItem,LVIS_SELECTED)&LVIS_SELECTED)) return FALSE;
+    if(ListView_HitTest(view->list,&hit)<0 ||
+       (excludeSelection && (ListView_GetItemState(view->list,hit.iItem,LVIS_SELECTED)&LVIS_SELECTED))) return FALSE;
     if(view->fileHover==hit.iItem) return view->fileHoverTarget;
     view->fileHover=hit.iItem; view->fileHoverTarget=FALSE; view->fileHoverPath[0]=0;
     ListView_GetItemText(view->list,hit.iItem,0,label,sizeof(label));
@@ -932,8 +943,11 @@ static BOOL DesktopFileTarget(void *context, POINT screen)
                     SFGAOF flags=SFGAO_FOLDER|SFGAO_DROPTARGET; LPCITEMIDLIST selected=item;
                     if(SUCCEEDED(IShellFolder_GetAttributesOf(view->folder,1,&selected,&flags))) {
                         LPITEMIDLIST absolute=Combine(view->absolute,item);
-                        view->fileHoverTarget=(flags&(SFGAO_FOLDER|SFGAO_DROPTARGET))==(SFGAO_FOLDER|SFGAO_DROPTARGET);
-                        if(absolute) { SHGetPathFromIDListA(absolute,view->fileHoverPath); HeapFree(GetProcessHeap(),0,absolute); }
+                        view->fileHoverTarget=!!(flags&SFGAO_DROPTARGET);
+                        if(absolute) {
+                            if(flags&SFGAO_FOLDER) SHGetPathFromIDListA(absolute,view->fileHoverPath);
+                            HeapFree(GetProcessHeap(),0,absolute);
+                        }
                     }
                     CoTaskMemFree(item); break;
                 }
@@ -944,11 +958,17 @@ static BOOL DesktopFileTarget(void *context, POINT screen)
     }
     return view->fileHoverTarget;
 }
+static BOOL DesktopFileTarget(void *context, POINT screen)
+{
+    NativeView *view=context; HWND hit=WindowFromPoint(screen);
+    if(hit && hit!=view->window && hit!=view->list && !IsChild(view->window,hit)) return TRUE;
+    return DesktopTarget(view,screen,TRUE);
+}
 static void DesktopFileDrag(void *context)
 {
     NativeView *view=context; IDataObject *data=NULL; DWORD effect; HRESULT result;
     if(view->fileDragging || FAILED(IShellView_GetItemObject(view->view,SVGIO_SELECTION,&IID_IDataObject,(void **)&data))) return;
-    view->fileDragging=TRUE; ++view->operationDepth;
+    view->fileDragCallDepth=view->desktopCallDepth; view->fileDragging=TRUE; ++view->operationDepth;
     result=FileDragStart(data,FALSE,&effect); IDataObject_Release(data);
     --view->operationDepth; view->fileDragging=FALSE; view->fileHover=-1;
     ResumeDesktop(view);
@@ -957,25 +977,28 @@ static void DesktopFileDrag(void *context)
 static void DesktopDropLeave(void *context)
 {
     NativeView *view=context;
-    if(view->dropIndex>=0) ListView_SetItemState(view->list,view->dropIndex,0,LVIS_DROPHILITED);
-    view->dropIndex=-1;
+    FileDropHighlight(view->list,&view->dropIndex,-1);
+}
+static void DesktopDropFeedback(void *context, POINT screen, DWORD effect)
+{
+    NativeView *view=context; int index=-1;
+    if((effect&(DROPEFFECT_COPY|DROPEFFECT_MOVE|DROPEFFECT_LINK)) && DesktopTarget(view,screen,view->fileDragging)) index=view->fileHover;
+    FileDropHighlight(view->list,&view->dropIndex,index);
 }
 static BOOL DesktopDropResolve(void *context, POINT screen, char *path)
 {
-    NativeView *view=context; LVHITTESTINFO hit; RECT area; POINT client=screen; int index=-1;
+    NativeView *view=context; LVHITTESTINFO hit; RECT area; POINT client=screen;
     ScreenToClient(view->list,&client); GetClientRect(view->list,&area);
     if(!PtInRect(&area,client)) return FALSE;
     ZeroMemory(&hit,sizeof(hit)); hit.pt=client;
-    if(ListView_HitTest(view->list,&hit)>=0 && DesktopFileTarget(view,screen)) {
+    if(ListView_HitTest(view->list,&hit)>=0 && DesktopTarget(view,screen,view->fileDragging)) {
         /* Virtual folders (e.g. Recycle Bin) keep their original native target. */
-        if(!view->fileHoverPath[0]) { RenderTraceShell("desktop.drop.virtual",S_OK,hit.iItem,hit.flags); DesktopDropLeave(view); return FALSE; }
-        lstrcpyA(path,view->fileHoverPath); index=hit.iItem;
+        if(!view->fileHoverPath[0]) { RenderTraceShell("desktop.drop.virtual",S_OK,hit.iItem,hit.flags); return FALSE; }
+        lstrcpyA(path,view->fileHoverPath);
     } else if(!host.specialPath || !host.specialPath(CSIDL_DESKTOPDIRECTORY,path)) {
         RenderTraceShell("desktop.drop.no-path",E_FAIL,hit.iItem,hit.flags); return FALSE;
     }
     RenderTraceShell("desktop.drop.resolve",S_OK,hit.iItem,hit.flags);
-    if(index!=view->dropIndex) { DesktopDropLeave(view); view->dropIndex=index;
-        if(index>=0) ListView_SetItemState(view->list,index,LVIS_DROPHILITED,LVIS_DROPHILITED); }
     return TRUE;
 }
 static void DesktopDropCompleted(void *context)
@@ -1005,7 +1028,7 @@ void NativeViewConfigureDesktop(NativeView *view, const char *profile, BOOL auto
         IDropTarget *native=NULL; HWND owner=FindWindowA("Explorer95.Taskbar",NULL);
         IShellView_QueryInterface(view->view,&IID_IDropTarget,(void **)&native);
         view->dropIndex=-1;
-        view->fileDrop=FileDropRegister(view->list,owner ? owner : view->parent,view,DesktopDropResolve,DesktopDropLeave,DesktopDropCompleted,native);
+        view->fileDrop=FileDropRegister(view->list,owner ? owner : view->parent,view,DesktopDropResolve,DesktopDropFeedback,DesktopDropLeave,DesktopDropCompleted,native);
         if(native) IDropTarget_Release(native);
     }
 }

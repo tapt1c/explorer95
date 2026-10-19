@@ -324,8 +324,7 @@ static IContextMenu *SelectionContext(Browser *browser) { return SelectionObject
 static void DropLeave(void *context)
 {
     Browser *browser=context;
-    if(browser->dropIndex>=0) ListView_SetItemState(browser->files,browser->dropIndex,0,LVIS_DROPHILITED);
-    browser->dropIndex=-1;
+    FileDropHighlight(browser->files,&browser->dropIndex,-1);
 }
 static BOOL DropResolve(void *context, POINT screen, char *path)
 {
@@ -342,11 +341,17 @@ static BOOL DropResolve(void *context, POINT screen, char *path)
         }
     }
     if(index<0) lstrcpyA(path,browser->path);
-    if(index!=browser->dropIndex) {
-        DropLeave(browser); browser->dropIndex=index;
-        if(index>=0) ListView_SetItemState(browser->files,index,LVIS_DROPHILITED,LVIS_DROPHILITED);
-    }
     return TRUE;
+}
+static void DropFeedback(void *context, POINT screen, DWORD effect)
+{
+    Browser *browser=context; LVHITTESTINFO hit; int index=-1;
+    ScreenToClient(browser->files,&screen); ZeroMemory(&hit,sizeof(hit)); hit.pt=screen;
+    if((effect&(DROPEFFECT_COPY|DROPEFFECT_MOVE|DROPEFFECT_LINK)) && ListView_HitTest(browser->files,&hit)>=0) {
+        FileEntry *entry=Selected(browser,hit.iItem);
+        if(entry && (entry->attributes&FILE_ATTRIBUTE_DIRECTORY)) index=hit.iItem;
+    }
+    FileDropHighlight(browser->files,&browser->dropIndex,index);
 }
 static void DropCompleted(void *context)
 {
@@ -356,7 +361,7 @@ static void DropCompleted(void *context)
 BOOL BrowserFilesCreateDrop(Browser *browser)
 {
     browser->dropIndex=-1;
-    browser->fileDrop=FileDropRegister(browser->files,browser->window,browser,DropResolve,DropLeave,DropCompleted,NULL);
+    browser->fileDrop=FileDropRegister(browser->files,browser->window,browser,DropResolve,DropFeedback,DropLeave,DropCompleted,NULL);
     return browser->fileDrop!=NULL;
 }
 static void DragFiles(Browser *browser, BOOL right)
@@ -549,7 +554,8 @@ BOOL BrowserFilesNotify(Browser *browser, NMHDR *header)
 void BrowserFilesDraw(Browser *browser, const DRAWITEMSTRUCT *draw)
 {
     FileEntry *entry = (FileEntry *)draw->itemData; RECT text = draw->rcItem; SHFILEINFOA info; char path[MAX_PATH], size[48], label[MAX_PATH];
-    BOOL selected = (draw->itemState & ODS_SELECTED) != 0; HFONT old;
+    BOOL selected = (draw->itemState & ODS_SELECTED) != 0 ||
+        (ListView_GetItemState(browser->files,draw->itemID,LVIS_DROPHILITED)&LVIS_DROPHILITED); HFONT old;
     if (!entry) return;
     FillRect(draw->hDC, &text, (HBRUSH)(INT_PTR)((selected ? COLOR_HIGHLIGHT : COLOR_WINDOW) + 1));
     ZeroMemory(&info, sizeof(info));

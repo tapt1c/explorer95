@@ -7,8 +7,11 @@ typedef struct FileDrop FileDrop;
 char *FileDragPaths(IDataObject *data);
 typedef BOOL (*FileDropResolve)(void *context, POINT screen, char *path);
 typedef void (*FileDropNotify)(void *context);
-FileDrop *FileDropRegister(HWND window, HWND owner, void *context, FileDropResolve resolve, FileDropNotify leave, FileDropNotify completed, IDropTarget *fallback);
+/* Feedback follows the accepted effect, including the native virtual target. */
+typedef void (*FileDropFeedback)(void *context, POINT screen, DWORD effect);
+FileDrop *FileDropRegister(HWND window, HWND owner, void *context, FileDropResolve resolve, FileDropFeedback feedback, FileDropNotify leave, FileDropNotify completed, IDropTarget *fallback);
 void FileDropRevoke(FileDrop *target);
+void FileDropHighlight(HWND list, int *previous, int index);
 HRESULT FileDragStart(IDataObject *data, BOOL right, DWORD *effect);
 BOOL FileDragDeferClose(HWND window);
 BOOL FileDragActive(void);

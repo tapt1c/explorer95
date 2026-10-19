@@ -1826,7 +1826,7 @@ void start(void)
     GetWindowTextA(browser, actual, sizeof(actual));
     Check(!lstrcmpA(title, actual), "address navigation updates window title");
     Check(SendMessageA(files, LVM_GETITEMCOUNT, 0, 0) == 3, "folder enumeration includes two folders and a file");
-    FileDragTests(bar,desktop,browser,fixture);
+    FileDragTests(bar,desktop,browser,fixture,settings);
     DesktopDeleteTests(desktop, browser, fixture);
 
     /* Home selects the first sorted item; Enter must open that folder. */

@@ -632,7 +632,12 @@ explorer95.exe --settings="C:\EX95TEST\Explorer95.ini"
   ValidateRect без рекурсивного BeginPaint. Оба API входят в USER32 Win95;
   их явное разрешение в PE-проверке не меняет минимальную версию системы.
   Не вызывайте штатное рисование во время WM_SETREDRAW(FALSE), изменения
-  элементов/сортировки/геометрии native ListView или исходящего OLE drag.
+  элементов/сортировки/геометрии native ListView или внутри native callbacks.
+  Собственный OLE source из контроллера расстановки допускает рисование стабильных
+  элементов: DesktopFileDrag запоминает глубину внешнего вызова контроллера,
+  когда native callbacks уже вернулись, перед DoDragDrop. DesktopPaintBusy запрещает рисование при любой новой вложенной
+  глубине, mutation, refresh или активном кадре; не обнуляйте desktopCallDepth.
+  Сам refresh остаётся отложенным на всё время исходящего OLE drag.
   Shell32 может уже освободить PIDL в LVN_DELETEITEM, пока Common Controls
   ещё держит запись. desktopMutationDepth и desktopFramePending откладывают
   кадр до возврата исходной процедуры; завершение drag тоже инвалидирует
@@ -803,6 +808,14 @@ explorer95.exe --settings="C:\EX95TEST\Explorer95.ini"
   откладывается через FileDragDeferClose до возврата; IDropTarget держит локальную
   ссылку на делегата через внешние вызовы, RevokeDragDrop обнуляет context.
   Обновление списков ставится в очередь после завершения операции.
+- FileDropFeedback вызывается после получения effect от собственного либо native
+  обработчика, а не во время выбора пути. Подсвечивайте только принятую цель;
+  FileDropHighlight меняет LVIS_DROPHILITED и инвалидирует старую/новую область,
+  не трогая LVIS_SELECTED. Виртуальные цели и не-папки с SFGAO_DROPTARGET
+  сохраняют native обработчик; наличие filesystem-пути не превращает EXE в папку.
+  Уход на фон, DragLeave, Escape и Drop снимают подсветку. Wine 10 не рисует
+  нативный LVIS_DROPHILITED: тесты проверяют состояние и операции; реальное
+  изменение пикселей дополнительно проверяется для нашего composite 48×48.
 - В Wine-сценариях FileDragTests используйте один поток mouse_event для исходной
   позиции, DOWN, пересечения порога, пути и UP. Не смешивайте его с SetCursorPos:
   X11 warp с физическим button-up может сбить локальное состояние native ListView.
@@ -1031,6 +1044,11 @@ Rename со скрытым расширением, системные Properties
 осматривайте перенос полной панели при 640×480, дерево, Tiles и BMP-эскизы.
 
 ## Основная оболочка, системные команды и трей
+
+- WM_SIZING панели задач корректирует переданный RECT сразу до целых строк,
+  сохраняя закреплённую сторону и длину вдоль экрана. Высота строки соответствует
+  EnvBarThickness (28/40/44 для обычных/крупных/плиток). Не откладывайте привязку
+  до WM_EXITSIZEMOVE и не рассчитывайте плитки с шагом обычных кнопок.
 
 - Quick Launch использует owner-draw кнопки: BS_FLAT не поддерживается исходной
   Win95. Общие EnvPaintQuickButton / EnvPaintQuickGrip рисуют и живую панель,

@@ -6,6 +6,7 @@
 #include "render_trace.h"
 #include "file_operations.h"
 #include <shellapi.h>
+#include <commctrl.h>
 static BOOL active, cancelled;
 static HWND deferred[16];
 static int deferredCount;
@@ -60,7 +61,7 @@ HRESULT FileDragStart(IDataObject *data, BOOL right, DWORD *effect)
 }
 struct FileDrop {
     IDropTarget iface; ULONG refs; HWND window,owner; void *context;
-    FileDropResolve resolve; FileDropNotify leave,completed;
+    FileDropResolve resolve; FileDropFeedback feedback; FileDropNotify leave,completed;
     IDataObject *data; IDropTarget *fallback,*delegate; DWORD allowed;
     BOOL dropping,right; char *paths, destination[MAX_PATH];
 };
@@ -122,6 +123,20 @@ static void ClearTarget(FileDrop *target)
     IDropTarget *old=target->delegate; target->delegate=NULL; target->destination[0]=0;
     if(old) { if(!target->dropping) IDropTarget_DragLeave(old); IDropTarget_Release(old); }
 }
+void FileDropHighlight(HWND list, int *previous, int index)
+{
+    int old=*previous; RECT area;
+    if(old==index && (index<0 || (ListView_GetItemState(list,index,LVIS_DROPHILITED)&LVIS_DROPHILITED))) return;
+    *previous=index;
+    if(old>=0 && old!=index) {
+        ListView_SetItemState(list,old,0,LVIS_DROPHILITED);
+        if(ListView_GetItemRect(list,old,&area,LVIR_BOUNDS)) InvalidateRect(list,&area,FALSE);
+    }
+    if(index>=0) {
+        ListView_SetItemState(list,index,LVIS_DROPHILITED,LVIS_DROPHILITED);
+        if(ListView_GetItemRect(list,index,&area,LVIR_BOUNDS)) InvalidateRect(list,&area,FALSE);
+    }
+}
 static void ClearDrag(FileDrop *target)
 {
     IDataObject *data=target->data; char *paths=target->paths;
@@ -168,7 +183,9 @@ static HRESULT STDMETHODCALLTYPE TargetEnter(IDropTarget *self, IDataObject *dat
     ClearDrag(target); target->allowed=*effect; target->right=!!(keys&MK_RBUTTON);
     target->data=data; IDataObject_AddRef(data); target->paths=FileDragPaths(data);
     RenderTraceShell("drop-enter",target->paths ? S_OK : DV_E_FORMATETC,*effect,keys);
-    ResolveTarget(target,keys,point,effect); return S_OK;
+    ResolveTarget(target,keys,point,effect);
+    if(target->context && target->feedback) { POINT screen={point.x,point.y}; target->feedback(target->context,screen,*effect); }
+    return S_OK;
 }
 static HRESULT STDMETHODCALLTYPE TargetOver(IDropTarget *self, DWORD keys, POINTL point, DWORD *effect)
 {
@@ -177,6 +194,7 @@ static HRESULT STDMETHODCALLTYPE TargetOver(IDropTarget *self, DWORD keys, POINT
         IDropTarget *delegate=target->delegate; IDropTarget_AddRef(delegate);
         IDropTarget_DragOver(delegate,keys,point,effect); IDropTarget_Release(delegate);
     }
+    if(target->context && target->feedback) { POINT screen={point.x,point.y}; target->feedback(target->context,screen,*effect); }
     return S_OK;
 }
 static HRESULT STDMETHODCALLTYPE TargetLeave(IDropTarget *self) { ClearDrag((FileDrop *)self); return S_OK; }
@@ -248,12 +266,12 @@ static HRESULT STDMETHODCALLTYPE TargetDrop(IDropTarget *self, IDataObject *data
     target->dropping=TRUE; ClearDrag(target); target->dropping=FALSE; return result;
 }
 static IDropTargetVtbl targetMethods={TargetQuery,TargetAdd,TargetRelease,TargetEnter,TargetOver,TargetLeave,TargetDrop};
-FileDrop *FileDropRegister(HWND window, HWND owner, void *context, FileDropResolve resolve, FileDropNotify leave, FileDropNotify completed, IDropTarget *fallback)
+FileDrop *FileDropRegister(HWND window, HWND owner, void *context, FileDropResolve resolve, FileDropFeedback feedback, FileDropNotify leave, FileDropNotify completed, IDropTarget *fallback)
 {
     HRESULT result; FileDrop *target=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,sizeof(*target));
     if(!target) return NULL;
     target->iface.lpVtbl=&targetMethods; target->refs=1; target->window=window; target->owner=owner;
-    target->context=context; target->resolve=resolve; target->leave=leave; target->completed=completed; target->fallback=fallback;
+    target->context=context; target->resolve=resolve; target->feedback=feedback; target->leave=leave; target->completed=completed; target->fallback=fallback;
     if(fallback) IDropTarget_AddRef(fallback);
     result=RegisterDragDrop(window,&target->iface);
     RenderTraceShell("drop-register",result,GetDlgCtrlID(window),fallback!=NULL);
