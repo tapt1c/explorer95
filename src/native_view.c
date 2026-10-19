@@ -30,7 +30,7 @@ struct NativeView {
     LPITEMIDLIST absolute;
     BOOL desktop, deleting, recycleBin, statePending, refreshPending;
     int operationDepth;
-    BOOL fileDragging; int fileDragCallDepth, fileHover; BOOL fileHoverTarget; char fileHoverPath[MAX_PATH];
+    BOOL fileDragging, layoutHover, layoutDropped; int fileDragCallDepth, fileHover; BOOL fileHoverTarget; char fileHoverPath[MAX_PATH];
     FileDrop *fileDrop; int dropIndex;
     BOOL (*navigate)(HWND, LPCITEMIDLIST);
     HBITMAP wallpaper;
@@ -960,30 +960,48 @@ static BOOL DesktopTarget(NativeView *view, POINT screen, BOOL excludeSelection)
 }
 static BOOL DesktopFileTarget(void *context, POINT screen)
 {
-    NativeView *view=context; HWND hit=WindowFromPoint(screen);
+    NativeView *view=context; HWND hit=DesktopIconsWindowFromPoint(view->icons,screen);
     if(hit && hit!=view->window && hit!=view->list && !IsChild(view->window,hit)) return TRUE;
     return DesktopTarget(view,screen,TRUE);
 }
-static void DesktopFileDrag(void *context)
+static BOOL DesktopFileDrag(void *context)
 {
     NativeView *view=context; IDataObject *data=NULL; DWORD effect; HRESULT result;
-    if(view->fileDragging || FAILED(IShellView_GetItemObject(view->view,SVGIO_SELECTION,&IID_IDataObject,(void **)&data))) return;
-    view->fileDragCallDepth=view->desktopCallDepth; view->fileDragging=TRUE; ++view->operationDepth;
+    if(view->fileDragging || FAILED(IShellView_GetItemObject(view->view,SVGIO_SELECTION,&IID_IDataObject,(void **)&data))) return FALSE;
+    view->fileDragCallDepth=view->desktopCallDepth; view->fileDragging=TRUE; view->layoutDropped=FALSE; ++view->operationDepth;
     result=FileDragStart(data,FALSE,&effect); IDataObject_Release(data);
     --view->operationDepth; view->fileDragging=FALSE; view->fileHover=-1;
     ResumeDesktop(view);
-    if(result==DRAGDROP_S_DROP && effect) { PostMessageA(view->list,WM_KEYDOWN,VK_F5,0); BrowserRecycleBinsChanged(); }
+    if(result==DRAGDROP_S_DROP && effect && !view->layoutDropped) { PostMessageA(view->list,WM_KEYDOWN,VK_F5,0); BrowserRecycleBinsChanged(); }
+    return result==DRAGDROP_S_DROP && effect==DROPEFFECT_MOVE && view->layoutDropped;
+}
+static BOOL DesktopDropLocal(void *context, POINT screen, DWORD keys, BOOL drop, DWORD *effect)
+{
+    NativeView *view=context; RECT area; POINT client=screen;
+    view->layoutHover=FALSE;
+    if(!view->fileDragging) return FALSE;
+    ScreenToClient(view->list,&client); GetClientRect(view->list,&area);
+    if((keys&(MK_CONTROL|MK_SHIFT|MK_ALT)) || !PtInRect(&area,client) || DesktopTarget(view,screen,TRUE)) {
+        DesktopIconsFileHover(view->icons,screen,FALSE); return FALSE;
+    }
+    view->layoutHover=TRUE;
+    *effect=DesktopIconsFilePlacement(view->icons,screen,drop) ? DROPEFFECT_MOVE : DROPEFFECT_NONE;
+    if(drop) view->layoutDropped=*effect!=DROPEFFECT_NONE;
+    return TRUE;
 }
 static void DesktopDropLeave(void *context)
 {
     NativeView *view=context;
     FileDropHighlight(view->list,&view->dropIndex,-1);
+    { POINT unused={0,0}; DesktopIconsFileHover(view->icons,unused,FALSE); }
+    view->layoutHover=FALSE;
 }
 static void DesktopDropFeedback(void *context, POINT screen, DWORD effect)
 {
     NativeView *view=context; int index=-1;
     if((effect&(DROPEFFECT_COPY|DROPEFFECT_MOVE|DROPEFFECT_LINK)) && DesktopTarget(view,screen,view->fileDragging)) index=view->fileHover;
     FileDropHighlight(view->list,&view->dropIndex,index);
+    DesktopIconsFileHover(view->icons,screen,view->layoutHover && effect==DROPEFFECT_MOVE);
 }
 static BOOL DesktopDropResolve(void *context, POINT screen, char *path)
 {
@@ -1029,6 +1047,7 @@ void NativeViewConfigureDesktop(NativeView *view, const char *profile, BOOL auto
         IShellView_QueryInterface(view->view,&IID_IDropTarget,(void **)&native);
         view->dropIndex=-1;
         view->fileDrop=FileDropRegister(view->list,owner ? owner : view->parent,view,DesktopDropResolve,DesktopDropFeedback,DesktopDropLeave,DesktopDropCompleted,native);
+        FileDropSetLocal(view->fileDrop,DesktopDropLocal);
         if(native) IDropTarget_Release(native);
     }
 }

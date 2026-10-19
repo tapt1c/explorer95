@@ -23,7 +23,7 @@ static POINT DropBackgroundPoint(HWND list)
     if(origin.x+rect.right>GetSystemMetrics(SM_CXSCREEN)) rect.right=GetSystemMetrics(SM_CXSCREEN)-origin.x;
     point.x=rect.right-18; point.y=rect.bottom-18; ClientToScreen(list,&point); return point;
 }
-static void DragMouseFeedback(HWND source, POINT start, HWND target, POINT end, UINT modifier, int choice, int highlight, BOOL pixels)
+static void DragMouseFeedback(HWND source, POINT start, HWND target, POINT end, UINT modifier, int choice, int highlight, BOOL pixels, const POINT *via)
 {
     HWND frame=source; int i; BOOL right=choice>=2;
     RECT feedback={0,0,1,1}; DWORD before=0;
@@ -60,17 +60,34 @@ static void DragMouseFeedback(HWND source, POINT start, HWND target, POINT end, 
     PumpFor(100);
     Check(!!(GetAsyncKeyState(right ? VK_RBUTTON : VK_LBUTTON)&0x8000),"drag button remains held while crossing the native threshold");
     Check(GetForegroundWindow()==frame,"drag source owns keyboard focus before modifier input");
+    if(via) {
+        for(i=1;i<=5;++i) {
+            LONG x=start.x+(via->x-start.x)*i/5,y=start.y+(via->y-start.y)*i/5;
+            mouse_event(MOUSEEVENTF_MOVE|MOUSEEVENTF_ABSOLUTE,x*65535/(GetSystemMetrics(SM_CXSCREEN)-1),y*65535/(GetSystemMetrics(SM_CYSCREEN)-1),0,0); PumpFor(50);
+        }
+        PumpFor(100); start=*via;
+    }
     for(i=1;i<=5;++i) {
         LONG x=start.x+(end.x-start.x)*i/5,y=start.y+(end.y-start.y)*i/5;
         /* Inject mouse input too: X11 SetCursorPos synthesizes an event with
          * physical X modifiers, which can reset Wine's injected Ctrl/Shift. */
         mouse_event(MOUSEEVENTF_MOVE|MOUSEEVENTF_ABSOLUTE,x*65535/(GetSystemMetrics(SM_CXSCREEN)-1),y*65535/(GetSystemMetrics(SM_CYSCREEN)-1),0,0); PumpFor(50);
     }
-    if(WindowFromPoint(end)!=target) {
+    {
+    HWND hit=WindowFromPoint(end); BOOL ownGhost=FALSE;
+    if(via && hit!=target) {
+        char kind[32]; DWORD owner=0; RECT area; POINT local=end;
+        GetClassNameA(hit,kind,sizeof(kind)); GetWindowThreadProcessId(hit,&owner);
+        ScreenToClient(target,&local); GetClientRect(target,&area);
+        ownGhost=owner==process.dwProcessId && !lstrcmpA(kind,"Static") &&
+            (GetWindowLongA(hit,GWL_STYLE)&WS_POPUP) && PtInRect(&area,local);
+    }
+    if(hit!=target && !ownGhost) {
         char note[200],kind[80]; RECT bounds; GetClassNameA(WindowFromPoint(end),kind,sizeof(kind)); GetWindowRect(target,&bounds);
         wsprintfA(note,"Drop point %ld,%ld target bounds %ld,%ld,%ld,%ld actual %s\r\n",end.x,end.y,bounds.left,bounds.top,bounds.right,bounds.bottom,kind); Log(note);
     }
-    Check(WindowFromPoint(end)==target,"file drop reaches the intended visible target surface");
+    Check(hit==target || ownGhost,"file drop reaches the intended surface or its own resumed placement ghost");
+    }
     if(highlight>=0) {
         DWORD started=GetTickCount();
         while(!(SendMessageA(target,LVM_GETITEMSTATE,highlight,LVIS_DROPHILITED)&LVIS_DROPHILITED) && GetTickCount()-started<2000) PumpFor(20);
@@ -111,7 +128,7 @@ static void DragMouseFeedback(HWND source, POINT start, HWND target, POINT end, 
         "drop or Escape clears the temporary target highlight");
 }
 static void DragMouse(HWND source, POINT start, HWND target, POINT end, UINT modifier, int choice)
-{ DragMouseFeedback(source,start,target,end,modifier,choice,-1,FALSE); }
+{ DragMouseFeedback(source,start,target,end,modifier,choice,-1,FALSE,NULL); }
 static void WaitDragFile(const char *path, BOOL present)
 {
     DWORD started=GetTickCount(); while(Exists(path)!=present && GetTickCount()-started<5000) PumpFor(30);
@@ -145,7 +162,7 @@ static void FileDragTests(HWND bar, HWND desktop, HWND source, const char *fixtu
     wsprintfA(original,"%s\\copy-me",from); wsprintfA(result,"%s\\copy-me",to); WaitDragFile(result,TRUE);
     Check(Exists(original),"Ctrl-drag copies without deleting the original"); WaitDragRow(targetList,"copy-me",TRUE);
     start=DragItemPoint(list,"move-me"); end=DropItemPoint(targetList,"inside");
-    DragMouseFeedback(list,start,targetList,end,VK_SHIFT,FALSE,NativeItemIndex(targetList,"inside"),FALSE);
+    DragMouseFeedback(list,start,targetList,end,VK_SHIFT,FALSE,NativeItemIndex(targetList,"inside"),FALSE,NULL);
     wsprintfA(original,"%s\\move-me",from); wsprintfA(result,"%s\\move-me",childPath); WaitDragFile(result,TRUE); WaitDragFile(original,FALSE); WaitDragRow(list,"move-me",FALSE);
     start=DragItemPoint(list,"cancel-me"); end=DropBackgroundPoint(targetList); DragMouse(list,start,targetList,end,0,TRUE);
     wsprintfA(original,"%s\\cancel-me",from); wsprintfA(result,"%s\\cancel-me",to);
@@ -167,17 +184,43 @@ static void FileDragTests(HWND bar, HWND desktop, HWND source, const char *fixtu
     ShowWindow(source,SW_MINIMIZE); ShowWindow(target,SW_MINIMIZE); PumpFor(100);
     {
         LPITEMIDLIST bin; SHFILEINFOA info; int index, size=GetPrivateProfileIntA("Desktop","IconSize",32,settings), pass;
+        char folderName[64],folderPath[MAX_PATH]; BOOL snapped=GetPrivateProfileIntA("Desktop","SnapToGrid",0,settings)!=0;
         Check(SUCCEEDED(SHGetSpecialFolderLocation(NULL,CSIDL_BITBUCKET,&bin)),"resolve the real Recycle Bin using its public PIDL");
         ZeroMemory(&info,sizeof(info));
         Check(SHGetFileInfoA((LPCSTR)bin,0,&info,sizeof(info),SHGFI_PIDL|SHGFI_DISPLAYNAME)!=0,"read the installed Recycle Bin display name");
         CoTaskMemFree(bin); index=NativeItemIndex(desktopList,info.szDisplayName);
         Check(index>=0,"find the desktop Recycle Bin without shell-private item data");
+        wsprintfA(folderName,"ex95-drop-place-%lu",GetCurrentProcessId()); wsprintfA(folderPath,"%s\\%s",desktopPath,folderName);
+        Check(CreateDirectoryA(folderPath,NULL),"create only our desktop placement waypoint folder");
+        PostMessageA(desktopList,WM_KEYDOWN,VK_F5,0); WaitDragRow(desktopList,folderName,TRUE); PumpFor(400);
+        if(!snapped) { SendMessageA(desktop,WM_COMMAND,0x8010,0); PumpFor(400); }
         for(pass=0;pass<2;++pass) {
             SendMessageA(desktop,WM_COMMAND,pass ? 0x8061 : 0x8060,0); PumpFor(400);
             start=DragItemPoint(desktopList,desktopName); end=DropItemPoint(desktopList,info.szDisplayName);
-            DragMouseFeedback(desktopList,start,desktopList,end,0,1,index,pass!=0);
+            index=NativeItemIndex(desktopList,info.szDisplayName);
+            DragMouseFeedback(desktopList,start,desktopList,end,0,1,index,pass!=0,NULL);
             Check(Exists(result),"cancelled Recycle Bin hover leaves the desktop source intact");
+            {
+                POINT before=DragItemPoint(desktopList,info.szDisplayName), waypoint=DropItemPoint(desktopList,folderName), after;
+                HWND dialog; DWORD owner=0; int count=(int)SendMessageA(desktopList,LVM_GETITEMCOUNT,0,0);
+                /* A desktop ListView can cover the whole screen underneath
+                 * the appbar. Keep the placement point visibly above it. */
+                end.x=GetSystemMetrics(SM_CXSCREEN)-110-pass*120; end.y=GetSystemMetrics(SM_CYSCREEN)-110-pass*80;
+                DragMouseFeedback(desktopList,before,desktopList,end,0,1,-1,FALSE,&waypoint);
+                after=DropItemPoint(desktopList,info.szDisplayName);
+                Check(after.x==before.x && after.y==before.y,"Escape after returning from a folder target preserves the original virtual icon position");
+                before=DragItemPoint(desktopList,info.szDisplayName);
+                DragMouseFeedback(desktopList,before,desktopList,end,0,0,-1,FALSE,&waypoint);
+                dialog=FindWindowA("#32770","Shortcut"); if(dialog) GetWindowThreadProcessId(dialog,&owner);
+                if(dialog && owner==process.dwProcessId) { SendMessageA(dialog,WM_COMMAND,IDNO,0); Check(FALSE,"moving a virtual desktop icon back to empty space must not offer to create a shortcut"); }
+                after=DropItemPoint(desktopList,info.szDisplayName);
+                Check(after.x!=before.x || after.y!=before.y,"virtual icon placement resumes after crossing a folder drop target");
+                Check((int)SendMessageA(desktopList,LVM_GETITEMCOUNT,0,0)==count && Exists(folderPath) && Exists(result),
+                    "returning to desktop placement changes only icon coordinates, not files or shortcuts");
+            }
         }
+        if(!snapped) SendMessageA(desktop,WM_COMMAND,0x8010,0);
+        Check(RemoveDirectoryA(folderPath),"remove only our desktop placement waypoint folder");
         SendMessageA(desktop,WM_COMMAND,size==48 ? 0x8061 : 0x8060,0); PumpFor(400);
     }
     ShowWindow(source,SW_MINIMIZE); ShowWindow(target,SW_RESTORE);

@@ -65,16 +65,22 @@ static BOOL DesktopGhostIsTransparent(HWND list)
 }
 static void CheckDesktopGridLabels(HWND list, int size)
 {
-    int i,j,count=ListView_GetItemCount(list); RECT area; GetClientRect(list,&area);
+    int i,count=ListView_GetItemCount(list); RECT area; GetClientRect(list,&area);
     for(i=0;i<count;++i) {
-        POINT point=DesktopPoint(list,i); RECT bounds,other,intersection;
+        POINT point=DesktopPoint(list,i); RECT bounds; LVHITTESTINFO hit;
         if((point.x-(64-size)/2)%64 || (point.y-4)%80) {
             char note[120]; wsprintfA(note,"Grid: size=%d item=%d position=%ld,%ld\r\n",size,i,point.x,point.y); Log(note);
         }
         Check((point.x-(64-size)/2)%64==0 && (point.y-4)%80==0,"long shortcut labels retain the same desktop grid origin and pitch as short names");
-        ListView_GetItemRect(list,i,&bounds,LVIR_BOUNDS);
-        Check(bounds.left>=0 && bounds.top>=0 && bounds.right<=area.right && bounds.bottom<=area.bottom,"a complete grid cell keeps the shortcut and its label inside the desktop");
-        for(j=0;j<i;++j) { ListView_GetItemRect(list,j,&other,LVIR_BOUNDS); Check(!IntersectRect(&intersection,&bounds,&other),"grid-aligned shortcut labels do not overlap neighbouring icons"); }
+        /* Native LVIR_BOUNDS includes blank default-cell padding. Verify the
+         * actual icon and label remain independently reachable instead of
+         * requiring that invisible padding to push another icon away. */
+        ListView_GetItemRect(list,i,&bounds,LVIR_ICON);
+        Check(bounds.left>=0 && bounds.top>=0 && bounds.right<=area.right && bounds.bottom<=area.bottom,"the grid keeps the complete shortcut icon inside the desktop");
+        ZeroMemory(&hit,sizeof(hit)); hit.pt.x=(bounds.left+bounds.right)/2; hit.pt.y=(bounds.top+bounds.bottom)/2;
+        Check(ListView_HitTest(list,&hit)==i && (hit.flags&LVHT_ONITEMICON),"packed shortcut icons remain individually clickable");
+        ListView_GetItemRect(list,i,&bounds,LVIR_LABEL); hit.pt.x=(bounds.left+bounds.right)/2; hit.pt.y=bounds.top+4;
+        Check(PtInRect(&area,hit.pt) && ListView_HitTest(list,&hit)==i && (hit.flags&LVHT_ONITEMLABEL),"packed shortcut labels remain individually clickable without an earlier item covering them");
     }
 }
 static void DesktopGridLabelTests(const char *directory)
@@ -102,6 +108,20 @@ static void DesktopGridLabelTests(const char *directory)
         DesktopIconsDestroy(testDesktopIcons); testDesktopIcons=NULL;
         testDesktopIcons=DesktopIconsCreate(list,profile); DesktopIconsConfigure(testDesktopIcons,FALSE,FALSE,TRUE,64,80); DesktopPump();
         CheckDesktopGridLabels(list,size);
+        {
+            const char *shortNames[]={"One","Two","Three","Four"}; int step=size==32 ? 64 : 80; POINT first;
+            DesktopIconsConfigure(testDesktopIcons,FALSE,FALSE,TRUE,64,step);
+            for(i=0;i<4;++i) { ListView_SetItemText(list,i,0,(char *)shortNames[i]); ListView_SetItemPosition(list,i,(64-size)/2,4+i*step*2); }
+            DesktopIconsLineUp(testDesktopIcons); first=DesktopPoint(list,0);
+            for(i=0;i<4;++i) { POINT point=DesktopPoint(list,i);
+                Check(point.x==first.x && point.y==first.y+i*step,"Line up removes accumulated holes in visual order without reserving blank native-cell padding"); }
+            RedrawWindow(list,NULL,NULL,RDW_INVALIDATE|RDW_UPDATENOW);
+            DesktopPump();
+            for(i=0;i<4;++i) { POINT point=DesktopPoint(list,i); char text[MAX_PATH]; ListView_GetItemText(list,i,0,text,sizeof(text));
+                Check(!lstrcmpA(text,shortNames[i]) && point.x==first.x && point.y==first.y+i*step,
+                    "compact icon order and captions survive deferred native painting"); }
+            SaveScreen(size==32 ? "build/grid-compact-32.bmp" : "build/grid-compact-48.bmp");
+        }
         DesktopIconsDestroy(testDesktopIcons); testDesktopIcons=NULL;
         SetWindowLongPtrA(list,GWLP_WNDPROC,(LONG_PTR)testDesktopListProc); DestroyWindow(parent); ImageList_Destroy(images);
         Check(DeleteFileA(layout),"remove only our shortcut grid layout fixture");

@@ -23,7 +23,7 @@ ALLOWED = {
                       "ImageList_AddMasked", "ImageList_GetImageCount", "ImageList_GetIconSize", "ImageList_ReplaceIcon", "ImageList_Remove",
                       # Original Win95 common-controls drag-image API (no IE4+ dependency).
                       "ImageList_GetIcon", "ImageList_BeginDrag", "ImageList_DragEnter", "ImageList_DragMove",
-                      "ImageList_DragLeave", "ImageList_EndDrag", "ImageList_Draw", "ImageList_Add"},
+                      "ImageList_DragLeave", "ImageList_DragShowNolock", "ImageList_EndDrag", "ImageList_Draw", "ImageList_Add"},
     "comdlg32.dll": {"GetOpenFileNameA"},
     # Classic GDI drawing and DIB transfer APIs, available in Windows 95;
     # shutdown fade does not import AlphaBlend, GradientFill or layered-window APIs.

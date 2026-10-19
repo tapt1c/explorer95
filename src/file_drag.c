@@ -61,9 +61,9 @@ HRESULT FileDragStart(IDataObject *data, BOOL right, DWORD *effect)
 }
 struct FileDrop {
     IDropTarget iface; ULONG refs; HWND window,owner; void *context;
-    FileDropResolve resolve; FileDropFeedback feedback; FileDropNotify leave,completed;
+    FileDropResolve resolve; FileDropFeedback feedback; FileDropLocal local; FileDropNotify leave,completed;
     IDataObject *data; IDropTarget *fallback,*delegate; DWORD allowed;
-    BOOL dropping,right; char *paths, destination[MAX_PATH];
+    BOOL dropping,right,localTarget; char *paths, destination[MAX_PATH];
 };
 /* Copy validated CF_HDROP paths once at DragEnter. Never trust a foreign
  * HGLOBAL's offsets, terminators, count or Unicode-to-ANSI conversion size. */
@@ -141,6 +141,7 @@ static void ClearDrag(FileDrop *target)
 {
     IDataObject *data=target->data; char *paths=target->paths;
     target->data=NULL; target->paths=NULL; ClearTarget(target);
+    target->localTarget=FALSE;
     if(data) IDataObject_Release(data);
     if(paths) HeapFree(GetProcessHeap(),0,paths);
     if(target->context && target->leave) target->leave(target->context);
@@ -162,6 +163,10 @@ static BOOL ResolveTarget(FileDrop *target, DWORD keys, POINTL point, DWORD *eff
 {
     POINT screen; char path[MAX_PATH]; screen.x=point.x; screen.y=point.y;
     if(!target->context || !target->data) { *effect=0; return FALSE; }
+    target->localTarget=FALSE;
+    if(target->local && target->local(target->context,screen,keys,FALSE,effect)) {
+        ClearTarget(target); target->localTarget=TRUE; *effect&=target->allowed; return TRUE;
+    }
     if(target->paths && target->resolve(target->context,screen,path)) {
         if(target->delegate) ClearTarget(target);
         if(!target->context) { *effect=0; return FALSE; }
@@ -244,7 +249,11 @@ static HRESULT STDMETHODCALLTYPE TargetDrop(IDropTarget *self, IDataObject *data
     if(ResolveTarget(target,keys,point,effect)) {
         RenderTraceShell("drop-dispatch",S_OK,target->delegate!=NULL,*effect);
         target->dropping=TRUE;
-        if(target->delegate) {
+        if(target->localTarget) {
+            POINT screen={point.x,point.y};
+            if(!target->local(target->context,screen,keys,TRUE,effect)) *effect=DROPEFFECT_NONE;
+            *effect&=target->allowed;
+        } else if(target->delegate) {
             IDropTarget *delegate=target->delegate; IDropTarget_AddRef(delegate);
             result=IDropTarget_Drop(delegate,data,keys,point,effect); IDropTarget_Release(delegate);
         } else {
@@ -260,12 +269,13 @@ static HRESULT STDMETHODCALLTYPE TargetDrop(IDropTarget *self, IDataObject *data
             HeapFree(GetProcessHeap(),0,paths);
         }
         RenderTraceShell("drop-result",result,*effect,keys);
-        if(target->context && target->completed) target->completed(target->context);
+        if(!target->localTarget && target->context && target->completed) target->completed(target->context);
         target->dropping=FALSE;
     }
     target->dropping=TRUE; ClearDrag(target); target->dropping=FALSE; return result;
 }
 static IDropTargetVtbl targetMethods={TargetQuery,TargetAdd,TargetRelease,TargetEnter,TargetOver,TargetLeave,TargetDrop};
+void FileDropSetLocal(FileDrop *target, FileDropLocal local) { if(target) target->local=local; }
 FileDrop *FileDropRegister(HWND window, HWND owner, void *context, FileDropResolve resolve, FileDropFeedback feedback, FileDropNotify leave, FileDropNotify completed, IDropTarget *fallback)
 {
     HRESULT result; FileDrop *target=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,sizeof(*target));

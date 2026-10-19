@@ -12,7 +12,7 @@ typedef struct DragPosition { int index; POINT point; RECT bounds; } DragPositio
 typedef struct Placement { POINT from, to; RECT offset; BOOL fixed, moving; } Placement;
 struct DesktopIcons {
     HWND list;
-    void *fileContext; BOOL (*fileTarget)(void *, POINT); void (*fileBegin)(void *);
+    void *fileContext; BOOL (*fileTarget)(void *, POINT); BOOL (*fileBegin)(void *);
     char path[MAX_PATH];
     char recovery[MAX_PATH];
     IconPosition *saved;
@@ -23,15 +23,17 @@ struct DesktopIcons {
     POINT start, delta;
     HIMAGELIST ghost;
     HIMAGELIST sourceImages;
-    BOOL ghostEntered;
+    BOOL ghostEntered, ghostActive, fileDragging, fileDropped;
+    POINT ghostOrigin, filePoint;
     BOOL refreshing, redrawPaused, nativeRedrawPaused, changingRedraw;
 };
 static void EndDrag(DesktopIcons *icons, BOOL commit);
 static void MoveDrag(DesktopIcons *icons, POINT point);
 static POINT GridPoint(DesktopIcons *icons, POINT point);
 static BOOL ResolvePositions(DesktopIcons *icons, Placement *plan, int count, BOOL grid);
-static Placement *MakePlan(DesktopIcons *icons, int *count);
+static Placement *MakePlan(DesktopIcons *icons, int *count, BOOL grid);
 static void ApplyPlan(DesktopIcons *icons, const Placement *plan, int count);
+static void EndGhost(DesktopIcons *icons);
 static void EnableNativeRedraw(DesktopIcons *icons)
 {
     if (!icons->nativeRedrawPaused) return;
@@ -50,6 +52,28 @@ static BOOL Name(HWND list, int index, char *name)
 {
     LVITEMA item; ZeroMemory(&item, sizeof(item)); item.iSubItem = 0; item.pszText = name; item.cchTextMax = MAX_PATH;
     return SendMessageA(list, LVM_GETITEMTEXTA, index, (LPARAM)&item) > 0 && lstrlenA(name) < MAX_PATH - 1;
+}
+/* LVIR_BOUNDS can reserve the common control's entire default cell, including
+ * blank label padding. Collision tests need the actual icon and wrapped text,
+ * otherwise a 64px grid skips rows merely because Windows reserves 75px. */
+static BOOL ItemBounds(HWND list, int index, RECT *bounds)
+{
+    RECT icon,label,text; char name[MAX_PATH]; HDC dc; HGDIOBJ font=NULL; HFONT current;
+    if(!ListView_GetItemRect(list,index,bounds,LVIR_BOUNDS)) return FALSE;
+    if(!ListView_GetItemRect(list,index,&icon,LVIR_ICON) || !ListView_GetItemRect(list,index,&label,LVIR_LABEL) ||
+       !Name(list,index,name) || !(dc=GetDC(list))) return TRUE;
+    current=(HFONT)SendMessageA(list,WM_GETFONT,0,0); if(current) font=SelectObject(dc,current);
+    SetRect(&text,0,0,label.right-label.left,0);
+    if(DrawTextA(dc,name,-1,&text,DT_CALCRECT|DT_CENTER|DT_WORDBREAK|DT_NOPREFIX)) {
+        int width=Clamp(text.right-text.left,0,label.right-label.left), height=Clamp(text.bottom-text.top,0,label.bottom-label.top);
+        text.left=(label.left+label.right-width)/2; text.right=text.left+width;
+        text.top=label.top; text.bottom=text.top+height;
+        text.left=Clamp(text.left-1,label.left,label.right); text.right=Clamp(text.right+1,label.left,label.right);
+        text.top=Clamp(text.top-1,label.top,label.bottom); text.bottom=Clamp(text.bottom+1,label.top,label.bottom);
+        UnionRect(bounds,&icon,&text);
+    }
+    if(font) SelectObject(dc,font);
+    ReleaseDC(list,dc); return TRUE;
 }
 static void Load(DesktopIcons *icons)
 {
@@ -143,7 +167,7 @@ static void Restore(DesktopIcons *icons)
         }
     }
     if (!icons->automatic) {
-        int total; Placement *plan = MakePlan(icons,&total);
+        int total; Placement *plan = MakePlan(icons,&total,icons->snap);
         if (plan) {
             if(icons->snap) for(i=0;i<total;++i) plan[i].to=GridPoint(icons,plan[i].to);
             if (ResolvePositions(icons,plan,total,icons->snap)) ApplyPlan(icons,plan,total);
@@ -353,7 +377,7 @@ static BOOL FindFreePosition(DesktopIcons *icons, const RECT *area, Placement *p
     if (score == 0x7fffffff) return FALSE;
     plan[index].to = best; return TRUE;
 }
-static Placement *MakePlan(DesktopIcons *icons, int *count)
+static Placement *MakePlan(DesktopIcons *icons, int *count, BOOL grid)
 {
     Placement *plan; int i;
     *count = ListView_GetItemCount(icons->list);
@@ -362,7 +386,8 @@ static Placement *MakePlan(DesktopIcons *icons, int *count)
     if (!plan) return NULL;
     for (i = 0; i < *count; ++i) {
         RECT bounds;
-        if (!ListView_GetItemPosition(icons->list,i,&plan[i].from) || !ListView_GetItemRect(icons->list,i,&bounds,LVIR_BOUNDS)) {
+        if (!ListView_GetItemPosition(icons->list,i,&plan[i].from) ||
+            !(grid ? ItemBounds(icons->list,i,&bounds) : ListView_GetItemRect(icons->list,i,&bounds,LVIR_BOUNDS))) {
             HeapFree(GetProcessHeap(),0,plan); return NULL;
         }
         plan[i].to = plan[i].from;
@@ -482,8 +507,40 @@ static void EndGhost(DesktopIcons *icons)
 {
     if (icons->ghost) {
         if (icons->ghostEntered) ImageList_DragLeave(icons->list);
-        ImageList_EndDrag(); ImageList_Destroy(icons->ghost); icons->ghost = NULL; icons->ghostEntered = FALSE;
+        if(icons->ghostActive) ImageList_EndDrag();
+        ImageList_Destroy(icons->ghost); icons->ghost = NULL; icons->ghostEntered = icons->ghostActive = FALSE;
     }
+}
+void DesktopIconsFileHover(DesktopIcons *icons, POINT screen, BOOL placement)
+{
+    if(!icons || !icons->fileDragging || !icons->dragging) return;
+    if(!placement) {
+        if(icons->ghostEntered) ImageList_DragLeave(icons->list);
+        if(icons->ghostActive) ImageList_EndDrag();
+        icons->ghostEntered=icons->ghostActive=FALSE; return;
+    }
+    ScreenToClient(icons->list,&screen);
+    if(icons->ghost && !icons->ghostActive) {
+        icons->ghostActive=ImageList_BeginDrag(icons->ghost,0,icons->start.x-icons->ghostOrigin.x,icons->start.y-icons->ghostOrigin.y);
+        if(icons->ghostActive) icons->ghostEntered=ImageList_DragEnter(icons->list,screen.x,screen.y);
+    }
+    MoveDrag(icons,screen);
+}
+BOOL DesktopIconsFilePlacement(DesktopIcons *icons, POINT screen, BOOL drop)
+{
+    if(!icons || !icons->fileDragging || !icons->dragging || icons->pending) return FALSE;
+    if(drop) { icons->fileDropped=TRUE; icons->filePoint=screen; }
+    return TRUE;
+}
+HWND DesktopIconsWindowFromPoint(DesktopIcons *icons, POINT screen)
+{
+    HWND hit=WindowFromPoint(screen);
+    /* Some common controls implement the drag image as a popup. It must
+     * never turn a move over this desktop into an external file drag. */
+    if(icons && icons->ghostActive && hit!=icons->list && !IsChild(icons->list,hit)) {
+        ImageList_DragShowNolock(FALSE); hit=WindowFromPoint(screen); ImageList_DragShowNolock(TRUE);
+    }
+    return hit;
 }
 static POINT DragDelta(DesktopIcons *icons, POINT point, BOOL snap)
 {
@@ -513,6 +570,7 @@ static void EndDrag(DesktopIcons *icons, BOOL commit)
 {
     int i, count = 0; Placement *plan = NULL; BOOL hadGhost;
     if (!icons || !icons->dragging) return;
+    if(!commit) icons->fileDropped=FALSE;
     /* Remove the cached ghost BEFORE changing any real icon or label pixels. */
     hadGhost = icons->ghostEntered; EndGhost(icons); icons->dragging = FALSE;
     if (!hadGhost) SetCursor(LoadCursorA(NULL,IDC_ARROW));
@@ -520,7 +578,7 @@ static void EndDrag(DesktopIcons *icons, BOOL commit)
     if (commit) {
         POINT point = icons->start, delta;
         point.x += icons->delta.x; point.y += icons->delta.y; delta = DragDelta(icons,point,icons->snap);
-        plan = MakePlan(icons,&count);
+        plan = MakePlan(icons,&count,icons->snap);
         if (plan) {
             for (i = 0; i < icons->dragCount; ++i) {
                 int index = icons->drag[i].index;
@@ -537,7 +595,7 @@ static void EndDrag(DesktopIcons *icons, BOOL commit)
 }
 BOOL DesktopIconsBeginDrag(DesktopIcons *icons, const NMLISTVIEW *notify)
 {
-    int index = -1, count; POINT origin;
+    int index = -1, count; POINT origin={0,0};
     if (!icons || notify->hdr.hwndFrom != icons->list || (notify->hdr.code != LVN_BEGINDRAG && notify->hdr.code != LVN_BEGINRDRAG)) return FALSE;
     if (icons->locked) return TRUE;
     if (notify->hdr.code == LVN_BEGINRDRAG || icons->automatic || GetKeyState(VK_CONTROL)<0 || GetKeyState(VK_SHIFT)<0 || GetKeyState(VK_MENU)<0) return FALSE;
@@ -550,14 +608,17 @@ BOOL DesktopIconsBeginDrag(DesktopIcons *icons, const NMLISTVIEW *notify)
         DragPosition *p = &icons->drag[icons->dragCount];
         if (index == notify->iItem) icons->dragAnchor = icons->dragCount;
         ++icons->dragCount; p->index = index;
-        ListView_GetItemPosition(icons->list,index,&p->point); ListView_GetItemRect(icons->list,index,&p->bounds,LVIR_BOUNDS);
+        ListView_GetItemPosition(icons->list,index,&p->point);
+        if(icons->snap) ItemBounds(icons->list,index,&p->bounds);
+        else ListView_GetItemRect(icons->list,index,&p->bounds,LVIR_BOUNDS);
     }
     KillTimer(icons->list,RESTORE_TIMER); icons->pending = FALSE; icons->start = notify->ptAction;
     icons->delta.x = icons->delta.y = 0; icons->dragging = TRUE;
     SetFocus(icons->list); SetCapture(icons->list);
-    icons->ghost = CreateGhost(icons,&origin);
+    icons->ghost = CreateGhost(icons,&origin); icons->ghostOrigin=origin;
     if (icons->ghost) {
-        if (ImageList_BeginDrag(icons->ghost,0,icons->start.x-origin.x,icons->start.y-origin.y))
+        icons->ghostActive=ImageList_BeginDrag(icons->ghost,0,icons->start.x-origin.x,icons->start.y-origin.y);
+        if (icons->ghostActive)
             icons->ghostEntered = ImageList_DragEnter(icons->list,icons->start.x,icons->start.y);
         else { ImageList_Destroy(icons->ghost); icons->ghost = NULL; }
     }
@@ -577,7 +638,7 @@ BOOL DesktopIconsMessage(DesktopIcons *icons, UINT message, WPARAM wp, LPARAM lp
     if (!icons) return FALSE;
     if (message == WM_TIMER && wp == RESTORE_TIMER) {
         KillTimer(icons->list,RESTORE_TIMER);
-        if (!icons->refreshing) Restore(icons);
+        if (!icons->refreshing && !icons->fileDragging) Restore(icons);
         return TRUE;
     }
     /* Shell32 may enable redraw before its asynchronous enumeration settles.
@@ -588,12 +649,28 @@ BOOL DesktopIconsMessage(DesktopIcons *icons, UINT message, WPARAM wp, LPARAM lp
             PAINTSTRUCT paint; BeginPaint(icons->list,&paint); EndPaint(icons->list,&paint); return TRUE;
         }
     }
+    if(icons->fileDragging) {
+        /* Retain our placement snapshot, but let the native control clear its
+         * own mouse/capture state. OLE owns the cursor during this loop. */
+        if(message==WM_CAPTURECHANGED || message==WM_CANCELMODE || message==WM_SETCURSOR) return FALSE;
+        if(message==WM_MOUSEMOVE || message==WM_LBUTTONUP) return TRUE;
+    }
     if (!icons->dragging) return FALSE;
     if (message == WM_SETCURSOR && !icons->ghostEntered) { SetCursor(LoadCursorA(NULL,IDC_SIZEALL)); return TRUE; }
     if (message == WM_MOUSEMOVE && icons->fileTarget && icons->fileBegin) {
         POINT screen; GetCursorPos(&screen);
         if(icons->fileTarget(icons->fileContext,screen)) {
-            EndDrag(icons,FALSE); icons->fileBegin(icons->fileContext); return TRUE;
+            BOOL accepted,restore;
+            icons->fileDragging=TRUE; icons->fileDropped=FALSE;
+            DesktopIconsFileHover(icons,screen,FALSE);
+            if(GetCapture()==icons->list) ReleaseCapture();
+            accepted=icons->fileBegin(icons->fileContext);
+            icons->fileDragging=FALSE;
+            if(icons->fileDropped) { screen=icons->filePoint; ScreenToClient(icons->list,&screen); icons->delta=DragDelta(icons,screen,FALSE); }
+            restore=icons->pending;
+            EndDrag(icons,accepted && icons->fileDropped);
+            if(restore) DesktopIconsChanged(icons);
+            return TRUE;
         }
     }
     if (message == WM_MOUSEMOVE || message == WM_LBUTTONUP) {
@@ -611,16 +688,39 @@ void DesktopIconsLineUp(DesktopIcons *icons)
     EndDrag(icons,FALSE);
     if (icons->automatic) ListView_Arrange(icons->list,LVA_DEFAULT);
     else {
-        plan = MakePlan(icons,&count);
+        plan = MakePlan(icons,&count,TRUE);
         if (!plan) return;
-        for (i = 0; i < count; ++i) plan[i].to = GridPoint(icons,plan[i].to);
-        if (ResolvePositions(icons,plan,count,TRUE)) ApplyPlan(icons,plan,count);
+        RECT area; int rank, columns,rows,cursor=0,iconWidth=IconWidth(icons); BOOL okay=TRUE;
+        BOOL vertical=!!(GetWindowLongA(icons->list,GWL_STYLE)&LVS_ALIGNLEFT);
+        GetClientRect(icons->list,&area); columns=area.right/icons->width+1; rows=area.bottom/icons->height+1;
+        for(i=0;i<count;++i) plan[i].to=GridPoint(icons,plan[i].from);
+        /* Pack in the existing visual order. Do not re-sort Shell32's items
+         * or retain holes accumulated by the old label-edge clamping. */
+        for(rank=0;rank<count && okay;++rank) {
+            int next=-1,cell; POINT first={0,0}; BOOL placed=FALSE;
+            for(i=0;i<count;++i) if(!plan[i].moving) {
+                POINT point=plan[i].to;
+                if(next<0 || (vertical ? point.x<first.x || (point.x==first.x && point.y<first.y) :
+                    point.y<first.y || (point.y==first.y && point.x<first.x))) { next=i; first=point; }
+            }
+            if(next<0) { okay=FALSE; break; }
+            for(cell=cursor;cell<columns*rows;++cell) {
+                POINT point;
+                point.x=(vertical ? cell/rows : cell%columns)*icons->width+(icons->width-iconWidth)/2;
+                point.y=(vertical ? cell%rows : cell/columns)*icons->height+4;
+                if(FitPlacement(&area,&plan[next],&point,TRUE) && FreePosition(plan,count,next,point)) {
+                    plan[next].to=point; plan[next].fixed=plan[next].moving=TRUE; placed=TRUE; cursor=cell+1; break;
+                }
+            }
+            if(!placed) okay=FALSE;
+        }
+        if(okay) ApplyPlan(icons,plan,count);
         HeapFree(GetProcessHeap(),0,plan);
     }
     icons->ready = TRUE; icons->pending = FALSE; SaveOrReport(icons);
 }
 
-void DesktopIconsSetFileDrag(DesktopIcons *icons, void *context, BOOL (*target)(void *, POINT), void (*begin)(void *))
+void DesktopIconsSetFileDrag(DesktopIcons *icons, void *context, BOOL (*target)(void *, POINT), BOOL (*begin)(void *))
 {
     if(icons) { icons->fileContext=context; icons->fileTarget=target; icons->fileBegin=begin; }
 }
