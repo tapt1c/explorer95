@@ -1,6 +1,8 @@
 #define WIN32_LEAN_AND_MEAN
 #include "settings_internal.h"
 #include "folder_handler.h"
+#define EX95_LOCALIZE_UI
+#include "localization.h"
 #define ID_APPLY_NOW 0x3021
 
 static void FolderSelection(HWND owner, BOOL restore)
@@ -110,6 +112,7 @@ static BOOL WriteOptions(const char *ini, const ShellOptions *o)
     SAVE("Desktop", "GridWidth", desktopGridX); SAVE("Desktop", "GridHeight", desktopGridY);
     SAVE("Desktop", "IconSize", desktopIconSize);
 #undef SAVE
+    okay &= WritePrivateProfileStringA("Interface","Language",o->language ? "ru" : "en",ini);
     okay &= WriteNumber(ini, "Start", "ItemsVersion", 2);
     okay &= WritePrivateProfileStringA("Start", "ButtonLabel", o->startLabel, ini);
     return okay;
@@ -308,11 +311,13 @@ static BOOL CommitFile(HWND window, const ShellOptions *options)
 }
 static BOOL Apply(HWND window)
 {
-    ShellOptions options = env.options; BOOL valid; UINT width = GetDlgItemInt(window, ID_WIDTH, &valid, FALSE), seconds;
+    ShellOptions options = env.options; BOOL languageChanged=FALSE; BOOL valid; UINT width = GetDlgItemInt(window, ID_WIDTH, &valid, FALSE), seconds;
     if (!valid || width < 80 || width > 300) { MessageBoxA(window, "Button width must be between 80 and 300 pixels.", "Explorer95 Settings", MB_OK | MB_ICONEXCLAMATION); return FALSE; }
     seconds = GetDlgItemInt(window, ID_TRAYSECONDS, &valid, FALSE);
     if (!valid || seconds < 5 || seconds > 3600) { MessageBoxA(window, "Inactive timeout must be between 5 and 3600 seconds.", "Explorer95 Settings", MB_OK | MB_ICONEXCLAMATION); return FALSE; }
     options.edge = SendDlgItemMessageA(window, ID_EDGE, CB_GETCURSEL, 0, 0); options.rows = SendDlgItemMessageA(window, ID_ROWS, CB_GETCURSEL, 0, 0) + 1;
+    languageChanged=env.options.language!=(SendDlgItemMessageA(window,ID_LANGUAGE,CB_GETCURSEL,0,0)==1);
+    options.language=SendDlgItemMessageA(window,ID_LANGUAGE,CB_GETCURSEL,0,0)==1;
     options.taskWidth = width; options.traySeconds = seconds;
     options.locked = Checked(window, ID_LOCK); options.autoHide = Checked(window, ID_AUTOHIDE); options.topmost = Checked(window, ID_TOPMOST);
     options.clock = Checked(window, ID_CLOCK); options.quick = Checked(window, ID_QUICK); options.largeIcons = Checked(window, ID_LARGE);
@@ -328,20 +333,22 @@ static BOOL Apply(HWND window)
     options.classicShutdown = SendDlgItemMessageA(window, ID_SHUTDOWNSTYLE, CB_GETCURSEL, 0, 0) == 1;
     if (!StartSettingsValidate(window, &options) || !CommitFile(window, &options)) return FALSE;
     env.options = options; loading = TRUE; StartSettingsCommit(window); TraySettingsCommit(); EnvApplyOptions(); loading = FALSE;
-    EnableWindow(GetDlgItem(window, ID_APPLY_NOW), FALSE); return TRUE;
+    EnableWindow(GetDlgItem(window, ID_APPLY_NOW), FALSE);
+    if(languageChanged) MessageBoxA(window,"Language saved. Restart Explorer95 to apply it.","Explorer95",MB_OK|MB_ICONINFORMATION);
+    return TRUE;
 }
 static LRESULT CALLBACK PropertiesProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
 {
     switch (message) {
     case WM_ERASEBKGND: PaintDialogBackground(window, (HDC)wp); return TRUE;
     case WM_CREATE: {
-        static const char *tabs[] = {"Taskbar", "Start Menu", "Desktop", "Notifications", "System Shell"};
+        static const char *tabs[] = {"Taskbar", "Start Menu", "Desktop", "Notifications", "System Shell", "Language"};
         static const char *edges[] = {"Left", "Top", "Right", "Bottom"};
         TCITEMA item; HWND control; int i;
         env.properties = window; loading = TRUE; controlCount = 0; page = subpage = 0;
         control = EnvControl(window, WC_TABCONTROLA, "", WS_TABSTOP | WS_CLIPSIBLINGS, ID_SETTINGS_TABS); MoveWindow(control, 8, 8, 504, 336, FALSE);
         ZeroMemory(&item, sizeof(item)); item.mask = TCIF_TEXT;
-        for (i = 0; i < 5; ++i) { item.pszText = (LPSTR)tabs[i]; SendMessageA(control, TCM_INSERTITEMA, i, (LPARAM)&item); }
+        for (i = 0; i < SETTINGS_PAGE_COUNT; ++i) { item.pszText = (LPSTR)tabs[i]; SendMessageA(control, TCM_INSERTITEMA, i, (LPARAM)&item); }
         Control(window, SETTINGS_TASKBAR, "STATIC", "", SS_OWNERDRAW, ID_PREVIEW_TASKBAR, 24, 48, 472, 48);
         Control(window, SETTINGS_TASKBAR, "BUTTON", "Taskbar appearance", BS_GROUPBOX, 0, 20, 102, 480, 204);
         Checkbox(window, SETTINGS_TASKBAR, "Lock the taskbar", ID_LOCK, env.options.locked, 32, 124, 226);
@@ -396,6 +403,14 @@ static LRESULT CALLBACK PropertiesProc(HWND window, UINT message, WPARAM wp, LPA
         Control(window, SETTINGS_SHELL, "BUTTON", "Use Explorer95 for folders...", WS_TABSTOP, ID_INSTALLFOLDERS, 38, 246, 214, 28);
         Control(window, SETTINGS_SHELL, "BUTTON", "Restore folder handler...", WS_TABSTOP, ID_RESTOREFOLDERS, 266, 246, 214, 28);
         Control(window, SETTINGS_SHELL, "STATIC", "These actions apply immediately after confirmation.\r\nCancel does not undo them; use the corresponding Restore button.", 0, 0, 38, 282, 442, 34);
+        Control(window, SETTINGS_LANGUAGE, "STATIC", "Interface language:", 0, 0, 30, 60, 454, 22);
+        control=Control(window, SETTINGS_LANGUAGE,"COMBOBOX","",WS_TABSTOP|CBS_DROPDOWNLIST,ID_LANGUAGE,30,90,300,100);
+        SendMessageA(control,CB_ADDSTRING,0,(LPARAM)"English"); SendMessageA(control,CB_ADDSTRING,0,(LPARAM)"Russian");
+        SendMessageA(control,CB_SETCURSEL,env.options.language,0);
+        Control(window,SETTINGS_LANGUAGE,"STATIC","Restart Explorer95 to apply the selected language.",0,0,30,130,454,40);
+        Control(window,SETTINGS_LANGUAGE,"STATIC","System dialogs and file names use the Windows language.",0,0,30,180,454,40);
+        Control(window,SETTINGS_LANGUAGE,"STATIC","Cyrillic font: Explorer95 UI, based on Liberation Sans (SIL OFL 1.1).",0,0,30,234,454,40);
+        Control(window,SETTINGS_LANGUAGE,"BUTTON","Font license...",WS_TABSTOP,ID_FONTLICENSE,30,285,200,26);
         MoveWindow(EnvControl(window, "BUTTON", "OK", WS_TABSTOP | BS_DEFPUSHBUTTON, IDOK), 250, 352, 80, 26, FALSE);
         MoveWindow(EnvControl(window, "BUTTON", "Cancel", WS_TABSTOP, IDCANCEL), 338, 352, 80, 26, FALSE);
         MoveWindow(EnvControl(window, "BUTTON", "Apply", WS_TABSTOP, ID_APPLY_NOW), 426, 352, 80, 26, FALSE);
@@ -422,6 +437,7 @@ static LRESULT CALLBACK PropertiesProc(HWND window, UINT message, WPARAM wp, LPA
         if (loading) return 0;
         if (LOWORD(wp) == IDOK || LOWORD(wp) == ID_APPLY_NOW) { if (Apply(window) && LOWORD(wp) == IDOK) DestroyWindow(window); return 0; }
         if (LOWORD(wp) == IDCANCEL) { DestroyWindow(window); return 0; }
+        if (LOWORD(wp) == ID_FONTLICENSE) { UiFontLicense(window); return 0; }
         if (LOWORD(wp) == ID_CUSTOMSTART) { PropertiesSelectPage(SETTINGS_START); return 0; }
         if (LOWORD(wp) == ID_CUSTOMTRAY) { PropertiesSelectPage(SETTINGS_TRAY); return 0; }
         if (LOWORD(wp) == ID_QUICKFOLDER) { env.host.openFolder(env.quickDir); return 0; }
@@ -478,7 +494,7 @@ BOOL PropertiesTranslate(MSG *message)
     if (!env.properties || !(message->hwnd == env.properties || IsChild(env.properties, message->hwnd))) return FALSE;
     if (message->message == WM_KEYDOWN && message->wParam == VK_ESCAPE) { DestroyWindow(env.properties); return TRUE; }
     if (message->message == WM_KEYDOWN && message->wParam == VK_TAB && GetKeyState(VK_CONTROL) < 0) {
-        PropertiesSelectPage((page + (GetKeyState(VK_SHIFT) < 0 ? 4 : 1)) % 5); return TRUE;
+        PropertiesSelectPage((page + (GetKeyState(VK_SHIFT) < 0 ? SETTINGS_PAGE_COUNT-1 : 1)) % SETTINGS_PAGE_COUNT); return TRUE;
     }
     return IsDialogMessageA(env.properties, message);
 }

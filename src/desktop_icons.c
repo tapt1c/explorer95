@@ -3,6 +3,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include "desktop_icons.h"
 #include "paint.h"
+#include "localization.h"
 
 #define ICON_LIMIT 1024
 #define RESTORE_TIMER 0x95d1
@@ -226,10 +227,10 @@ static void SaveOrReport(DesktopIcons *icons)
     if (DesktopIconsSave(icons)) { icons->saveWarned = FALSE; return; }
     if (!icons->saveWarned) {
         char message[600];
-        lstrcpyA(message,"Icon positions could not be saved. Check that the settings folder and layout file are writable.");
-        if (icons->recovery[0]) { lstrcatA(message,"\r\nThe previous layout remains in:\r\n"); lstrcatA(message,icons->recovery); }
+        lstrcpyA(message,UiText("Icon positions could not be saved. Check that the settings folder and layout file are writable."));
+        if (icons->recovery[0]) { lstrcatA(message,UiText("\r\nThe previous layout remains in:\r\n")); lstrcatA(message,icons->recovery); }
         icons->saveWarned = TRUE;
-        MessageBoxA(icons->list,message,"Explorer95 desktop",MB_OK | MB_ICONEXCLAMATION);
+        UiMessageBoxA(icons->list,message,"Explorer95 desktop",MB_OK | MB_ICONEXCLAMATION);
     }
 }
 void DesktopIconsAfterShellAction(DesktopIcons *icons)

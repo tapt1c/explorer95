@@ -1,6 +1,9 @@
 #define WIN32_LEAN_AND_MEAN
 #include "shell_internal.h"
 #include "program_history.h"
+#define EX95_LOCALIZE_UI
+#include "localization.h"
+#undef GetTextExtentPoint32A
 
 typedef struct RecentProgram { char path[MAX_PATH], arguments[512]; } RecentProgram;
 typedef struct ProgramItem { char path[MAX_PATH], label[MAX_PATH]; BOOL folder, fresh; HICON icon; LPITEMIDLIST pidl; } ProgramItem;
@@ -148,7 +151,7 @@ static void UpdateRecent(void)
         if (recentIcons[i]) DestroyIcon(recentIcons[i]);
         recentIcons[i] = NULL;
         Caption(recentShortcuts[i], caption, sizeof(caption));
-        SetWindowTextA(button, caption);
+        UiSetLiteralWindowTextA(button, caption);
         ShowWindow(button, recentShortcuts[i][0] ? SW_SHOW : SW_HIDE);
         if (recentShortcuts[i][0]) recentIcons[i] = MenuPathIcon(recentShortcuts[i]);
     }
@@ -549,7 +552,10 @@ void StartRefresh(void)
     for (i = 0; i < PIN_LIMIT; ++i) {
         if (pinIcons[i]) DestroyIcon(pinIcons[i]);
         pinIcons[i] = NULL;
-        SetWindowTextA(GetDlgItem(env.start, ID_PINNED + i), startPins[i].label);
+        BOOL builtin=(!lstrcmpA(startPins[i].path,"@explorer") && !lstrcmpA(startPins[i].label,"Windows Explorer")) ||
+            (!lstrcmpA(startPins[i].path,"@command") && !lstrcmpA(startPins[i].label,"MS-DOS Prompt"));
+        if(builtin) SetWindowTextA(GetDlgItem(env.start,ID_PINNED+i),startPins[i].label);
+        else UiSetLiteralWindowTextA(GetDlgItem(env.start,ID_PINNED+i),startPins[i].label);
         if (i < startPinCount) pinIcons[i] = startPins[i].path[0] == '@' ? (!lstrcmpA(startPins[i].path, "@explorer") ? MenuSystemIcon(5) : DosIcon(env.options.largeStartIcons)) : MenuPathIcon(startPins[i].path);
     }
     if (IsWindowVisible(env.start)) StartPosition();
@@ -573,7 +579,8 @@ static BOOL DrawProgramItem(const DRAWITEMSTRUCT *draw)
     DrawIconEx(draw->hDC, text.left + 4, text.top + (text.bottom - text.top - iconSize) / 2,
         entry->icon ? entry->icon : LoadIconA(NULL, IDI_APPLICATION), iconSize, iconSize, 0, NULL, DI_NORMAL);
     text.left += iconSize + 10; text.right -= 16;
-    DrawTextA(draw->hDC, entry->label, -1, &text, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+    if(!lstrcmpA(entry->label,"Open this folder...")) DrawTextA(draw->hDC,entry->label,-1,&text,DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX);
+    else UiDrawNativeTextA(draw->hDC, entry->label, -1, &text, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
     PaintBufferEnd(&itemBuffer, target, &draw->rcItem); return TRUE;
 }
 
@@ -699,7 +706,7 @@ static LRESULT CALLBACK StartProc(HWND window, UINT message, WPARAM wp, LPARAM l
         SetRect(&part, 0, 42, rect.right / 2, geometry.footerY); FillRect(dc, &part, (HBRUSH)(COLOR_MENU + 1));
         SetRect(&part, 0, 0, rect.right, 40); FillRect(dc, &part, (HBRUSH)(COLOR_ACTIVECAPTION + 1));
         SelectObject(dc, env.host.font); SetBkMode(dc, TRANSPARENT); SetTextColor(dc, GetSysColor(COLOR_CAPTIONTEXT));
-        part.left = 12; DrawTextA(dc, user, -1, &part, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+        part.left = 12; UiDrawNativeTextA(dc, user, -1, &part, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
         SetRect(&part, rect.right / 2, 44, rect.right / 2 + 2, geometry.footerY - 4); DrawEdge(dc, &part, EDGE_ETCHED, BF_LEFT);
         SetRect(&part, 7, geometry.footerY, rect.right - 7, geometry.footerY + 2); DrawEdge(dc, &part, EDGE_ETCHED, BF_TOP);
         SetRect(&part, 7, geometry.programsY, rect.right / 2 - 7, geometry.programsY + 2); DrawEdge(dc, &part, EDGE_ETCHED, BF_TOP);
@@ -751,7 +758,8 @@ static LRESULT CALLBACK StartProc(HWND window, UINT message, WPARAM wp, LPARAM l
           }
         }
         GetWindowTextA(item->hwndItem, label, sizeof(label));
-        DrawTextA(item->hDC, label, -1, &text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+        if(GetPropA(item->hwndItem,"Explorer95.UiLiteral")) UiDrawNativeTextA(item->hDC,label,-1,&text,DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS|DT_NOPREFIX);
+        else DrawTextA(item->hDC,label,-1,&text,DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS|DT_NOPREFIX);
         PaintBufferEnd(&itemBuffer, target, &item->rcItem); return TRUE;
     }
     case WM_TIMER: {

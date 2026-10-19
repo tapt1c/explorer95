@@ -10,7 +10,7 @@ on:
         description: Smoke group (full for a complete regression run)
         type: choice
         default: full
-        options: [full, core, menu, browser]
+        options: [full, core, menu, browser, language]
 
 permissions:
   contents: read

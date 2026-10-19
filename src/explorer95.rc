@@ -5,3 +5,6 @@
 #else
 201 RCDATA "build/tray_hook.dll"
 #endif
+
+202 RCDATA "resources/Explorer95UI.ttf"
+203 RCDATA "resources/LiberationSans-LICENSE.txt"

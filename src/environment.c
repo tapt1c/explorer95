@@ -3,6 +3,8 @@
 #include "file_drag.h"
 #include "render_trace.h"
 #include "tray_mirror.h"
+#define EX95_LOCALIZE_UI
+#include "localization.h"
 
 ShellState env;
 typedef struct TaskGroup { HWND windows[TASK_LIMIT], button; int count; DWORD process; BOOL active; HICON icon; } TaskGroup;
@@ -105,7 +107,7 @@ void EnvError(HWND owner, const char *message, DWORD error)
     char detail[384], text[896];
     if (!FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, error, 0, detail, sizeof(detail), NULL))
         wsprintfA(detail, "Error %lu", error);
-    wsprintfA(text, "%s\r\n\r\n%s", message, detail); MessageBoxA(owner, text, "Explorer95", MB_OK | MB_ICONEXCLAMATION);
+    wsprintfA(text, "%s\r\n\r\n%s", UiText(message), detail); UiMarkTranslated(text); MessageBoxA(owner, text, "Explorer95", MB_OK | MB_ICONEXCLAMATION);
 }
 BOOL EnvRegister(const char *name, WNDPROC proc, HBRUSH brush, UINT style)
 {
@@ -138,6 +140,7 @@ static BOOL SettingsPath(void)
         EnvJoin(env.ini, env.dataDir, "Explorer95.ini");
     }
     if (EnvJoin(env.quickDir, env.dataDir, "Quick Launch")) CreateDirectoryA(env.quickDir, NULL);
+    env.options.language = UiReadLanguage(env.ini);
     env.options.edge = Clamp(Option("Edge", ABE_BOTTOM), 0, 3);
     env.options.rows = Clamp(Option("Rows", 1), 1, 3);
     env.options.taskWidth = Clamp(Option("TaskWidth", 160), 80, 300);
@@ -289,11 +292,13 @@ static void UpdateTasks(void)
         BOOL explorerGroup = tasks[i].count > 1 && tasks[i].process == GetCurrentProcessId();
         HICON icon = explorerGroup ? (env.options.taskTiles && explorerLargeIcon ? explorerLargeIcon : explorerIcon) : WindowIcon(tasks[i].windows[0],env.options.taskTiles);
         if (icon != tasks[i].icon) { tasks[i].icon = icon; InvalidateRect(tasks[i].button, NULL, FALSE); }
-        if (explorerGroup) lstrcpyA(text, "Windows Explorer");
+        if (explorerGroup) { lstrcpyA(text,UiText("Windows Explorer")); if(UiLanguage()) UiMarkTranslated(text); }
         else GetWindowTextA(tasks[i].windows[0], text, sizeof(text));
+        BOOL translated=UiIsEncodedText(text);
         if (tasks[i].count > 1) wsprintfA(label, "%s (%d)", text, tasks[i].count); else lstrcpyA(label, text);
+        if(translated) UiMarkTranslated(label);
         { char previous[160]; GetWindowTextA(tasks[i].button, previous, sizeof(previous));
-          if (lstrcmpA(previous, label)) SetWindowTextA(tasks[i].button, label); }
+          if (lstrcmpA(previous,label)) { if(translated) SetWindowTextA(tasks[i].button,label); else UiSetLiteralWindowTextA(tasks[i].button,label); } }
         for (j = 0; j < tasks[i].count; ++j) if (tasks[i].windows[j] == active) selected = TRUE;
         if (tasks[i].active != selected) {
             tasks[i].active = selected; InvalidateRect(tasks[i].button, NULL, FALSE);
@@ -623,7 +628,9 @@ void EnvApplyOptions(void)
     /* Draw the classic raised bar ourselves; a thick frame eats client height. */
     SetWindowLongA(env.bar, GWL_STYLE, style);
     /* Preserve a native accessible name when only the flag is painted. */
-    SetWindowTextA(env.startButton, env.options.startLabel[0] ? env.options.startLabel : "Start"); StartRefresh();
+    if(!lstrcmpA(env.options.startLabel,"Start")) SetWindowTextA(env.startButton,"Start");
+    else UiSetLiteralWindowTextA(env.startButton,env.options.startLabel[0] ? env.options.startLabel : "Start");
+    StartRefresh();
     env.hidden = FALSE; RefreshQuick(); EnvPositionBar(); UpdateTasks(); EnvLayoutBar();
     InvalidateRect(quickGrip, NULL, FALSE);
     if (env.desktopView) {
@@ -1193,7 +1200,8 @@ int EnvStartLabelWidth(const char *label)
     if (!label[0]) return 26;
     HDC dc = GetDC(env.bar); SIZE size = {0, 0}; HFONT old, font = CreateStartFont();
     old = SelectObject(dc, font ? font : env.host.font);
-    GetTextExtentPoint32A(dc, label, lstrlenA(label), &size);
+    if(!lstrcmpA(label,"Start")) GetTextExtentPoint32A(dc,label,lstrlenA(label),&size);
+    else UiGetNativeTextExtentA(dc,label,lstrlenA(label),&size);
     SelectObject(dc, old); if (font) DeleteObject(font); ReleaseDC(env.bar, dc);
     /* 54 x 22 is the classic Start size at default Win95 font metrics.
      * Keep that minimum while allowing the user's caption/font to grow. */
@@ -1213,7 +1221,8 @@ void EnvPaintStartButton(HDC dc, const RECT *bounds, const char *label, BOOL dow
     SetBkMode(dc, TRANSPARENT); SetTextColor(dc, GetSysColor(COLOR_BTNTEXT));
     text.left += 23 + offset; text.right -= 3 - offset;
     text.top += offset; text.bottom += offset;
-    DrawTextA(dc, label, -1, &text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    if(!lstrcmpA(label,"Start")) DrawTextA(dc,label,-1,&text,DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS|DT_NOPREFIX);
+    else UiDrawNativeTextA(dc,label,-1,&text,DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS|DT_NOPREFIX);
     if (focus) { InflateRect(&frame, -3, -3); DrawFocusRect(dc, &frame); }
     SelectObject(dc, old); if (font) DeleteObject(font);
 }
@@ -1231,7 +1240,8 @@ void EnvPaintTaskButton(HDC dc, const RECT *bounds, const char *label, HICON ico
     old = SelectObject(dc, font ? font : env.host.font);
     SetBkMode(dc, TRANSPARENT); SetTextColor(dc, GetSysColor(COLOR_BTNTEXT));
     text.left += 23 + (down ? 1 : 0); text.right -= 3;
-    DrawTextA(dc, label, -1, &text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    if(UiIsEncodedText(label)) DrawTextA(dc,label,-1,&text,DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS|DT_NOPREFIX);
+    else UiDrawNativeTextA(dc,label,-1,&text,DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS|DT_NOPREFIX);
     if (focus) { InflateRect(&rect, -3, -3); DrawFocusRect(dc, &rect); }
     SelectObject(dc, old); if (font) DeleteObject(font);
 }

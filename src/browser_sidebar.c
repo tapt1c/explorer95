@@ -2,6 +2,8 @@
  * actions; GDI only paints the task groups, so no HTML/IE dependency is needed. */
 #define WIN32_LEAN_AND_MEAN
 #include "browser_internal.h"
+#define EX95_LOCALIZE_UI
+#include "localization.h"
 
 #define SIDEBAR_CLASS "Explorer95.Sidebar"
 #define TASK_ROWS 32
@@ -15,7 +17,7 @@
 #define TASK_PUBLISH 6207
 #define TASK_MAIL 6208
 enum RowKind { ROW_HEADER, ROW_LINK, ROW_DETAILS };
-typedef struct TaskRow { HWND window; int kind, command, group, icon; RECT bounds; char text[640]; } TaskRow;
+typedef struct TaskRow { HWND window; int kind, command, group, icon; BOOL localized; RECT bounds; char text[640]; } TaskRow;
 struct BrowserSidebar {
     HWND window, content, history, clear, historyNote;
     HFONT bold;
@@ -66,6 +68,7 @@ static void Row(Browser *browser, int kind, int group, int command, int icon, co
     index = s->count; row = &s->rows[index];
     if (row->window && row->kind != kind) { DestroyWindow(row->window); row->window = NULL; }
     row->kind = kind; row->group = group; row->command = command; row->icon = icon;
+    row->localized=UiIsTranslated(text) || (UiLanguage() && kind==ROW_DETAILS);
     lstrcpynA(row->text, text, sizeof(row->text));
     /* Native controls can request owner drawing during creation or WM_SETTEXT.
      * Publish the complete row before either operation. */
@@ -180,7 +183,7 @@ static void BuildTasks(Browser *browser)
     if (env.availableStartItems & START_ITEM_NETWORK) Link(browser, 2, TASK_NETWORK, 6, "My Network Places");
     if (browser->computerFolder) Link(browser, 2, TASK_CONTROL, 2, "Control Panel");
     else if (browser->path[0] && !root) Link(browser, 2, ID_UP, 4, "Parent Folder");
-    Header(browser, 3, "Details");
+    Header(browser, 3, UiLanguage() ? UiText("Information") : "Details");
     if (selected.count > 1) wsprintfA(details, "%d items selected", selected.count);
     else if (selected.count == 1) {
         wsprintfA(details, "%s\r\n%s", selected.name, selected.type[0] ? selected.type : folder ? "File folder" : "Item");
@@ -229,6 +232,7 @@ static int LayoutTasks(Browser *browser, int width, BOOL place)
              * extra pixels can hide the final wrapped line of a task. */
             if (row->icon >= 0 && row->icon < 10) measure.right -= 22;
             if (measure.right < 1) measure.right = 1;
+            if(row->localized) UiMarkTranslated(row->text);
             DrawTextA(dc, row->text, -1, &measure, DT_WORDBREAK | DT_CALCRECT | DT_NOPREFIX);
             h = measure.bottom + (row->kind == ROW_DETAILS ? 12 : 8); if (h < 24) h = 24;
         }
@@ -374,6 +378,7 @@ static void DrawRow(Browser *browser, const DRAWITEMSTRUCT *draw)
     } else if (row->icon >= 0 && row->icon < 10) {
         DrawIconEx(draw->hDC, text.left, 4 + down, s->icons[row->icon], 16, 16, 0, NULL, DI_NORMAL); text.left += 22;
     }
+    if(row->localized) UiMarkTranslated(row->text);
     if (header) DrawTextA(draw->hDC, row->text, -1, &text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
     else { text.top += 4; DrawTextA(draw->hDC, row->text, -1, &text, DT_LEFT | DT_WORDBREAK | DT_NOPREFIX); }
     if (draw->itemState & ODS_FOCUS) { RECT focus = draw->rcItem; InflateRect(&focus, -2, -2); DrawFocusRect(draw->hDC, &focus); }

@@ -10,6 +10,8 @@
 #include "environment.h"
 #include "browser.h"
 #include "render_trace.h"
+#define EX95_LOCALIZE_UI
+#include "localization.h"
 
 #define APP "Explorer95"
 #define BAR_CLASS "Explorer95.Taskbar"
@@ -59,7 +61,8 @@ static void ErrorMessage(HWND owner, const char *action, DWORD error)
     if (!FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
                         NULL, error, 0, detail, sizeof(detail), NULL))
         wsprintfA(detail, "Error %lu", error);
-    wsprintfA(text, "%s\r\n\r\n%s", action, detail);
+    wsprintfA(text, "%s\r\n\r\n%s", UiText(action), detail);
+    UiMarkTranslated(text);
     MessageBoxA(owner, text, APP, MB_OK | MB_ICONEXCLAMATION);
 }
 
@@ -197,6 +200,15 @@ void start(void)
         SetForegroundWindow(previous);
         ExitProcess(0);
     }
+    {
+        char profile[MAX_PATH],base[MAX_PATH];
+        if(FolderSettingsPath(GetCommandLineA(),profile)) profile[0]=0;
+        if(!profile[0]) {
+            if(!SpecialPath(CSIDL_APPDATA,base)) GetWindowsDirectoryA(base,MAX_PATH);
+            if(lstrlenA(base)+27<MAX_PATH) { lstrcpyA(profile,base); lstrcatA(profile,"\\Explorer95\\Explorer95.ini"); }
+        }
+        UiInitialize(profile);
+    }
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
     ole = OleInitialize(NULL);
     InitCommonControls();
@@ -210,7 +222,7 @@ void start(void)
     host.openFolder = BrowserOpen; host.specialPath = SpecialPath; host.showRun = ShowRun; host.closeFolders = BrowserShutdown;
     host.openRequest = BrowserOpenRequest;
     bar = EnvironmentCreate(&host);
-    if (!bar) { EnvironmentShutdown(); RenderTraceClose(); ExitProcess(1); }
+    if (!bar) { EnvironmentShutdown(); UiShutdown(); RenderTraceClose(); ExitProcess(1); }
     ReleaseMutex(startup); CloseHandle(startup);
     if (requested) EnvironmentOpenRequest(&request);
     while (GetMessageA(&message, NULL, 0, 0) > 0) {
@@ -232,6 +244,7 @@ void start(void)
     EnvironmentShutdown(); BrowserShutdown();
     RenderTraceShutdown("exit.ole",S_OK,0);
     if (SUCCEEDED(ole)) OleUninitialize();
+    UiShutdown();
     RenderTraceShutdown("exit.done",S_OK,0); RenderTraceClose();
     ExitProcess(0);
 }

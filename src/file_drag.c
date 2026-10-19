@@ -7,6 +7,8 @@
 #include "file_operations.h"
 #include <shellapi.h>
 #include <commctrl.h>
+#define EX95_LOCALIZE_UI
+#include "localization.h"
 static BOOL active, cancelled;
 static HWND deferred[16];
 static int deferredCount;

@@ -6,6 +6,8 @@
 #include <tlhelp32.h>
 #include "tray_mirror.h"
 #include "render_trace.h"
+#define EX95_LOCALIZE_UI
+#include "localization.h"
 
 #define ICON_LIMIT 64
 #define TRAY_SIGNATURE 0x34753423UL

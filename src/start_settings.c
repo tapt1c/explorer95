@@ -2,6 +2,8 @@
 #include "settings_internal.h"
 #include <commdlg.h>
 #include "program_history.h"
+#define EX95_LOCALIZE_UI
+#include "localization.h"
 
 PinnedProgram startPins[PIN_LIMIT];
 int startPinCount;

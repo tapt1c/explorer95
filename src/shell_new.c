@@ -6,6 +6,8 @@
 #include <shellapi.h>
 #include <shlobj.h>
 #include "shell_new.h"
+#define EX95_LOCALIZE_UI
+#include "localization.h"
 
 enum NewKind { NEW_FOLDER, NEW_EMPTY, NEW_TEMPLATE, NEW_DATA, NEW_COMMAND };
 typedef struct NewItem {

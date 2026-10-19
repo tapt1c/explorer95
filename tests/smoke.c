@@ -19,7 +19,7 @@ static HWND child;
 static char programsShortcut[MAX_PATH];
 static void PumpFor(DWORD duration);
 static void NativeSelectItem(HWND list, int index);
-typedef enum TestGroup { GROUP_FULL, GROUP_CORE, GROUP_MENU, GROUP_BROWSER } TestGroup;
+typedef enum TestGroup { GROUP_FULL, GROUP_CORE, GROUP_MENU, GROUP_BROWSER, GROUP_LANGUAGE } TestGroup;
 
 void *memset(void *destination, int value, size_t count)
 {
@@ -1683,6 +1683,8 @@ static void EnvironmentTests(HWND bar, HWND browser, HWND childWindow, HWND menu
     Check(GetFileAttributesA(quickPath) == INVALID_FILE_ATTRIBUTES, "Quick Launch test executable removed");
 }
 
+#include "localization_cases.h"
+
 void start(void)
 {
     static char module[MAX_PATH], executable[MAX_PATH], command[1024], settings[MAX_PATH], settingsDir[MAX_PATH];
@@ -1730,7 +1732,8 @@ void start(void)
             if (!lstrcmpA(args, "--group=core")) group = GROUP_CORE;
             else if (!lstrcmpA(args, "--group=menu")) group = GROUP_MENU;
             else if (!lstrcmpA(args, "--group=browser")) group = GROUP_BROWSER;
-            else Check(!lstrcmpA(args, "--group=full"), "known test group (full, core, menu, browser)");
+            else if (!lstrcmpA(args, "--group=language")) group = GROUP_LANGUAGE;
+            else Check(!lstrcmpA(args, "--group=full"), "known test group (full, core, menu, browser, language)");
         }
     }
     SetCursorPos(GetSystemMetrics(SM_CXSCREEN) - 2, GetSystemMetrics(SM_CYSCREEN) - 2);
@@ -1752,10 +1755,11 @@ void start(void)
     wsprintfA(settingsDir, "%s profile", fixture);
     Check(CreateDirectoryA(settingsDir, NULL), "create isolated settings directory");
     wsprintfA(settings, "%s\\settings.ini", settingsDir);
+    if(group==GROUP_LANGUAGE) { LanguageTests(settingsDir); LanguageRestartTests(settingsDir,executable); goto cleanup; }
     if (group == GROUP_FULL || group == GROUP_CORE || group == GROUP_BROWSER) ShellNewTests(settingsDir, module);
     if (group == GROUP_FULL || group == GROUP_CORE || group == GROUP_BROWSER) FileDropRegistrationTests();
     if (group != GROUP_BROWSER) { LayoutTests(); HistoryTests(settingsDir, module, settings); ShellFeatureTests(); }
-    if (group == GROUP_FULL || group == GROUP_CORE) { PaintTests(); ConfigTests(settingsDir); DesktopIconTests(settingsDir); FolderHandlerTests(module,settings); FolderSelectionTests(); DragDataTests(); NativeViewMessageTests(); TrayMirrorTests(); TrayMirrorCrossProcessTests(); }
+    if (group == GROUP_FULL || group == GROUP_CORE) { PaintTests(); ConfigTests(settingsDir); DesktopIconTests(settingsDir); LanguageTests(settingsDir); FolderHandlerTests(module,settings); FolderSelectionTests(); DragDataTests(); NativeViewMessageTests(); TrayMirrorTests(); TrayMirrorCrossProcessTests(); }
     if (group == GROUP_CORE) goto cleanup;
     if (group == GROUP_MENU) NativeDesktopIconSizeTests();
     if(group==GROUP_MENU || group==GROUP_FULL) WritePrivateProfileStringA("Desktop","IconSize","16",settings);
@@ -2019,6 +2023,7 @@ shutdown:
         Check(DeleteFileA(path), "diagnostic trace fixture removed after the file handle closes");
     }
 cleanup:
+    if(group==GROUP_FULL) LanguageRestartTests(settingsDir,executable);
     if (programsShortcut[0]) Check(DeleteFileA(programsShortcut), "remove only our own All Programs shortcut");
     wsprintfA(path, "%s.DIP", settings); DeleteFileA(path);
     DeleteFileA(settings);

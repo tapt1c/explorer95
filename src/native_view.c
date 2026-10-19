@@ -14,6 +14,8 @@
 #include "folder_open.h"
 #include "shell_new.h"
 #include "file_drag.h"
+#define EX95_LOCALIZE_UI
+#include "localization.h"
 
 #define DESKTOP_REFRESH_MESSAGE (WM_APP + 35)
 

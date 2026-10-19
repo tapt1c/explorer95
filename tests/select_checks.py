@@ -42,7 +42,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", default="")
     parser.add_argument("--head", default="HEAD")
-    parser.add_argument("--group", choices=("auto", "full", "core", "menu", "browser"), default="auto")
+    parser.add_argument("--group", choices=("auto", "full", "core", "menu", "browser", "language"), default="auto")
     args = parser.parse_args()
     result = select(changed_paths(args.base, args.head)) if args.group == "auto" else {
         "build": "true", "layout": "true", "group": args.group}

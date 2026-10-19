@@ -1,5 +1,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include "browser_internal.h"
+#define EX95_LOCALIZE_UI
+#include "localization.h"
 
 static HTREEITEM InsertNode(Browser *browser, HTREEITEM parent, const char *label,
     const char *path, int special, int image, BOOL expandable)

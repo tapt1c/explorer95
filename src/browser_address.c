@@ -2,6 +2,8 @@
  * No ComboBoxEx/IE dependency; opening the list never enumerates a drive. */
 #define WIN32_LEAN_AND_MEAN
 #include "browser_internal.h"
+#define EX95_LOCALIZE_UI
+#include "localization.h"
 
 #define ADDRESS_LIMIT 192
 typedef struct AddressRow { BrowserPlace target; int image, indent; } AddressRow;

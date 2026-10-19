@@ -15,11 +15,9 @@ def main():
     root = Path(__file__).resolve().parents[1]
     with tempfile.TemporaryDirectory(prefix="explorer95-build-") as temp:
         work = Path(temp)
-        for name in ("Makefile", "src/start_layout.c", "src/start_layout.h", "src/explorer95.rc", "resources/Bitmap143.bmp", "resources/explorer95.ico",
-                     "src/tray_hook.c", "src/tray_mirror.h", "src/tray_image.c"):
-            target = work / name
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(root / name, target)
+        shutil.copyfile(root / "Makefile", work / "Makefile")
+        for name in ("src", "resources", "tools"):
+            shutil.copytree(root / name, work / name)
         command = ["make", "--no-print-directory", "build/obj32/src/start_layout.o", "build/resources.o",
                    f"CC={args.cc}", f"WINDRES={args.windres}"]
 
@@ -30,7 +28,7 @@ def main():
             except subprocess.CalledProcessError as error:
                 print(error.stdout, flush=True)
                 raise
-            actual = (sum(" -c src/start_layout.c " in line for line in result.stdout.splitlines()),
+            actual = (sum(" -c src/start_layout.c " in line or " -c src/localization.c " in line for line in result.stdout.splitlines()),
                       sum(" -i src/explorer95.rc " in line for line in result.stdout.splitlines()))
             if actual != (compiles, resources):
                 raise AssertionError(f"{label}: expected {(compiles, resources)}, got {actual}\n{result.stdout}")
@@ -61,6 +59,18 @@ def main():
         source = work / "src/start_layout.c"
         source.write_text(source.read_text() + "\n/* source probe */\n")
         run("one source change rebuilds only that object", 1, 0)
+        font = work / "resources/Explorer95UI.ttf"
+        font.write_bytes(font.read_bytes())
+        run("Cyrillic font changes rebuild only resources", 0, 1)
+        command.append("build/obj32/src/localization.o")
+        run("initial catalogue compiles its single object", 1, 0)
+        run("unchanged catalogue compiles nothing", 0, 0)
+        import json
+        catalogue = work / "resources/translations/ru.json"
+        strings = json.loads(catalogue.read_text())
+        strings["Start"] += "!"
+        catalogue.write_text(json.dumps(strings, ensure_ascii=False))
+        run("translation changes rebuild only the catalogue object", 1, 0)
         run("final no-op build", 0, 0)
 
 

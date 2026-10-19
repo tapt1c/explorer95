@@ -1,6 +1,8 @@
 /* Classic/XP session choice without layered windows, a compositor or NT-only imports. */
 #define WIN32_LEAN_AND_MEAN
 #include "shell_internal.h"
+#define EX95_LOCALIZE_UI
+#include "localization.h"
 
 #define ID_SLEEP 1700
 #define ID_OFF 1701

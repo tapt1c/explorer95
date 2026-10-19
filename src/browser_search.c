@@ -2,6 +2,8 @@
  * indexing service, recursive directory watcher, worker lifetime, or CRT. */
 #define WIN32_LEAN_AND_MEAN
 #include "browser_internal.h"
+#define EX95_LOCALIZE_UI
+#include "localization.h"
 
 #define SEARCH_LIMIT 1024
 #define SEARCH_DEPTH 64

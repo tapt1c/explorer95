@@ -1,6 +1,8 @@
 #define WIN32_LEAN_AND_MEAN
 #include "browser_internal.h"
 #include "render_trace.h"
+#define EX95_LOCALIZE_UI
+#include "localization.h"
 
 HINSTANCE browserInstance;
 HFONT browserFont;
@@ -251,13 +253,13 @@ void BrowserLayout(Browser *browser)
     EnvShowControl(browser->addressLabel, browser->options.address);
     EnvShowControl(browser->go, browser->options.address);
     if (browser->options.address) {
-        int fieldHeight;
-        EnvMoveControl(browser->address, 56, top + 2, width > 120 ? width - 112 : 8, 220);
+        int fieldHeight,goWidth=UiLanguage() ? 64 : 47;
+        EnvMoveControl(browser->address,56,top+2,width>goWidth+73 ? width-goWidth-65 : 8,220);
         /* CB_SETITEMHEIGHT is the edit's content height, not the bordered
          * ComboBox height. Let USER measure its native frame, then align Go. */
         GetWindowRect(browser->address, &tool); fieldHeight = tool.bottom - tool.top;
         EnvMoveControl(browser->addressLabel, 5, top + 2 + (fieldHeight - (int)BrowserAddressHeight(browser)) / 2, 49, BrowserAddressHeight(browser));
-        EnvMoveControl(browser->go, width - 51, top + 2, 47, fieldHeight); top += fieldHeight + 8;
+        EnvMoveControl(browser->go,width-goWidth-4,top+2,goWidth,fieldHeight); top += fieldHeight + 8;
         SetRect(&browser->addressLine, 0, top - 3, width, top - 1);
     }
     BrowserAddressLayout(browser);

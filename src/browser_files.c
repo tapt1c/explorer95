@@ -2,6 +2,10 @@
 #include "browser_internal.h"
 #include "render_trace.h"
 #include "file_operations.h"
+#define EX95_LOCALIZE_UI
+#include "localization.h"
+#undef DrawTextA
+#undef GetTextExtentPoint32A
 void BrowserFilesFree(FileEntry *entry)
 {
     while (entry) { FileEntry *next = entry->next; EnvFree(entry); entry = next; }

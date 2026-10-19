@@ -1,6 +1,8 @@
 /* Bounded profile history, separate from each window's Back/Forward branch. */
 #define WIN32_LEAN_AND_MEAN
 #include "browser_internal.h"
+#define EX95_LOCALIZE_UI
+#include "localization.h"
 
 static BrowserVisit visits[BROWSER_HISTORY];
 static int visitCount;

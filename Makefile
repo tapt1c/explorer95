@@ -14,8 +14,8 @@ WINDRES64 = x86_64-w64-mingw32-windres
 WINE = wine
 # Default remains the entire regression suite; a typo must never skip tests.
 TEST_GROUP = full
-SOURCES = src/browser.c src/browser_address.c src/browser_files.c src/browser_tree.c src/browser_toolbar.c src/browser_sidebar.c src/browser_search.c src/browser_history.c src/program_history.c src/paint.c src/tray_image.c src/explorer95.c src/environment.c src/native_view.c src/shell_new.c src/start_menu.c src/start_layout.c src/start_settings.c src/tray.c src/settings.c src/shell_config.c src/shutdown.c src/render_trace.c src/file_drag.c src/file_operations.c src/desktop_icons.c src/shell_features.c src/folder_open.c src/folder_handler.c
-TEST_SOURCES = tests/smoke.c src/tray_image.c src/program_history.c src/paint.c src/shell_config.c src/start_layout.c src/desktop_icons.c src/shell_features.c src/folder_open.c src/folder_handler.c src/native_view.c src/shell_new.c src/render_trace.c src/file_drag.c src/file_operations.c
+SOURCES = src/localization.c src/browser.c src/browser_address.c src/browser_files.c src/browser_tree.c src/browser_toolbar.c src/browser_sidebar.c src/browser_search.c src/browser_history.c src/program_history.c src/paint.c src/tray_image.c src/explorer95.c src/environment.c src/native_view.c src/shell_new.c src/start_menu.c src/start_layout.c src/start_settings.c src/tray.c src/settings.c src/shell_config.c src/shutdown.c src/render_trace.c src/file_drag.c src/file_operations.c src/desktop_icons.c src/shell_features.c src/folder_open.c src/folder_handler.c
+TEST_SOURCES = src/localization.c tests/smoke.c src/tray_image.c src/program_history.c src/paint.c src/shell_config.c src/start_layout.c src/desktop_icons.c src/shell_features.c src/folder_open.c src/folder_handler.c src/native_view.c src/shell_new.c src/render_trace.c src/file_drag.c src/file_operations.c
 OBJECTS = $(SOURCES:%.c=build/obj32/%.o)
 OBJECTS64 = $(SOURCES:%.c=build/obj64/%.o)
 TEST_OBJECTS = $(TEST_SOURCES:%.c=build/obj32/%.o)
@@ -50,6 +50,11 @@ build/obj64/%.o: %.c build/obj64/.flags Makefile
 	@mkdir -p $(@D)
 	$(CCACHE) $(CC64) $(CPPFLAGS) $(CFLAGS_COMMON) -MMD -MP -c $< -o $@
 
+build/localization_strings.h: resources/translations/ru.json tools/generate_translations.py $(SOURCES)
+	python3 tools/generate_translations.py resources/translations/ru.json $@
+
+build/obj32/src/localization.o build/obj64/src/localization.o: build/localization_strings.h
+
 build/explorer95.exe: $(OBJECTS) build/resources.o Makefile
 	$(CC) $(CFLAGS) $(filter %.o,$^) $(LDFLAGS) $(LDLIBS) -o $@
 
@@ -60,16 +65,17 @@ build/ui64/tray_hook.dll: build/obj64/src/tray_hook.o build/obj64/src/tray_image
 	@mkdir -p $(@D)
 	$(CC64) $(CFLAGS_COMMON) -shared -nostdlib $(filter %.o,$^) -Wl,--entry,DllMain -Wl,--kill-at -lcomctl32 -lgdi32 -luser32 -lkernel32 -o $@
 
-build/resources.o: src/explorer95.rc resources/Bitmap143.bmp resources/explorer95.ico build/tray_hook.dll build/obj32/.flags Makefile
+build/resources.o: src/explorer95.rc resources/Bitmap143.bmp resources/explorer95.ico resources/Explorer95UI.ttf resources/LiberationSans-LICENSE.txt build/tray_hook.dll build/obj32/.flags Makefile
 	@mkdir -p $(@D)
 	$(WINDRES) --preprocessor="$(CC)" --preprocessor-arg=-E --preprocessor-arg=-xc -I. -i $< -o $@
 
-build/ui64/resources.o: src/explorer95.rc resources/Bitmap143.bmp resources/explorer95.ico build/ui64/tray_hook.dll build/obj64/.flags Makefile
+build/ui64/resources.o: src/explorer95.rc resources/Bitmap143.bmp resources/explorer95.ico resources/Explorer95UI.ttf resources/LiberationSans-LICENSE.txt build/ui64/tray_hook.dll build/obj64/.flags Makefile
 	@mkdir -p $(@D)
 	$(WINDRES64) --preprocessor="$(CC64)" --preprocessor-arg=-E --preprocessor-arg=-xc -I. -i $< -o $@
 
 check: all
 	python3 -m unittest discover -s tests -p test_check_pe.py
+	python3 -m unittest discover -s tests -p test_localization.py
 	python3 tests/check_pe.py build/tray_hook.dll --dll
 	python3 tests/check_pe.py build/explorer95.exe
 

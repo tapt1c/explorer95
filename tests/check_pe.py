@@ -27,12 +27,14 @@ ALLOWED = {
     "comdlg32.dll": {"GetOpenFileNameA"},
     # Classic GDI drawing and DIB transfer APIs, available in Windows 95;
     # shutdown fade does not import AlphaBlend, GradientFill or layered-window APIs.
-    "gdi32.dll": {"CreatePatternBrush", "PatBlt", "GetDeviceCaps", "GetClipBox", "SaveDC", "RestoreDC", "IntersectClipRect", "ExcludeClipRect", "Arc", "CreatePen", "Ellipse", "CreateSolidBrush", "GetDIBits", "SetDIBits", "LineTo", "MoveToEx", "GetStockObject", "SelectObject", "SetBkMode", "SetTextColor", "BitBlt",
+    # Font registration/selection are original Win95 GDI APIs; Unicode calls
+    # remain optional GetProcAddress paths, never loader dependencies.
+    "gdi32.dll": {"AddFontResourceA", "RemoveFontResourceA", "GetCurrentObject", "CreatePatternBrush", "PatBlt", "GetDeviceCaps", "GetClipBox", "SaveDC", "RestoreDC", "IntersectClipRect", "ExcludeClipRect", "Arc", "CreatePen", "Ellipse", "CreateSolidBrush", "GetDIBits", "SetDIBits", "LineTo", "MoveToEx", "GetStockObject", "SelectObject", "SetBkMode", "SetTextColor", "BitBlt",
                   "Polygon", "StretchBlt", "CreateCompatibleBitmap", "CreateBitmap", "SetBkColor", "SetWindowOrgEx", "CreateFontIndirectA", "GetTextFaceA", "GetTextExtentPoint32A", "GetTextMetricsA", "CreateCompatibleDC", "DeleteDC", "DeleteObject", "GetObjectA"},
     "kernel32.dll": set("""
         FindResourceA LoadResource SizeofResource LockResource GetCurrentProcess ReadProcessMemory
         GetDiskFreeSpaceA GetVolumeInformationA WideCharToMultiByte WritePrivateProfileSectionA
-        CreateMutexA ReleaseMutex CreateToolhelp32Snapshot Process32First Process32Next GetSystemTimeAsFileTime GetTempFileNameA MoveFileA
+        CreateMutexA ReleaseMutex CreateToolhelp32Snapshot Process32First Process32Next GetSystemTimeAsFileTime GetTempFileNameA GetTempPathA MoveFileA
         CompareFileTime FileTimeToLocalFileTime FileTimeToSystemTime GetDateFormatA
         GetFileSize ReadFile WriteFile GlobalAlloc GlobalFree GlobalLock GlobalSize GlobalUnlock
         CloseHandle CopyFileA CreateDirectoryA CreateFileA ExitProcess ExpandEnvironmentStringsA FindClose FindFirstFileA
@@ -50,6 +52,7 @@ ALLOWED = {
         SHGetSpecialFolderLocation ShellExecuteA SHAppBarMessage SHGetDesktopFolder
         DragAcceptFiles DragQueryFileA DragFinish
     """.split()),
+    # GetMenuItemInfoA is stock Win95; callers use its original cbSize.
     "user32.dll": set("""
         CreateIconIndirect
         SetWindowsHookExA CallNextHookEx UnhookWindowsHookEx
@@ -62,7 +65,7 @@ ALLOWED = {
         BeginPaint EndPaint GetUpdateRect ValidateRect EnumWindows EnumChildWindows FillRect FindWindowA
         UnionRect GetDC ReleaseDC GetClassLongA GetCapture GetClassNameA GetClientRect GetCursorPos GetDlgItem
         GetDlgItemTextA GetFocus GetForegroundWindow GetKeyState GetAsyncKeyState GetMessageA GetParent
-        GetDlgCtrlID GetDlgItemInt GetMenuItemCount GetMenuState GetMenuStringA GetPropA GetSystemMenu InsertMenuA
+        GetMenuItemInfoA GetDlgCtrlID GetDlgItemInt GetMenuItemCount GetMenuState GetMenuStringA GetPropA GetSystemMenu InsertMenuA
         GetSystemMetrics GetWindowThreadProcessId IsChild LoadImageA PtInRect
         GetSysColor GetWindow GetWindowLongA GetWindowRect GetWindowTextA InflateRect InvalidateRect
         IsDialogMessageA IsIconic IsWindow IsWindowVisible IsWindowEnabled GetLastActivePopup KillTimer
@@ -73,7 +76,7 @@ ALLOWED = {
         SetFocus SetForegroundWindow SetMenu SetRect SetTimer SetWindowLongA SetWindowPos
         SetDlgItemTextA SendMessageTimeoutA SetWindowTextA ShowWindow SystemParametersInfoA TrackPopupMenu
         TranslateMessage UpdateWindow WindowFromDC WindowFromPoint wsprintfA
-        RemoveMenu
+        RemoveMenu GetWindowDC IsMenu wvsprintfA UnregisterClassA
     """.split()),
 }
 
