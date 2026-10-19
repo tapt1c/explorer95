@@ -964,12 +964,14 @@ static BOOL DesktopFileTarget(void *context, POINT screen)
     if(hit && hit!=view->window && hit!=view->list && !IsChild(view->window,hit)) return TRUE;
     return DesktopTarget(view,screen,TRUE);
 }
+static BOOL DesktopDropLocal(void *context, POINT screen, DWORD keys, BOOL drop, DWORD *effect);
+static void DesktopDropFeedback(void *context, POINT screen, DWORD effect);
 static BOOL DesktopFileDrag(void *context)
 {
     NativeView *view=context; IDataObject *data=NULL; DWORD effect; HRESULT result;
     if(view->fileDragging || FAILED(IShellView_GetItemObject(view->view,SVGIO_SELECTION,&IID_IDataObject,(void **)&data))) return FALSE;
     view->fileDragCallDepth=view->desktopCallDepth; view->fileDragging=TRUE; view->layoutDropped=FALSE; ++view->operationDepth;
-    result=FileDragStart(data,FALSE,&effect); IDataObject_Release(data);
+    result=FileDragStartLocal(data,&effect,view,DesktopDropLocal,DesktopDropFeedback); IDataObject_Release(data);
     --view->operationDepth; view->fileDragging=FALSE; view->fileHover=-1;
     ResumeDesktop(view);
     if(result==DRAGDROP_S_DROP && effect && !view->layoutDropped) { PostMessageA(view->list,WM_KEYDOWN,VK_F5,0); BrowserRecycleBinsChanged(); }
@@ -977,11 +979,13 @@ static BOOL DesktopFileDrag(void *context)
 }
 static BOOL DesktopDropLocal(void *context, POINT screen, DWORD keys, BOOL drop, DWORD *effect)
 {
-    NativeView *view=context; RECT area; POINT client=screen;
+    NativeView *view=context; RECT area; POINT client=screen; HWND hit;
     view->layoutHover=FALSE;
     if(!view->fileDragging) return FALSE;
+    hit=DesktopIconsWindowFromPoint(view->icons,screen);
     ScreenToClient(view->list,&client); GetClientRect(view->list,&area);
-    if((keys&(MK_CONTROL|MK_SHIFT|MK_ALT)) || !PtInRect(&area,client) || DesktopTarget(view,screen,TRUE)) {
+    if((keys&(MK_CONTROL|MK_SHIFT|MK_ALT)) || !PtInRect(&area,client) ||
+       (hit!=view->list && !IsChild(view->list,hit)) || DesktopTarget(view,screen,TRUE)) {
         DesktopIconsFileHover(view->icons,screen,FALSE); return FALSE;
     }
     view->layoutHover=TRUE;
@@ -998,10 +1002,11 @@ static void DesktopDropLeave(void *context)
 }
 static void DesktopDropFeedback(void *context, POINT screen, DWORD effect)
 {
-    NativeView *view=context; int index=-1;
-    if((effect&(DROPEFFECT_COPY|DROPEFFECT_MOVE|DROPEFFECT_LINK)) && DesktopTarget(view,screen,view->fileDragging)) index=view->fileHover;
+    NativeView *view=context; int index=-1; HWND hit=DesktopIconsWindowFromPoint(view->icons,screen);
+    BOOL surface=hit==view->list || IsChild(view->list,hit);
+    if(surface && (effect&(DROPEFFECT_COPY|DROPEFFECT_MOVE|DROPEFFECT_LINK)) && DesktopTarget(view,screen,view->fileDragging)) index=view->fileHover;
     FileDropHighlight(view->list,&view->dropIndex,index);
-    DesktopIconsFileHover(view->icons,screen,view->layoutHover && effect==DROPEFFECT_MOVE);
+    DesktopIconsFileHover(view->icons,screen,surface && view->layoutHover && effect==DROPEFFECT_MOVE);
 }
 static BOOL DesktopDropResolve(void *context, POINT screen, char *path)
 {

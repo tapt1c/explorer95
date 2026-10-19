@@ -184,7 +184,7 @@ static void FileDragTests(HWND bar, HWND desktop, HWND source, const char *fixtu
     ShowWindow(source,SW_MINIMIZE); ShowWindow(target,SW_MINIMIZE); PumpFor(100);
     {
         LPITEMIDLIST bin; SHFILEINFOA info; int index, size=GetPrivateProfileIntA("Desktop","IconSize",32,settings), pass;
-        char folderName[64],folderPath[MAX_PATH]; BOOL snapped=GetPrivateProfileIntA("Desktop","SnapToGrid",0,settings)!=0;
+        char folderName[64],folderPath[MAX_PATH],linkName[80],linkPath[MAX_PATH]; BOOL snapped=GetPrivateProfileIntA("Desktop","SnapToGrid",0,settings)!=0;
         Check(SUCCEEDED(SHGetSpecialFolderLocation(NULL,CSIDL_BITBUCKET,&bin)),"resolve the real Recycle Bin using its public PIDL");
         ZeroMemory(&info,sizeof(info));
         Check(SHGetFileInfoA((LPCSTR)bin,0,&info,sizeof(info),SHGFI_PIDL|SHGFI_DISPLAYNAME)!=0,"read the installed Recycle Bin display name");
@@ -192,7 +192,12 @@ static void FileDragTests(HWND bar, HWND desktop, HWND source, const char *fixtu
         Check(index>=0,"find the desktop Recycle Bin without shell-private item data");
         wsprintfA(folderName,"ex95-drop-place-%lu",GetCurrentProcessId()); wsprintfA(folderPath,"%s\\%s",desktopPath,folderName);
         Check(CreateDirectoryA(folderPath,NULL),"create only our desktop placement waypoint folder");
-        PostMessageA(desktopList,WM_KEYDOWN,VK_F5,0); WaitDragRow(desktopList,folderName,TRUE); PumpFor(400);
+        wsprintfA(linkName,"ex95-place-link-%lu.lnk",GetCurrentProcessId()); wsprintfA(linkPath,"%s\\%s",desktopPath,linkName);
+        Check(SUCCEEDED(OleInitialize(NULL)) && Shortcut(linkPath,folderPath),"create only our own shortcut for same-desktop placement"); OleUninitialize();
+        { SHFILEINFOA linkInfo; ZeroMemory(&linkInfo,sizeof(linkInfo));
+          Check(SHGetFileInfoA(linkPath,0,&linkInfo,sizeof(linkInfo),SHGFI_DISPLAYNAME)!=0,"read the installed shell's shortcut display name");
+          lstrcpynA(linkName,linkInfo.szDisplayName,sizeof(linkName)); }
+        PostMessageA(desktopList,WM_KEYDOWN,VK_F5,0); WaitDragRow(desktopList,folderName,TRUE); WaitDragRow(desktopList,linkName,TRUE); PumpFor(400);
         if(!snapped) { SendMessageA(desktop,WM_COMMAND,0x8010,0); PumpFor(400); }
         for(pass=0;pass<2;++pass) {
             SendMessageA(desktop,WM_COMMAND,pass ? 0x8061 : 0x8060,0); PumpFor(400);
@@ -218,9 +223,22 @@ static void FileDragTests(HWND bar, HWND desktop, HWND source, const char *fixtu
                 Check((int)SendMessageA(desktopList,LVM_GETITEMCOUNT,0,0)==count && Exists(folderPath) && Exists(result),
                     "returning to desktop placement changes only icon coordinates, not files or shortcuts");
             }
+            {
+                const char *sources[]={desktopName,linkName}; int kind;
+                for(kind=0;kind<2;++kind) {
+                    POINT before=DragItemPoint(desktopList,sources[kind]), after, waypoint=DropItemPoint(desktopList,folderName);
+                    int count=(int)SendMessageA(desktopList,LVM_GETITEMCOUNT,0,0);
+                    end.x=GetSystemMetrics(SM_CXSCREEN)-180-pass*120; end.y=GetSystemMetrics(SM_CYSCREEN)-150-kind*100;
+                    DragMouseFeedback(desktopList,before,desktopList,end,0,0,-1,FALSE,&waypoint);
+                    after=DropItemPoint(desktopList,sources[kind]);
+                    Check(after.x!=before.x || after.y!=before.y,"a file or shortcut resumes coordinate placement after crossing a folder");
+                    Check((int)SendMessageA(desktopList,LVM_GETITEMCOUNT,0,0)==count && Exists(result) && Exists(linkPath) && Exists(folderPath),
+                        "same-desktop file/shortcut placement does not copy, move, rename or duplicate filesystem objects");
+                }
+            }
         }
         if(!snapped) SendMessageA(desktop,WM_COMMAND,0x8010,0);
-        Check(RemoveDirectoryA(folderPath),"remove only our desktop placement waypoint folder");
+        Check(DeleteFileA(linkPath) && RemoveDirectoryA(folderPath),"remove only our desktop placement shortcut and waypoint folder");
         SendMessageA(desktop,WM_COMMAND,size==48 ? 0x8061 : 0x8060,0); PumpFor(400);
     }
     ShowWindow(source,SW_MINIMIZE); ShowWindow(target,SW_RESTORE);

@@ -16,7 +16,10 @@ static BOOL Same(REFIID a, REFIID b)
     for (i=0;i<16;++i) if(left[i]!=right[i]) return FALSE;
     return TRUE;
 }
-typedef struct DragSource { IDropSource iface; ULONG refs; DWORD button; } DragSource;
+typedef struct DragSource {
+    IDropSource iface; ULONG refs; DWORD button,keys;
+    void *context; FileDropLocal local; FileDropFeedback feedback; BOOL localDropped;
+} DragSource;
 static HRESULT STDMETHODCALLTYPE SourceQuery(IDropSource *self, REFIID iid, void **out)
 {
     if(!out) return E_POINTER;
@@ -28,12 +31,32 @@ static ULONG STDMETHODCALLTYPE SourceAdd(IDropSource *self) { return ++((DragSou
 static ULONG STDMETHODCALLTYPE SourceRelease(IDropSource *self) { return --((DragSource *)self)->refs; }
 static HRESULT STDMETHODCALLTYPE SourceContinue(IDropSource *self, BOOL escape, DWORD keys)
 {
-    DWORD button=((DragSource *)self)->button;
+    DragSource *source=(DragSource *)self; DWORD button=source->button;
     if(escape || cancelled || (keys & (button==MK_LBUTTON ? MK_RBUTTON : MK_LBUTTON))) return DRAGDROP_S_CANCEL;
+    source->keys=keys;
+    if(!(keys&button) && source->local) {
+        POINT point; DWORD effect=DROPEFFECT_NONE;
+        if(GetCursorPos(&point) && source->local(source->context,point,keys,TRUE,&effect)) {
+            /* Cancel the target dispatch, not the user's placement. A native
+             * desktop target may otherwise copy a virtual item/create a link,
+             * or try to move a real file onto itself. Coordinates are committed
+             * by the caller only after DoDragDrop and DragLeave have returned. */
+            source->localDropped=effect==DROPEFFECT_MOVE;
+            return DRAGDROP_S_CANCEL;
+        }
+    }
     return keys & button ? S_OK : DRAGDROP_S_DROP;
 }
 static HRESULT STDMETHODCALLTYPE SourceFeedback(IDropSource *self, DWORD effect)
-{ (void)self; (void)effect; return DRAGDROP_S_USEDEFAULTCURSORS; }
+{
+    DragSource *source=(DragSource *)self; POINT point; BOOL local=FALSE;
+    if(source->local && GetCursorPos(&point)) {
+        local=source->local(source->context,point,source->keys,FALSE,&effect);
+        if(source->feedback) source->feedback(source->context,point,effect);
+    }
+    if(local) { SetCursor(LoadCursorA(NULL,effect==DROPEFFECT_MOVE ? IDC_ARROW : IDC_NO)); return S_OK; }
+    return DRAGDROP_S_USEDEFAULTCURSORS;
+}
 static IDropSourceVtbl sourceMethods={SourceQuery,SourceAdd,SourceRelease,SourceContinue,SourceFeedback};
 BOOL FileDragActive(void) { return active; }
 BOOL FileDragDeferClose(HWND window)
@@ -45,20 +68,27 @@ BOOL FileDragDeferClose(HWND window)
     if(deferredCount<16) deferred[deferredCount++]=window;
     return TRUE;
 }
-HRESULT FileDragStart(IDataObject *data, BOOL right, DWORD *effect)
+static HRESULT StartDrag(IDataObject *data, BOOL right, DWORD *effect, void *context, FileDropLocal local, FileDropFeedback feedback)
 {
     DragSource source; HRESULT result; int i;
     if(!data || !effect) return E_INVALIDARG;
     *effect=DROPEFFECT_NONE;
     if(active) return E_UNEXPECTED;
+    ZeroMemory(&source,sizeof(source));
     source.iface.lpVtbl=&sourceMethods; source.refs=1; source.button=right ? MK_RBUTTON : MK_LBUTTON;
+    source.keys=source.button; source.context=context; source.local=local; source.feedback=feedback;
     active=TRUE; cancelled=FALSE;
     result=DoDragDrop(data,&source.iface,DROPEFFECT_COPY|DROPEFFECT_MOVE|DROPEFFECT_LINK,effect);
+    if(result==DRAGDROP_S_CANCEL && source.localDropped && !cancelled) { result=DRAGDROP_S_DROP; *effect=DROPEFFECT_MOVE; }
     active=FALSE; RenderTraceShell("drag-result",result,*effect,0);
     for(i=0;i<deferredCount;++i) if(IsWindow(deferred[i])) PostMessageA(deferred[i],WM_CLOSE,0,0);
     deferredCount=0;
     return result;
 }
+HRESULT FileDragStart(IDataObject *data, BOOL right, DWORD *effect)
+{ return StartDrag(data,right,effect,NULL,NULL,NULL); }
+HRESULT FileDragStartLocal(IDataObject *data, DWORD *effect, void *context, FileDropLocal local, FileDropFeedback feedback)
+{ return StartDrag(data,FALSE,effect,context,local,feedback); }
 struct FileDrop {
     IDropTarget iface; ULONG refs; HWND window,owner; void *context;
     FileDropResolve resolve; FileDropFeedback feedback; FileDropLocal local; FileDropNotify leave,completed;
