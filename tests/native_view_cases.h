@@ -293,6 +293,44 @@ static void NativeDesktopPaintTests(HWND parent)
     NativeViewDestroy(view); ShowWindow(parent,SW_HIDE);
 }
 
+static void NativeDesktopOverlay48Test(HWND list,HIMAGELIST original)
+{
+    HIMAGELIST source=ImageList_Create(32,32,ILC_COLOR|ILC_MASK,2,1);
+    LVITEMA item; UINT state; RECT area={0,0,48,48},bounds; PaintBuffer expected={0};
+    HDC screen,dc; HICON composite; int x,y,matches=0;
+    Check(source && ImageList_AddIcon(source,LoadIconA(NULL,IDI_APPLICATION))==0 &&
+        ImageList_AddIcon(source,LoadIconA(NULL,IDI_EXCLAMATION))==1 && ImageList_SetOverlayImage(source,1,1),
+        "create a private native-size image list with a distinctive overlay through public Win95 APIs");
+    ZeroMemory(&item,sizeof(item)); item.mask=LVIF_IMAGE; item.iItem=0;
+    Check(ListView_GetItem(list,&item),"borrow the disposable view's original image index");
+    state=ListView_GetItemState(list,0,LVIS_OVERLAYMASK|LVIS_SELECTED|LVIS_DROPHILITED);
+    SendMessageA(list,WM_SETREDRAW,FALSE,0);
+    ListView_SetItemState(list,0,INDEXTOOVERLAYMASK(1),LVIS_OVERLAYMASK|LVIS_SELECTED|LVIS_DROPHILITED);
+    { LVITEMA replacement=item; replacement.iImage=0; ListView_SetItem(list,&replacement); }
+    ListView_SetImageList(list,source,LVSIL_NORMAL);
+    SendMessageA(list,WM_SETREDRAW,TRUE,0);
+    RedrawWindow(list,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_UPDATENOW);
+    Check(ListView_GetItemRect(list,0,&bounds,LVIR_ICON) && bounds.right-bounds.left==48,
+        "the native control retains 48px icon geometry while its source list is replaced");
+    screen=GetDC(list); dc=PaintBufferBegin(&expected,screen,&area);
+    Check(dc!=screen,"allocate independent expected overlay artwork");
+    FillRect(dc,&area,(HBRUSH)(COLOR_DESKTOP+1));
+    composite=ImageList_GetIcon(source,0,ILD_TRANSPARENT|INDEXTOOVERLAYMASK(1));
+    Check(composite && DrawIconEx(dc,0,0,composite,48,48,0,NULL,DI_NORMAL),"draw the system-composed overlay directly as a 48px reference");
+    for(y=0;y<48;++y) for(x=0;x<48;++x)
+        if(GetPixel(dc,x,y)==GetPixel(screen,bounds.left+x,bounds.top+y)) ++matches;
+    ListView_SetItemState(list,0,LVIS_DROPHILITED,LVIS_DROPHILITED);
+    RedrawWindow(list,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_UPDATENOW);
+    { int tinted=0;
+      for(y=0;y<48;++y) for(x=0;x<48;++x)
+          if(GetPixel(dc,x,y)!=GetPixel(screen,bounds.left+x,bounds.top+y)) ++tinted;
+      Check(tinted>48*48/10,"drop highlighting tints the 48px overlay composite as well as its base icon"); }
+    DestroyIcon(composite); ReleaseDC(list,screen); PaintBufferFree(&expected);
+    ListView_SetImageList(list,original,LVSIL_NORMAL);
+    ListView_SetItem(list,&item); ListView_SetItemState(list,0,state,LVIS_OVERLAYMASK|LVIS_SELECTED|LVIS_DROPHILITED);
+    ImageList_Destroy(source);
+    Check(matches>48*48*9/10,"48px buffered desktop icons retain the real overlay artwork and transparent corners");
+}
 static void NativeDesktopIconSizeTests(void)
 {
     HRESULT ole=OleInitialize(NULL); NativeView *view; HWND parent,list; RECT area={0,0,400,300};
@@ -301,21 +339,28 @@ static void NativeDesktopIconSizeTests(void)
     GetTempPathA(MAX_PATH,directory); Check(GetTempFileNameA(directory,"EIS",0,profile),"reserve an isolated icon-size profile");
     parent=CreateWindowA("STATIC","Desktop icon sizes",WS_OVERLAPPEDWINDOW|WS_VISIBLE|WS_CLIPCHILDREN,0,0,420,340,NULL,NULL,GetModuleHandleA(NULL),NULL);
     view=NativeViewCreateEx(parent,NULL,TRUE,0,&area); list=NativeViewList(view);
-    Check(view && list,"create a real Shell32 desktop for 16/32px switching");
+    Check(view && list,"create a real Shell32 desktop for 32/48px switching");
     NativeViewConfigureDesktop(view,profile,FALSE,FALSE,FALSE,80,80,32); DesktopPump();
     large=ListView_GetImageList(list,LVSIL_NORMAL); small=ListView_GetImageList(list,LVSIL_SMALL); count=ListView_GetItemCount(list);
     Check(ImageList_GetIconSize(large,&width,&height) && width==32 && height==32 && count>0,"native large desktop artwork is 32 by 32 pixels");
     ListView_GetItemPosition(list,0,&before); ListView_GetItemText(list,0,0,name,MAX_PATH);
-    NativeViewConfigureDesktop(view,profile,FALSE,FALSE,FALSE,80,80,16); DesktopPump(); ListView_GetItemPosition(list,0,&after);
-    Check(ListView_GetImageList(list,LVSIL_NORMAL)==small && ImageList_GetIconSize(small,&width,&height) && width==16 && height==16 &&
+    NativeViewConfigureDesktop(view,profile,FALSE,FALSE,FALSE,80,80,48); DesktopPump(); ListView_GetItemPosition(list,0,&after);
+    Check(ListView_GetImageList(list,LVSIL_NORMAL)!=large && ListView_GetImageList(list,LVSIL_NORMAL)!=small && ImageList_GetIconSize(ListView_GetImageList(list,LVSIL_NORMAL),&width,&height) && width==48 && height==48 &&
         before.x==after.x && before.y==after.y && (GetWindowLongA(list,GWL_STYLE)&LVS_TYPEMASK)==LVS_ICON,
-        "small desktop icons keep native labels below and preserve their manual coordinates");
+        "48px desktop icons keep native labels below and preserve their manual coordinates");
     Check(ImageList_GetIconSize(large,&width,&height) && width==32 && height==32,"desktop size selection never resizes the shared large image list");
     ListView_SetImageList(list,large,LVSIL_NORMAL);
-    Check(ListView_GetImageList(list,LVSIL_NORMAL)==small,"a native large-list replacement preserves the selected small desktop size");
+    Check(ListView_GetImageList(list,LVSIL_NORMAL)!=large,"a native large-list replacement preserves the selected 48px desktop size");
     NativeViewRefresh(view); DesktopPump();
-    Check(ImageList_GetIconSize(ListView_GetImageList(list,LVSIL_NORMAL),&width,&height) && width==16 && height==16 && ListView_GetItemCount(list)==count,
+    Check(ImageList_GetIconSize(ListView_GetImageList(list,LVSIL_NORMAL),&width,&height) && width==48 && height==48 && ListView_GetItemCount(list)==count,
         "F5 retains the selected desktop icon size and the same namespace objects");
+    NativeDesktopOverlay48Test(list,large);
+    ListView_SetItemState(list,0,LVIS_SELECTED,LVIS_SELECTED);
+    DesktopBegin(NativeViewWindow(view),list,0);
+    Check(ImageList_GetDragImage(NULL,NULL) && DesktopGhostIsTransparent(list),
+        "48px desktop dragging retains scaled native icon pixels and a transparent smooth ghost");
+    SendMessageA(list,WM_KEYDOWN,VK_ESCAPE,0); ListView_SetItemState(list,0,0,LVIS_SELECTED);
+    Check(!ImageList_GetDragImage(NULL,NULL),"cancelling a 48px desktop drag releases the ghost without moving the icon");
     NativeViewConfigureDesktop(view,profile,FALSE,FALSE,FALSE,80,80,32); DesktopPump();
     /* Refresh may reorder native item indices. Follow the same named object. */
     ZeroMemory(&find,sizeof(find)); find.flags=LVFI_STRING; find.psz=name; index=ListView_FindItem(list,-1,&find);
@@ -326,6 +371,9 @@ static void NativeDesktopIconSizeTests(void)
     }
     Check(ImageList_GetIconSize(ListView_GetImageList(list,LVSIL_NORMAL),&width,&height) && width==32 && height==32 &&
         before.x==after.x && before.y==after.y,"large desktop icons restore native 32px artwork without resetting positions");
+    NativeViewConfigureDesktop(view,profile,FALSE,FALSE,FALSE,80,80,16); DesktopPump();
+    Check(ListView_GetImageList(list,LVSIL_NORMAL)==large,"deprecated 16px desktop requests fall back to native 32px icons");
+    Check(ImageList_GetIconSize(small,&width,&height) && width==16 && height==16,"desktop sizing leaves the shared small image list intact");
     NativeViewDestroy(view); DestroyWindow(parent);
     lstrcpyA(sidecar,profile); lstrcatA(sidecar,".DIP"); DeleteFileA(sidecar); DeleteFileA(profile);
     OleUninitialize();

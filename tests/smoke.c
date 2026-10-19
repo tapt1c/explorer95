@@ -1308,6 +1308,11 @@ static HWND StartSettingsTests(HWND bar, HWND menu, const char *settings)
     GetWindowRect(properties, &rect);
     Check(rect.left >= 0 && rect.top >= 0 && rect.right <= GetSystemMetrics(SM_CXSCREEN) && rect.bottom <= GetSystemMetrics(SM_CYSCREEN), "environment settings fit the screen");
     Check(!IsWindowEnabled(GetDlgItem(properties, 0x3021)), "Apply starts disabled");
+    desktop=FindWindowA("Explorer95.Desktop",NULL); desktopView=FindWindowExA(desktop,NULL,NULL,NULL);
+    Check(SendDlgItemMessageA(properties,ID_DESKTOPSIZE,CB_GETCOUNT,0,0)==2 &&
+        SendDlgItemMessageA(properties,ID_DESKTOPSIZE,CB_GETCURSEL,0,0)==0 &&
+        DesktopIconPixels(FindWindowExA(desktopView,NULL,WC_LISTVIEWA,NULL))==32,
+        "legacy 16px desktop profiles migrate to 32px and settings offer only the two supported sizes");
     SettingsPaintingTests(properties, bar);
     WritePrivateProfileStringA("Explorer", "SettingsSentinel", "keep", settings);
     { UINT initialMaximum;
@@ -1385,21 +1390,21 @@ static HWND StartSettingsTests(HWND bar, HWND menu, const char *settings)
     Check(IsWindowVisible(desktopView), "desktop icons can be restored from the same window");
     {
         HWND list=FindWindowExA(desktopView,NULL,WC_LISTVIEWA,NULL);
-        SendDlgItemMessageA(properties,ID_DESKTOPSIZE,CB_SETCURSEL,0,0);
+        SendDlgItemMessageA(properties,ID_DESKTOPSIZE,CB_SETCURSEL,1,0);
         SendMessageA(properties,WM_COMMAND,MAKEWPARAM(ID_DESKTOPSIZE,CBN_SELCHANGE),(LPARAM)GetDlgItem(properties,ID_DESKTOPSIZE));
         SendMessageA(properties,WM_COMMAND,0x3021,0); PumpFor(400);
-        Check(GetPrivateProfileIntA("Desktop","IconSize",0,settings)==16 && DesktopIconPixels(list)==16 &&
-            GetPrivateProfileIntA("Start","LargeIcons",-1,settings)==1,"Desktop Apply selects native 16px icons independently of large Start icons");
-        SaveScreen("build\\desktop-icons-small.bmp");
-        SendDlgItemMessageA(properties,ID_DESKTOPSIZE,CB_SETCURSEL,1,0); SendMessageA(properties,WM_COMMAND,IDCANCEL,0);
+        Check(GetPrivateProfileIntA("Desktop","IconSize",0,settings)==48 && DesktopIconPixels(list)==48 &&
+            GetPrivateProfileIntA("Start","LargeIcons",-1,settings)==1,"Desktop Apply selects scaled 48px icons independently of large Start icons");
+        SaveScreen("build\\desktop-icons-48.bmp");
+        SendDlgItemMessageA(properties,ID_DESKTOPSIZE,CB_SETCURSEL,0,0); SendMessageA(properties,WM_COMMAND,IDCANCEL,0);
         properties=OpenSettings(bar); SettingsPage(properties,2,-1);
-        Check(SendDlgItemMessageA(properties,ID_DESKTOPSIZE,CB_GETCURSEL,0,0)==0 && DesktopIconPixels(list)==16,
-            "Cancel discards a desktop size draft while preserving the applied 16px mode");
-        SendMessageA(desktop,WM_COMMAND,0x8061,0); PumpFor(400);
-        Check(GetPrivateProfileIntA("Desktop","IconSize",0,settings)==32 && DesktopIconPixels(list)==32 &&
-            SendDlgItemMessageA(properties,ID_DESKTOPSIZE,CB_GETCURSEL,0,0)==1,"the desktop Icon Size command restores 32px icons and synchronizes an open settings window");
-        SaveScreen("build\\desktop-icons-large.bmp");
+        Check(SendDlgItemMessageA(properties,ID_DESKTOPSIZE,CB_GETCURSEL,0,0)==1 && DesktopIconPixels(list)==48,
+            "Cancel discards a desktop size draft while preserving the applied 48px mode");
         SendMessageA(desktop,WM_COMMAND,0x8060,0); PumpFor(400);
+        Check(GetPrivateProfileIntA("Desktop","IconSize",0,settings)==32 && DesktopIconPixels(list)==32 &&
+            SendDlgItemMessageA(properties,ID_DESKTOPSIZE,CB_GETCURSEL,0,0)==0,"the desktop Icon Size command restores 32px icons and synchronizes an open settings window");
+        SaveScreen("build\\desktop-icons-32.bmp");
+        SendMessageA(desktop,WM_COMMAND,0x8061,0); PumpFor(400);
     }
     SetDlgItemInt(properties,1032,96,FALSE); SetDlgItemInt(properties,1033,112,FALSE);
     SendDlgItemMessageA(properties,1030,BM_SETCHECK,BST_CHECKED,0); SendDlgItemMessageA(properties,1031,BM_SETCHECK,BST_CHECKED,0);
@@ -1750,6 +1755,7 @@ void start(void)
     if (group == GROUP_FULL || group == GROUP_CORE) { PaintTests(); ConfigTests(settingsDir); DesktopIconTests(settingsDir); FolderHandlerTests(module,settings); FolderSelectionTests(); DragDataTests(); NativeViewMessageTests(); TrayMirrorTests(); TrayMirrorCrossProcessTests(); }
     if (group == GROUP_CORE) goto cleanup;
     if (group == GROUP_MENU) NativeDesktopIconSizeTests();
+    if(group==GROUP_MENU || group==GROUP_FULL) WritePrivateProfileStringA("Desktop","IconSize","16",settings);
     {
         LPITEMIDLIST programs; char directory[MAX_PATH];
         Check(SUCCEEDED(OleInitialize(NULL)),"initialize COM for the installed-program UI fixture");
@@ -1927,7 +1933,7 @@ shutdown:
                 desktopList=FindWindowExA(FindWindowExA(desktopWindow,NULL,"SHELLDLL_DefView",NULL),NULL,WC_LISTVIEWA,NULL);
                 if (!desktopList || !SendMessageA(desktopList,LVM_GETITEMCOUNT,0,0)) PumpFor(20);
             } while ((!desktopList || !SendMessageA(desktopList,LVM_GETITEMCOUNT,0,0)) && GetTickCount()-ready<3000);
-            Check(DesktopIconPixels(desktopList)==16,"the chosen desktop icon size survives a real shell restart");
+            Check(DesktopIconPixels(desktopList)==48,"the chosen desktop icon size survives a real shell restart");
         }
         PostMessageA(bar,WM_CLOSE,0,0);
         Check(WaitForGuiProcess(process.hProcess,5000) == WAIT_OBJECT_0,"icon-only restart exits cleanly");

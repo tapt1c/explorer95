@@ -173,7 +173,7 @@ void PropertiesDesktopLayoutChanged(void)
     SendDlgItemMessageA(env.properties,ID_LOCKICONS,BM_SETCHECK,env.options.lockDesktopIcons ? BST_CHECKED : BST_UNCHECKED,0);
     SendDlgItemMessageA(env.properties,ID_SNAPICONS,BM_SETCHECK,env.options.snapDesktopIcons ? BST_CHECKED : BST_UNCHECKED,0);
     SetDlgItemInt(env.properties,ID_GRIDX,env.options.desktopGridX,FALSE); SetDlgItemInt(env.properties,ID_GRIDY,env.options.desktopGridY,FALSE);
-    SendDlgItemMessageA(env.properties,ID_DESKTOPSIZE,CB_SETCURSEL,env.options.desktopIconSize == 16 ? 0 : 1,0);
+    SendDlgItemMessageA(env.properties,ID_DESKTOPSIZE,CB_SETCURSEL,env.options.desktopIconSize == 48 ? 1 : 0,0);
     InvalidateRect(GetDlgItem(env.properties,ID_PREVIEW_DESKTOP),NULL,FALSE);
     loading = wasLoading;
 }
@@ -266,9 +266,9 @@ static void Preview(const DRAWITEMSTRUCT *item)
     } else {
         SetRect(&part, 4, 4, width - 4, height - 4); FillRect(dc, &part, (HBRUSH)(COLOR_DESKTOP + 1));
         if (Checked(env.properties, ID_DESKTOPICONS)) {
-            int size = SendDlgItemMessageA(env.properties, ID_DESKTOPSIZE, CB_GETCURSEL, 0, 0) == 0 ? 16 : 32;
-            HICON icon = size == 32 ? EnvLargeSystemIcon(16) : EnvSystemIcon(16);
-            DrawIconEx(dc, 16, 15, icon, size, size, 0, NULL, DI_NORMAL); if (icon) DestroyIcon(icon);
+            int size = SendDlgItemMessageA(env.properties, ID_DESKTOPSIZE, CB_GETCURSEL, 0, 0) == 1 ? 48 : 32;
+            HICON icon = EnvLargeSystemIcon(16);
+            DrawIconEx(dc, 16, 6, icon, size, size, 0, NULL, DI_NORMAL); if (icon) DestroyIcon(icon);
         }
         int barHeight = Checked(env.properties,ID_TASKTILES) ? 44 : Checked(env.properties, ID_LARGE) ? 40 : 28;
         SetRect(&part, 4, height - 4 - barHeight, width - 4, height - 4); PreviewTaskbar(dc, &part, FALSE);
@@ -319,7 +319,7 @@ static BOOL Apply(HWND window)
     options.taskTiles=Checked(window,ID_TASKTILES);
     options.group = Checked(window, ID_GROUP); options.hideInactive = Checked(window, ID_INACTIVE);
     options.desktopIcons = Checked(window, ID_DESKTOPICONS); options.autoArrange = Checked(window, ID_AUTOARRANGE);
-    options.desktopIconSize = SendDlgItemMessageA(window, ID_DESKTOPSIZE, CB_GETCURSEL, 0, 0) == 0 ? 16 : 32;
+    options.desktopIconSize = SendDlgItemMessageA(window, ID_DESKTOPSIZE, CB_GETCURSEL, 0, 0) == 1 ? 48 : 32;
     options.lockDesktopIcons = Checked(window, ID_LOCKICONS); options.snapDesktopIcons = Checked(window, ID_SNAPICONS);
     options.desktopGridX = GetDlgItemInt(window, ID_GRIDX, &valid, FALSE);
     if (!valid || options.desktopGridX < 64 || options.desktopGridX > 200) { MessageBoxA(window, "Horizontal grid spacing must be 64 to 200 pixels.", "Explorer95 Settings", MB_OK | MB_ICONEXCLAMATION); return FALSE; }
@@ -363,11 +363,11 @@ static LRESULT CALLBACK PropertiesProc(HWND window, UINT message, WPARAM wp, LPA
         Control(window, SETTINGS_TASKBAR, "EDIT", "", WS_BORDER | WS_TABSTOP | ES_NUMBER, ID_WIDTH, 144, 312, 64, 23); SetDlgItemInt(window, ID_WIDTH, env.options.taskWidth, FALSE); EnableWindow(GetDlgItem(window,ID_WIDTH),!env.options.taskTiles);
         Control(window, SETTINGS_TASKBAR, "STATIC", "80 - 300 pixels", 0, 0, 222, 316, 260, 20);
         StartSettingsBegin(); StartSettingsCreate(window);
-        Control(window, SETTINGS_DESKTOP, "STATIC", "", SS_OWNERDRAW, ID_PREVIEW_DESKTOP, 30, 52, 454, 88);
-        Checkbox(window, SETTINGS_DESKTOP, "Show desktop icons", ID_DESKTOPICONS, env.options.desktopIcons, 30, 150, 220);
-        Checkbox(window, SETTINGS_DESKTOP, "Auto-arrange icons", ID_AUTOARRANGE, env.options.autoArrange, 260, 150, 224);
-        Checkbox(window, SETTINGS_DESKTOP, "Lock icon positions", ID_LOCKICONS, env.options.lockDesktopIcons, 30, 178, 220);
-        Checkbox(window, SETTINGS_DESKTOP, "Snap to grid", ID_SNAPICONS, env.options.snapDesktopIcons, 260, 178, 224);
+        Control(window, SETTINGS_DESKTOP, "STATIC", "", SS_OWNERDRAW, ID_PREVIEW_DESKTOP, 30, 52, 454, 104);
+        Checkbox(window, SETTINGS_DESKTOP, "Show desktop icons", ID_DESKTOPICONS, env.options.desktopIcons, 30, 160, 220);
+        Checkbox(window, SETTINGS_DESKTOP, "Auto-arrange icons", ID_AUTOARRANGE, env.options.autoArrange, 260, 160, 224);
+        Checkbox(window, SETTINGS_DESKTOP, "Lock icon positions", ID_LOCKICONS, env.options.lockDesktopIcons, 30, 184, 220);
+        Checkbox(window, SETTINGS_DESKTOP, "Snap to grid", ID_SNAPICONS, env.options.snapDesktopIcons, 260, 184, 224);
         Control(window, SETTINGS_DESKTOP, "STATIC", "Horizontal grid:", 0, 0, 30, 212, 114, 20);
         Control(window, SETTINGS_DESKTOP, "EDIT", "", WS_BORDER | WS_TABSTOP | ES_NUMBER, ID_GRIDX, 150, 208, 62, 23);
         SetDlgItemInt(window, ID_GRIDX, env.options.desktopGridX, FALSE);
@@ -376,8 +376,8 @@ static LRESULT CALLBACK PropertiesProc(HWND window, UINT message, WPARAM wp, LPA
         SetDlgItemInt(window, ID_GRIDY, env.options.desktopGridY, FALSE);
         Control(window, SETTINGS_DESKTOP, "STATIC", "Icon size:", 0, 0, 30, 242, 114, 20);
         control = Control(window, SETTINGS_DESKTOP, "COMBOBOX", "", WS_TABSTOP | CBS_DROPDOWNLIST, ID_DESKTOPSIZE, 150, 236, 144, 100);
-        SendMessageA(control, CB_ADDSTRING, 0, (LPARAM)"Small (16 x 16)"); SendMessageA(control, CB_ADDSTRING, 0, (LPARAM)"Large (32 x 32)");
-        SendMessageA(control, CB_SETCURSEL, env.options.desktopIconSize == 16 ? 0 : 1, 0);
+        SendMessageA(control, CB_ADDSTRING, 0, (LPARAM)"Normal (32 x 32)"); SendMessageA(control, CB_ADDSTRING, 0, (LPARAM)"Large (48 x 48)");
+        SendMessageA(control, CB_SETCURSEL, env.options.desktopIconSize == 48 ? 1 : 0, 0);
         Control(window, SETTINGS_DESKTOP, "STATIC", "Grid: 64-200 pixels", 0, 0, 310, 242, 174, 20);
         Control(window, SETTINGS_DESKTOP, "STATIC", "Shutdown dialog style:", 0, 0, 30, 268, 170, 20);
         control = Control(window, SETTINGS_DESKTOP, "COMBOBOX", "", WS_TABSTOP | CBS_DROPDOWNLIST, ID_SHUTDOWNSTYLE, 206, 264, 278, 100);

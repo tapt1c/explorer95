@@ -22,6 +22,7 @@ struct DesktopIcons {
     int dragCount, dragAnchor;
     POINT start, delta;
     HIMAGELIST ghost;
+    HIMAGELIST sourceImages;
     BOOL ghostEntered;
     BOOL refreshing, redrawPaused, nativeRedrawPaused, changingRedraw;
 };
@@ -429,7 +430,13 @@ static HIMAGELIST CreateGhost(DesktopIcons *icons, POINT *origin)
         ZeroMemory(&item,sizeof(item)); item.mask = LVIF_IMAGE | LVIF_STATE; item.iItem = index; item.stateMask = LVIS_OVERLAYMASK;
         if (!SendMessageA(icons->list,LVM_GETITEMA,0,(LPARAM)&item) || item.iImage < 0 ||
             !ListView_GetItemRect(icons->list,index,&iconRect,LVIR_ICON) || !ListView_GetItemRect(icons->list,index,&label,LVIR_LABEL)) goto done;
-        if (!ImageList_Draw(native,item.iImage,colorDC,iconRect.left-bounds.left,iconRect.top-bounds.top,ILD_TRANSPARENT | (item.state & LVIS_OVERLAYMASK))) goto done;
+        if(icons->sourceImages && icons->sourceImages!=native) {
+            HICON icon=ImageList_GetIcon(icons->sourceImages,item.iImage,ILD_TRANSPARENT|(item.state&LVIS_OVERLAYMASK));
+            BOOL drawn=icon && DrawIconEx(colorDC,iconRect.left-bounds.left,iconRect.top-bounds.top,icon,
+                iconRect.right-iconRect.left,iconRect.bottom-iconRect.top,0,NULL,DI_NORMAL);
+            if(icon) DestroyIcon(icon);
+            if(!drawn) goto done;
+        } else if (!ImageList_Draw(native,item.iImage,colorDC,iconRect.left-bounds.left,iconRect.top-bounds.top,ILD_TRANSPARENT | (item.state & LVIS_OVERLAYMASK))) goto done;
         label.left -= bounds.left; label.right -= bounds.left; label.top -= bounds.top; label.bottom -= bounds.top;
         if (Name(icons->list,index,text)) {
             PaintTextShadow(colorDC,text,&label,DT_CENTER | DT_WORDBREAK | DT_NOPREFIX);
@@ -602,3 +609,5 @@ void DesktopIconsSetFileDrag(DesktopIcons *icons, void *context, BOOL (*target)(
 {
     if(icons) { icons->fileContext=context; icons->fileTarget=target; icons->fileBegin=begin; }
 }
+void DesktopIconsSetSourceImages(DesktopIcons *icons,HIMAGELIST images)
+{ if(icons) icons->sourceImages=images; }

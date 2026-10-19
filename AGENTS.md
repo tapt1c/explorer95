@@ -591,23 +591,34 @@ explorer95.exe --settings="C:\EX95TEST\Explorer95.ini"
   с `DesktopIcons`, а `desktop_icons` отвечает за перенос, сетку и файл позиций.
   Не переносите эту логику в файловый Проводник и не заменяйте системные значки
   собственным списком файлов: должны сохраниться виртуальные объекты Shell32.
-  `[Desktop] IconSize` выбирает 16 или 32, default/неверное значение — 32; настройка
-  независима от Start/Quick Launch/tray. Desktop page и Icon Layout → Icon Size
-  используют один параметр, Apply/Cancel и общий preview.
-  NativeViewConfigureDesktop принимает размер последним аргументом. Для малого
-  режима native Small image list подставляется только в NORMAL-слот desktop ListView:
-  стиль остаётся LVS_ICON и подписи остаются снизу. Системные Small/Large списки
-  имеют одинаковые индексы; их нельзя масштабировать/уничтожать как собственные.
-  Сохраняйте настоящие native handles при LVM_SETIMAGELIST из Shell32, включая F5,
-  и политику владения. Перед teardown восстанавливайте NORMAL и исходный
-  LVS_SHAREIMAGELISTS. LVM_SETIMAGELIST входит в desktopMutationDepth.
-  При смене размера контроллер раскладки удерживает redraw и восстанавливает
-  позиции существующим refresh-путём. Snap/Grid центрируется по фактической ширине
-  активного image list, не всегда SM_CXICON. Ghost использует тот же NORMAL-список.
-  В тестах дождитесь восстановления DesktopIcons (DesktopPump), а после F5
-  сопоставляйте объект по имени: Shell32 может поменять его индекс. Чужой HIMAGELIST
-  нельзя передавать ImageList API из smoke-процесса; читайте LVIR_ICON через память
-  процесса приложения. ImageList_GetIconSize — исходный API Comctl32 4.0/Win95.
+  `[Desktop] IconSize` выбирает 32 или 48, default/16/неверное значение — 32;
+  настройка независима от Start/Quick Launch/tray. Desktop page и Icon Layout →
+  Icon Size используют один параметр, Apply/Cancel и общий preview.
+  NativeViewConfigureDesktop принимает размер последним аргументом. Для 32px
+  NORMAL использует исходный системный список; для 48px NativeView владеет
+  отдельным ImageList 48×48 с теми же индексами. ImageList_GetIcon/AddIcon
+  копируют и масштабируют штатные изображения; общие списки нельзя изменять
+  или уничтожать. Копия дополняется при росте source list и обновляется после
+  F5/LVM_UPDATE/замены native NORMAL. Ограничение — 4096 системных изображений.
+  У исходной Win95 нет публичного запроса overlay mappings. PaintDesktopOverlays
+  получает composite HICON из исходного списка с реальным LVIS_OVERLAYMASK и
+  выводит его в тот же buffered frame, учитывая selection/cut. Нельзя терять
+  стрелки ярлыков или вводить зависимость от ImageList_GetOverlayImage/IE4.
+  DesktopIconsSetSourceImages передаёт заимствованный исходный список для ghost:
+  при 48px его composite рисуется DrawIconEx в фактических размерах LVIR_ICON.
+  Сохраняйте native handle при LVM_SETIMAGELIST из Shell32, включая F5, и возвращайте
+  Shell32 прежний native handle вместо своей копии. Перед teardown восстанавливайте
+  NORMAL и исходный LVS_SHAREIMAGELISTS; свои 48px списки освобождайте отдельно.
+  LVM_SETIMAGELIST входит в desktopMutationDepth. При смене размера контроллер
+  раскладки удерживает redraw и восстанавливает позиции существующим refresh-путём.
+  Snap/Grid центрируется по ширине активного image list, не всегда SM_CXICON.
+  В тестах дождитесь DesktopIcons restoration (DesktopPump), после F5 находите
+  объект по имени: Shell32 может поменять индекс. Чужой HIMAGELIST нельзя передавать
+  ImageList API из smoke-процесса; читайте LVIR_ICON через память приложения.
+  NativeDesktopOverlay48Test использует только свой временный source list,
+  восстанавливает исходные изображения/состояние и сравнивает buffered результат
+  с независимо нарисованным системным composite, включая прозрачные углы.
+  ImageList_Remove/GetIconSize/ReplaceIcon — API исходной Comctl32 4.0/Win95.
 - Подписи desktop остаются текстом системного ListView. Desktop WM_ERASEBKGND
   только возвращает TRUE: он не должен стирать готовые значки или оставлять
   на экране один фон с тенями до следующего WM_PAINT. В WM_PAINT NativeView

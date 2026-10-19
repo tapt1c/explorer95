@@ -40,7 +40,8 @@ struct NativeView {
     BOOL desktopRefreshing, desktopRefreshPending, desktopRefreshPosted;
     int desktopMutationDepth, desktopCallDepth;
     DesktopIcons *icons;
-    HIMAGELIST desktopLargeImages, desktopSmallImages;
+    HIMAGELIST desktopLargeImages, desktopScaledImages, desktopOverlayImages;
+    BOOL desktopImagesDirty;
     int desktopIconSize;
     BOOL sharedDesktopImages;
 };
@@ -48,6 +49,51 @@ struct NativeView {
 static EnvironmentHost host;
 static const char property[] = "Explorer95.NativeView";
 static BOOL OpenSelection(NativeView *view);
+/* Win95 has a 32px system list. Keep its indices in a private, scaled list;
+ * never resize or destroy Shell32's shared artwork. AddIcon scales to 48px. */
+static BOOL DesktopImages48(NativeView *view)
+{
+    int count,i; HICON icon;
+    if(!view->desktopLargeImages) return FALSE;
+    count=ImageList_GetImageCount(view->desktopLargeImages);
+    if(count<0 || count>4096) return FALSE;
+    if(!view->desktopScaledImages)
+        view->desktopScaledImages=ImageList_Create(48,48,ILC_COLOR|ILC_MASK,count,16);
+    if(!view->desktopScaledImages) return FALSE;
+    if(view->desktopImagesDirty) { ImageList_RemoveAll(view->desktopScaledImages); view->desktopImagesDirty=FALSE; }
+    for(i=ImageList_GetImageCount(view->desktopScaledImages);i<count;++i) {
+        int added;
+        icon=ImageList_GetIcon(view->desktopLargeImages,i,ILD_TRANSPARENT);
+        if(!icon) return FALSE;
+        added=ImageList_AddIcon(view->desktopScaledImages,icon); DestroyIcon(icon);
+        if(added!=i) return FALSE;
+    }
+    return TRUE;
+}
+/* Overlay mappings belong to the system list and have no Win95 query API.
+ * Obtain the real composite through public ImageList_GetIcon, then scale it
+ * over the native base icon inside the same buffered frame. */
+static void PaintDesktopOverlays(NativeView *view,HDC dc)
+{
+    RECT clip,iconRect; int i,count;
+    if(view->desktopIconSize!=48 || !view->desktopLargeImages || !dc || GetClipBox(dc,&clip)<=NULLREGION) return;
+    count=ListView_GetItemCount(view->list);
+    for(i=0;i<count;++i) {
+        LVITEMA item; HICON icon; UINT flags=ILD_TRANSPARENT;
+        ZeroMemory(&item,sizeof(item)); item.mask=LVIF_IMAGE|LVIF_STATE; item.iItem=i;
+        item.stateMask=LVIS_OVERLAYMASK|LVIS_SELECTED|LVIS_CUT|LVIS_DROPHILITED;
+        if(!SendMessageA(view->list,LVM_GETITEMA,0,(LPARAM)&item) || !(item.state&LVIS_OVERLAYMASK) || item.iImage<0 ||
+           !ListView_GetItemRect(view->list,i,&iconRect,LVIR_ICON) || (iconRect.right<=clip.left || iconRect.left>=clip.right || iconRect.bottom<=clip.top || iconRect.top>=clip.bottom)) continue;
+        icon=ImageList_GetIcon(view->desktopLargeImages,item.iImage,ILD_TRANSPARENT|(item.state&LVIS_OVERLAYMASK));
+        if(!icon) continue;
+        if(!view->desktopOverlayImages) view->desktopOverlayImages=ImageList_Create(48,48,ILC_COLOR|ILC_MASK,1,1);
+        if(view->desktopOverlayImages && ImageList_ReplaceIcon(view->desktopOverlayImages,ImageList_GetImageCount(view->desktopOverlayImages) ? 0 : -1,icon)>=0) {
+            if(item.state&(LVIS_SELECTED|LVIS_CUT|LVIS_DROPHILITED)) flags|=ILD_BLEND50;
+            ImageList_Draw(view->desktopOverlayImages,0,dc,iconRect.left,iconRect.top,flags);
+        }
+        DestroyIcon(icon);
+    }
+}
 static BOOL DesktopBusy(NativeView *view)
 {
     return view->paintingDesktop || view->desktopMutationDepth || view->desktopCallDepth || view->fileDragging || view->desktopRefreshing;
@@ -319,11 +365,13 @@ static void PaintDesktopFrame(NativeView *view, HWND window)
     GetClientRect(window,&area);
     dc=PaintBufferBegin(&view->desktopFrame,target,&area); saved=SaveDC(dc);
     if(saved) IntersectClipRect(dc,paint.rcPaint.left,paint.rcPaint.top,paint.rcPaint.right,paint.rcPaint.bottom);
+    if(view->desktopIconSize==48) DesktopImages48(view);
     PaintBackground(view,dc,window); PaintDesktopLabelShadows(window,dc);
     /* Call the saved shell/control procedure rather than our WM_PAINT entry.
      * A control that forwards printing as WM_PAINT with an HDC still reaches
      * its own procedure through the nonzero-wParam path below. */
     CallWindowProcA(view->oldList,window,WM_PRINTCLIENT,(WPARAM)dc,PRF_CLIENT);
+    PaintDesktopOverlays(view,dc);
     if(saved) RestoreDC(dc,saved);
     if(dc!=target) PaintBufferEnd(&view->desktopFrame,target,&paint.rcPaint);
     EndPaint(window,&paint); view->paintingDesktop=FALSE;
@@ -576,16 +624,18 @@ static LRESULT CALLBACK Subclass(HWND window, UINT message, WPARAM wp, LPARAM lp
         if(desktopRedraw && !wp) view->desktopRedrawDisabled=TRUE;
         if (refresh) ++view->operationDepth;
         BeginDesktopCall(view);
-        LVITEMA mainItem; LPARAM forwarded=lp;
-        /* Shell32's two system lists share item indices. Select their native
-         * 16/32px artwork only for this desktop, keeping icon-view labels below.
-         * Retain new shell lists across F5 without resizing shared resources. */
+        LVITEMA mainItem; LPARAM forwarded=lp; HIMAGELIST previousImages=view->desktopLargeImages;
+        /* Retain new native lists across F5 and rebuild only our 48px copy. */
         if (view->desktop && window == view->list && message == LVM_SETIMAGELIST) {
             if (wp == LVSIL_NORMAL) {
-                if ((HIMAGELIST)lp != view->desktopSmallImages) view->desktopLargeImages = (HIMAGELIST)lp;
-                if (view->desktopIconSize == 16 && lp && view->desktopSmallImages) forwarded = (LPARAM)view->desktopSmallImages;
-            } else if (wp == LVSIL_SMALL) view->desktopSmallImages = (HIMAGELIST)lp;
+                if ((HIMAGELIST)lp != view->desktopScaledImages) {
+                    view->desktopLargeImages = (HIMAGELIST)lp; view->desktopImagesDirty=TRUE;
+                }
+                if (view->desktopIconSize == 48 && lp && DesktopImages48(view)) forwarded = (LPARAM)view->desktopScaledImages;
+                if(view->icons) DesktopIconsSetSourceImages(view->icons,view->desktopLargeImages);
+            }
         }
+        if(view->desktop && window==view->list && message==LVM_UPDATE) view->desktopImagesDirty=TRUE;
         /* Item data belongs to the main item. Some installed views leave
          * iSubItem unspecified in a data-only update (Wine's rename path
          * does so after releasing the old data). Never turn that into a
@@ -598,11 +648,12 @@ static LRESULT CALLBACK Subclass(HWND window, UINT message, WPARAM wp, LPARAM lp
             forwarded=(LPARAM)&mainItem;
         }
         LRESULT result = CallWindowProcA(original, window, message, wp, forwarded);
-        if (view->desktop && window == view->list && message == LVM_SETIMAGELIST && wp == LVSIL_SMALL &&
-            view->desktopIconSize == 16 && lp) {
-            CallWindowProcA(original, window, LVM_SETIMAGELIST, LVSIL_NORMAL, lp);
-            InvalidateRect(window, NULL, TRUE);
-        }
+        if(view->desktop && window==view->list && message==LVM_SETIMAGELIST && wp==LVSIL_NORMAL &&
+           (HIMAGELIST)result==view->desktopScaledImages && view->desktopScaledImages) result=(LRESULT)previousImages;
+        if(view->desktop && window==view->window && message==WM_NOTIFY && view->desktopIconSize==48 &&
+           (((NMHDR *)lp)->code==LVN_GETDISPINFOA || ((NMHDR *)lp)->code==LVN_GETDISPINFOW)) DesktopImages48(view);
+        if(view->desktop && window==view->list && (message==WM_PRINTCLIENT || (message==WM_PAINT && wp)))
+            PaintDesktopOverlays(view,(HDC)wp);
         if(desktopMutation && !--view->desktopMutationDepth) ResumeDesktop(view);
         if(desktopRedraw && wp) {
             view->desktopRedrawDisabled=FALSE; InvalidateRect(window,NULL,TRUE);
@@ -741,7 +792,6 @@ NativeView *NativeViewCreateEx(HWND parent, LPCITEMIDLIST absolute, BOOL desktop
             view->sharedDesktopImages = !!(style & LVS_SHAREIMAGELISTS);
             view->desktopIconSize = 32;
             view->desktopLargeImages = ListView_GetImageList(view->list,LVSIL_NORMAL);
-            view->desktopSmallImages = ListView_GetImageList(view->list,LVSIL_SMALL);
             SetWindowLongA(view->list,GWL_STYLE,style | WS_CLIPCHILDREN | LVS_SHAREIMAGELISTS);
             ReadWallpaper(view);
             ListView_SetBkColor(view->list, CLR_NONE);
@@ -771,6 +821,7 @@ void NativeViewDestroy(NativeView *view)
         if (view->desktop) {
             /* Restore distinct native slots and their original ownership policy
              * before Shell32 tears the view down. Never destroy system lists. */
+            view->desktopIconSize=32;
             CallWindowProcA(view->oldList,view->list,LVM_SETIMAGELIST,LVSIL_NORMAL,(LPARAM)view->desktopLargeImages);
             if (!view->sharedDesktopImages) SetWindowLongA(view->list,GWL_STYLE,GetWindowLongA(view->list,GWL_STYLE) & ~LVS_SHAREIMAGELISTS);
         }
@@ -792,6 +843,8 @@ void NativeViewDestroy(NativeView *view)
     if (view->desktop) SetPropA(view->parent, "Explorer95.ViewDestroyStage", (HANDLE)4);
     if (view->folder) IShellFolder_Release(view->folder);
     if (view->wallpaper) DeleteObject(view->wallpaper);
+    if(view->desktopScaledImages) ImageList_Destroy(view->desktopScaledImages);
+    if(view->desktopOverlayImages) ImageList_Destroy(view->desktopOverlayImages);
     PaintBufferFree(&view->background); PaintBufferFree(&view->desktopFrame);
     Release(&view->browser);
 }
@@ -836,7 +889,7 @@ void NativeViewRefresh(NativeView *view)
     if (view->icons && !DesktopIconsBeginRefresh(view->icons)) {
         view->desktopRefreshing=FALSE; ResumeDesktop(view); return;
     }
-    if (view->desktop) ReadWallpaper(view);
+    if (view->desktop) { ReadWallpaper(view); view->desktopImagesDirty=TRUE; }
     IShellView_Refresh(view->view);
     if (view->recycleBin) RenderTraceShell("recycle.refresh", S_OK, ListView_GetItemCount(view->list), ListView_GetSelectedCount(view->list));
     DesktopIconsEndRefresh(view->icons);
@@ -936,16 +989,17 @@ void NativeViewConfigureDesktop(NativeView *view, const char *profile, BOOL auto
     if (!view->icons) view->icons = DesktopIconsCreate(view->list, profile);
     DesktopIconsConfigure(view->icons, automatic, locked, snap, width, height);
     {
-        HIMAGELIST images = iconSize == 16 ? view->desktopSmallImages : view->desktopLargeImages;
+        HIMAGELIST images = iconSize == 48 ? (DesktopImages48(view) ? view->desktopScaledImages : NULL) : view->desktopLargeImages;
         if (images && ListView_GetImageList(view->list,LVSIL_NORMAL) != images) {
             BOOL held; BeginDesktopCall(view);
             held = DesktopIconsBeginRefresh(view->icons);
-            view->desktopIconSize = iconSize == 16 ? 16 : 32;
+            view->desktopIconSize = iconSize == 48 ? 48 : 32;
             CallWindowProcA(view->oldList,view->list,LVM_SETIMAGELIST,LVSIL_NORMAL,(LPARAM)images);
             if (held) DesktopIconsEndRefresh(view->icons);
             InvalidateRect(view->list,NULL,TRUE); EndDesktopCall(view);
         }
     }
+    DesktopIconsSetSourceImages(view->icons,view->desktopLargeImages);
     view->fileHover=-1; DesktopIconsSetFileDrag(view->icons,view,DesktopFileTarget,DesktopFileDrag);
     if(!view->fileDrop) {
         IDropTarget *native=NULL; HWND owner=FindWindowA("Explorer95.Taskbar",NULL);

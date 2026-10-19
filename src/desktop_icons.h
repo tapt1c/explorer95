@@ -6,6 +6,7 @@ typedef struct DesktopIcons DesktopIcons;
 DesktopIcons *DesktopIconsCreate(HWND list, const char *profile);
 void DesktopIconsDestroy(DesktopIcons *icons);
 void DesktopIconsConfigure(DesktopIcons *icons, BOOL automatic, BOOL locked, BOOL snap, int width, int height);
+void DesktopIconsSetSourceImages(DesktopIcons *icons, HIMAGELIST images);
 BOOL DesktopIconsBeginDrag(DesktopIcons *icons, const NMLISTVIEW *notify);
 BOOL DesktopIconsMessage(DesktopIcons *icons, UINT message, WPARAM wp, LPARAM lp);
 void DesktopIconsChanged(DesktopIcons *icons);

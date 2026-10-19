@@ -20,7 +20,7 @@ ALLOWED = {
                      "RegCreateKeyExA", "RegSetValueExA", "RegDeleteValueA", "RegDeleteKeyA",
                      "RegEnumKeyExA", "RegEnumValueA", "RegQueryInfoKeyA", "RegFlushKey"},
     "comctl32.dll": {"InitCommonControls", "ImageList_Create", "ImageList_Destroy",
-                      "ImageList_AddMasked", "ImageList_GetImageCount", "ImageList_GetIconSize", "ImageList_ReplaceIcon",
+                      "ImageList_AddMasked", "ImageList_GetImageCount", "ImageList_GetIconSize", "ImageList_ReplaceIcon", "ImageList_Remove",
                       # Original Win95 common-controls drag-image API (no IE4+ dependency).
                       "ImageList_GetIcon", "ImageList_BeginDrag", "ImageList_DragEnter", "ImageList_DragMove",
                       "ImageList_DragLeave", "ImageList_EndDrag", "ImageList_Draw", "ImageList_Add"},

@@ -158,7 +158,7 @@ static BOOL SettingsPath(void)
     env.options.snapDesktopIcons = !!GetPrivateProfileIntA("Desktop", "SnapToGrid", FALSE, env.ini);
     env.options.desktopGridX = Clamp(GetPrivateProfileIntA("Desktop", "GridWidth", 80, env.ini), 64, 200);
     env.options.desktopGridY = Clamp(GetPrivateProfileIntA("Desktop", "GridHeight", 80, env.ini), 64, 200);
-    env.options.desktopIconSize = GetPrivateProfileIntA("Desktop", "IconSize", 32, env.ini) == 16 ? 16 : 32;
+    env.options.desktopIconSize = GetPrivateProfileIntA("Desktop", "IconSize", 32, env.ini) == 48 ? 48 : 32;
     env.options.classicShutdown = !!GetPrivateProfileIntA("Desktop", "ClassicShutdown", FALSE, env.ini);
     env.options.traySeconds = Clamp(Option("InactiveSeconds", 60), 5, 3600);
     env.options.largeStartIcons = !!GetPrivateProfileIntA("Start", "LargeIcons", FALSE, env.ini);
@@ -657,8 +657,8 @@ HMENU EnvironmentDesktopLayoutMenu(void)
     }
     AppendMenuA(menu, MF_POPUP, (UINT_PTR)horizontal, "Horizontal Grid Spacing");
     AppendMenuA(menu, MF_POPUP, (UINT_PTR)vertical, "Vertical Grid Spacing");
-    AppendMenuA(sizes, MF_STRING | (env.options.desktopIconSize == 16 ? MF_CHECKED : 0), 0x8060, "Small (16 x 16)");
-    AppendMenuA(sizes, MF_STRING | (env.options.desktopIconSize == 32 ? MF_CHECKED : 0), 0x8061, "Large (32 x 32)");
+    AppendMenuA(sizes, MF_STRING | (env.options.desktopIconSize == 32 ? MF_CHECKED : 0), 0x8060, "Normal (32 x 32)");
+    AppendMenuA(sizes, MF_STRING | (env.options.desktopIconSize == 48 ? MF_CHECKED : 0), 0x8061, "Large (48 x 48)");
     AppendMenuA(menu, MF_POPUP, (UINT_PTR)sizes, "Icon Size");
     AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
     AppendMenuA(menu, MF_STRING, 0x8012, "Desktop Settings...");
@@ -673,7 +673,7 @@ BOOL EnvironmentDesktopLayoutCommand(UINT command)
     else if (command == 0x8011) env.options.lockDesktopIcons = !env.options.lockDesktopIcons;
     else if (command >= 0x8040 && command < 0x8047) env.options.desktopGridX = gridSizes[command - 0x8040];
     else if (command >= 0x8050 && command < 0x8057) env.options.desktopGridY = gridSizes[command - 0x8050];
-    else if (command == 0x8060 || command == 0x8061) env.options.desktopIconSize = command == 0x8060 ? 16 : 32;
+    else if (command == 0x8060 || command == 0x8061) env.options.desktopIconSize = command == 0x8060 ? 32 : 48;
     else return FALSE;
     EnvironmentArrangeDesktop(env.options.autoArrange); return TRUE;
 }
