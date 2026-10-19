@@ -543,13 +543,15 @@ static void BrowserColorTests(HWND browser)
 {
     HWND toolbar = GetDlgItem(browser, 470), address = GetDlgItem(browser, 403), view = FindWindowExA(browser, NULL, "SHELLDLL_DefView", NULL);
     HWND list = view ? FindWindowExA(view, NULL, WC_LISTVIEWA, NULL) : GetDlgItem(browser, 404);
-    int count = (int)SendMessageA(list, LVM_GETITEMCOUNT, 0, 0), selected;
-    if (count) ListView_SetItemState(list, 0, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
-    selected = (int)SendMessageA(list, LVM_GETSELECTEDCOUNT, 0, 0);
+    int count = (int)SendMessageA(list, LVM_GETITEMCOUNT, 0, 0);
+    Check(list && count > 0, "system-color test starts with a populated folder list");
+    NativeSelectItem(list, 0);
+    Check(SendMessageA(list, LVM_GETSELECTEDCOUNT, 0, 0) == 1,
+          "system-color test selects exactly one item in the application process");
     SendMessageA(browser, WM_SYSCOLORCHANGE, 0, 0);
     Check(IsWindow(toolbar) && toolbar == GetDlgItem(browser, 470) && address == GetDlgItem(browser, 403),
           "system-color notification preserves the live toolbar and address controls");
-    Check(count == SendMessageA(list, LVM_GETITEMCOUNT, 0, 0) && selected == SendMessageA(list, LVM_GETSELECTEDCOUNT, 0, 0),
+    Check(count == SendMessageA(list, LVM_GETITEMCOUNT, 0, 0) && SendMessageA(list, LVM_GETSELECTEDCOUNT, 0, 0) == 1,
           "system-color notification preserves folder items and selection without repopulating the list");
     {
         RECT patch, client; HDC dc; COLORREF pixel; HBRUSH marker = CreateSolidBrush(RGB(251,3,239));
