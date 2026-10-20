@@ -99,7 +99,6 @@ static BOOL WriteOptions(const char *ini, const ShellOptions *o)
     BOOL okay = TRUE;
 #define SAVE(section, key, member) okay &= WriteNumber(ini, section, key, o->member)
     SAVE("Taskbar", "Edge", edge); SAVE("Taskbar", "Rows", rows); SAVE("Taskbar", "TaskWidth", taskWidth); SAVE("Taskbar", "TaskTiles", taskTiles);
-    SAVE("Taskbar", "ClosePrograms", closePrograms);
     SAVE("Taskbar", "Locked", locked); SAVE("Taskbar", "AutoHide", autoHide); SAVE("Taskbar", "AlwaysOnTop", topmost);
     SAVE("Taskbar", "Clock", clock); SAVE("Taskbar", "QuickLaunch", quick); SAVE("Taskbar", "LargeIcons", largeIcons);
     SAVE("Taskbar", "QuickLaunchSize", quickSize);
@@ -320,7 +319,6 @@ static BOOL Apply(HWND window)
     languageChanged=env.options.language!=(SendDlgItemMessageA(window,ID_LANGUAGE,CB_GETCURSEL,0,0)==1);
     options.language=SendDlgItemMessageA(window,ID_LANGUAGE,CB_GETCURSEL,0,0)==1;
     options.taskWidth = width; options.traySeconds = seconds;
-    options.closePrograms=SendDlgItemMessageA(window,ID_TASKMANAGERSTYLE,CB_GETCURSEL,0,0)==1;
     options.locked = Checked(window, ID_LOCK); options.autoHide = Checked(window, ID_AUTOHIDE); options.topmost = Checked(window, ID_TOPMOST);
     options.clock = Checked(window, ID_CLOCK); options.quick = Checked(window, ID_QUICK); options.largeIcons = Checked(window, ID_LARGE);
     options.taskTiles=Checked(window,ID_TASKTILES);
@@ -370,11 +368,7 @@ static LRESULT CALLBACK PropertiesProc(HWND window, UINT message, WPARAM wp, LPA
         SendMessageA(control, CB_ADDSTRING, 0, (LPARAM)"1"); SendMessageA(control, CB_ADDSTRING, 0, (LPARAM)"2"); SendMessageA(control, CB_ADDSTRING, 0, (LPARAM)"3"); SendMessageA(control, CB_SETCURSEL, env.options.rows - 1, 0);
         Control(window, SETTINGS_TASKBAR, "STATIC", "Button width:", 0, 0, 32, 316, 102, 20);
         Control(window, SETTINGS_TASKBAR, "EDIT", "", WS_BORDER | WS_TABSTOP | ES_NUMBER, ID_WIDTH, 144, 312, 64, 23); SetDlgItemInt(window, ID_WIDTH, env.options.taskWidth, FALSE); EnableWindow(GetDlgItem(window,ID_WIDTH),!env.options.taskTiles);
-        Control(window, SETTINGS_TASKBAR, "STATIC", "Task Manager:", 0, 0, 222, 316, 110, 20);
-        control=Control(window, SETTINGS_TASKBAR, "COMBOBOX", "", WS_TABSTOP|CBS_DROPDOWNLIST, ID_TASKMANAGERSTYLE, 336, 312, 152, 100);
-        SendMessageA(control,CB_ADDSTRING,0,(LPARAM)"Task List");
-        SendMessageA(control,CB_ADDSTRING,0,(LPARAM)"Ctrl+Alt+Del");
-        SendMessageA(control,CB_SETCURSEL,env.options.closePrograms ? 1 : 0,0);
+        Control(window, SETTINGS_TASKBAR, "STATIC", "80 - 300 pixels", 0, 0, 222, 316, 260, 20);
         StartSettingsBegin(); StartSettingsCreate(window);
         Control(window, SETTINGS_DESKTOP, "STATIC", "", SS_OWNERDRAW, ID_PREVIEW_DESKTOP, 30, 52, 454, 104);
         Checkbox(window, SETTINGS_DESKTOP, "Show desktop icons", ID_DESKTOPICONS, env.options.desktopIcons, 30, 160, 220);

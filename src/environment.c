@@ -1,6 +1,5 @@
 #define WIN32_LEAN_AND_MEAN
 #include "shell_internal.h"
-#include "task_manager.h"
 #include "file_drag.h"
 #include "render_trace.h"
 #include "tray_mirror.h"
@@ -146,7 +145,6 @@ static BOOL SettingsPath(void)
     env.options.rows = Clamp(Option("Rows", 1), 1, 3);
     env.options.taskWidth = Clamp(Option("TaskWidth", 160), 80, 300);
     env.options.taskTiles = !!Option("TaskTiles", FALSE);
-    env.options.closePrograms = !!Option("ClosePrograms", FALSE);
     env.options.locked = !!Option("Locked", TRUE); env.options.autoHide = !!Option("AutoHide", FALSE);
     env.options.topmost = !!Option("AlwaysOnTop", TRUE); env.options.clock = !!Option("Clock", TRUE);
     env.options.quick = !!Option("QuickLaunch", TRUE); env.options.largeIcons = !!Option("LargeIcons", FALSE);
@@ -788,24 +786,15 @@ void EnvCommand(int id)
                 }
             }
         break;
-    case ID_TASKMANAGER:
-        if (env.options.closePrograms) {
-            DWORD error;
-            /* Focus our inert taskbar before a keyboard request: if the OS
-             * ignores it, Delete must not reach a file view or another app. */
-            SetForegroundWindow(env.bar); SetFocus(env.bar);
-            if (GetForegroundWindow() != env.bar || GetFocus() != env.bar) { EnvError(env.bar,"Windows could not open the task list.",ERROR_BUSY); break; }
-            error = TaskManagerClosePrograms(GetVersion(),keybd_event,GetAsyncKeyState);
-            if (error) EnvError(env.bar,"Windows could not open the task list.",error);
-        } else {
-            SHELLEXECUTEINFOA execute; DWORD length=GetWindowsDirectoryA(path,MAX_PATH);
-            if (!length || length>=MAX_PATH) { EnvError(env.bar,"Windows could not open the task list.",length ? ERROR_BUFFER_OVERFLOW : GetLastError()); break; }
-            if (!EnvJoin(path,path,"TASKMAN.EXE")) { EnvError(env.bar,"Windows could not open the task list.",ERROR_BUFFER_OVERFLOW); break; }
-            ZeroMemory(&execute,sizeof(execute)); execute.cbSize=sizeof(execute); execute.fMask=SEE_MASK_FLAG_NO_UI;
-            execute.hwnd=env.bar; execute.lpFile=path; execute.nShow=SW_SHOWNORMAL;
-            if (!ShellExecuteExA(&execute)) EnvError(env.bar,"Windows could not open the task list.",GetLastError());
-        }
+    case ID_TASKMANAGER: {
+        SHELLEXECUTEINFOA execute; DWORD length=GetWindowsDirectoryA(path,MAX_PATH);
+        if (!length || length>=MAX_PATH) { EnvError(env.bar,"Windows could not open the task list.",length ? ERROR_BUFFER_OVERFLOW : GetLastError()); break; }
+        if (!EnvJoin(path,path,"TASKMAN.EXE")) { EnvError(env.bar,"Windows could not open the task list.",ERROR_BUFFER_OVERFLOW); break; }
+        ZeroMemory(&execute,sizeof(execute)); execute.cbSize=sizeof(execute); execute.fMask=SEE_MASK_FLAG_NO_UI;
+        execute.hwnd=env.bar; execute.lpFile=path; execute.nShow=SW_SHOWNORMAL;
+        if (!ShellExecuteExA(&execute)) EnvError(env.bar,"Windows could not open the task list.",GetLastError());
         break;
+    }
     case ID_PROPERTIES: PropertiesOpen(); break;
     case ID_SHOWDESKTOP: EnvShowDesktop(); break;
     case ID_QUICKFOLDER: env.host.openFolder(env.quickDir); break;
