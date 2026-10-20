@@ -49,7 +49,7 @@ DWORD ShutdownDosPrepare(HWND owner, DWORD version, const char *windowsDirectory
 {
     char command[MAX_PATH], directory[MAX_PATH], privateDirectory[MAX_PATH] = "", pif[MAX_PATH] = "";
     ShutdownDosProgram program, verified; int properties = 0, length;
-    DWORD error = ERROR_SUCCESS, attributes, stage = 1; BOOL created = FALSE;
+    DWORD error = ERROR_SUCCESS, attributes, stage = 1, verifyIssues = 0; BOOL created = FALSE;
     if (!IsWindows95(version)) return ERROR_NOT_SUPPORTED;
     if (!host || !host->open || !host->get || !host->set || !host->close || !host->launchPif ||
         !windowsDirectory || !temporaryDirectory || !*windowsDirectory || !*temporaryDirectory) return ERROR_INVALID_PARAMETER;
@@ -92,15 +92,23 @@ DWORD ShutdownDosPrepare(HWND owner, DWORD version, const char *windowsDirectory
     /* Reopen the saved file and verify real mode before dispatching it. */
     stage = 7; attributes = GetFileAttributesA(pif);
     if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_DIRECTORY)) { error = ERROR_WRITE_FAULT; goto done; }
-    properties = host->open(command, pif, 0, 0);
+    /* pszPIF is an OUTPUT filename: repeating the creation call would replace
+     * our saved settings with COMMAND.COM defaults. Read the PIF as the source
+     * instead, without an output filename or automatic INF processing. */
+    properties = host->open(pif, NULL, (UINT)-1, 0);
     if (!properties) { error = ERROR_INVALID_DATA; goto done; }
     stage = 8; ZeroMemory(&verified, sizeof(verified));
     length = host->get(properties, MAKEINTRESOURCEA(1), &verified, sizeof(verified), 0);
     verified.command[sizeof(verified.command)-1] = 0; verified.directory[sizeof(verified.directory)-1] = 0;
-    if (length != sizeof(verified) || !(verified.initial & DOS_REALMODE) || (verified.initial & 0x0100) ||
-        (verified.realMode & 0x20) || lstrcmpiA(verified.command, command) || lstrcmpiA(verified.directory, directory)) {
-        error = ERROR_INVALID_DATA; goto done;
-    }
+    if (length != sizeof(verified)) verifyIssues |= 1;
+    if (!(verified.initial & DOS_REALMODE)) verifyIssues |= 2;
+    if (verified.initial & 0x0100) verifyIssues |= 4;
+    if (verified.realMode & 0x20) verifyIssues |= 8;
+    if (lstrcmpiA(verified.command, command)) verifyIssues |= 16;
+    if (lstrcmpiA(verified.directory, directory)) verifyIssues |= 32;
+    RenderTraceShell("dos-pif-readback", S_OK, (DWORD)length, verified.initial);
+    RenderTraceShell("dos-pif-verify", HRESULT_FROM_WIN32(verifyIssues ? ERROR_INVALID_DATA : ERROR_SUCCESS), verifyIssues, verified.realMode);
+    if (verifyIssues) { error = ERROR_INVALID_DATA; goto done; }
     host->close(properties, DOS_CLOSE_DISCARD); properties = 0;
     stage = 9; error = host->launchPif(owner, pif);
 done:
@@ -111,6 +119,6 @@ done:
     }
     /* Retain a successfully dispatched PIF in TEMP: Windows may still read it
      * asynchronously, including during the subsequent transition to DOS. */
-    RenderTraceShell("dos-pif", HRESULT_FROM_WIN32(error), stage, 0);
+    RenderTraceShell("dos-pif", HRESULT_FROM_WIN32(error), stage, verifyIssues);
     return error;
 }

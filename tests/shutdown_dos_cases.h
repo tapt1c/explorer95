@@ -3,9 +3,25 @@ static int dosPhase, dosOpens, dosLaunches, dosDiscards;
 static char dosPif[MAX_PATH], dosCommand[MAX_PATH], dosDirectory[MAX_PATH];
 static int WINAPI DosOpen(const char *application, const char *pif, UINT inf, UINT options)
 {
-    ++dosOpens; lstrcpynA(dosPif,pif,MAX_PATH);
-    Check(!lstrcmpiA(application,dosCommand) && !inf && !options,"PIF preparation targets only the system command processor");
+    ShutdownDosProgram defaults; HANDLE file; DWORD written;
+    ++dosOpens;
+    if(pif) {
+        lstrcpynA(dosPif,pif,MAX_PATH);
+        Check(!lstrcmpiA(application,dosCommand) && !inf && !options,
+              "PIF creation reads the system command processor and uses a separate output filename");
+    } else Check(!lstrcmpiA(application,dosPif) && inf==(UINT)-1 && !options,
+                 "verification opens the saved PIF as its source without a destination or INF overrides");
     if (dosPhase==1 || (dosPhase==5 && dosOpens==2)) return 0;
+    if(pif) {
+        /* Win95's SECOND argument is an output PIF. Even an existing file is
+         * overwritten with the FIRST argument's properties on OpenProperties.
+         * Model this side effect so the old verification call loses real mode. */
+        ZeroMemory(&defaults,sizeof(defaults));
+        lstrcpyA(defaults.command,dosCommand); lstrcpyA(defaults.directory,dosDirectory);
+        file=CreateFileA(dosPif,GENERIC_WRITE,0,NULL,CREATE_ALWAYS,FILE_ATTRIBUTE_NORMAL,NULL);
+        Check(file!=INVALID_HANDLE_VALUE && WriteFile(file,&defaults,sizeof(defaults),&written,NULL) && written==sizeof(defaults),
+              "an output PIF is initialized from the source even if that destination already exists"); CloseHandle(file);
+    }
     return 123;
 }
 static int WINAPI DosGet(int properties, const char *group, void *data, int size, UINT options)
@@ -33,8 +49,8 @@ static int WINAPI DosSet(int properties, const char *group, const void *data, in
           !lstrcmpiA(program->command,dosCommand) && !lstrcmpiA(program->directory,dosDirectory),
           "request real DOS mode without silent shutdown, inherited commands or custom boot configuration");
     if(dosPhase==3) return 0;
-    if(dosPhase==8) return size; /* A lying/failed writer must never reach launch. */
-    file=CreateFileA(dosPif,GENERIC_WRITE,0,NULL,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL);
+    if(dosPhase==8) return size; /* Reporting success while leaving defaults must not reach launch. */
+    file=CreateFileA(dosPif,GENERIC_WRITE,0,NULL,CREATE_ALWAYS,FILE_ATTRIBUTE_NORMAL,NULL);
     Check(file!=INVALID_HANDLE_VALUE && WriteFile(file,data,size,&written,NULL) && written==(DWORD)size,
           "the mock PIF manager writes only inside the newly owned temporary directory"); CloseHandle(file);
     return size;

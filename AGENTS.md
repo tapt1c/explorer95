@@ -1443,6 +1443,12 @@ Rename со скрытым расширением, системные Properties
   из Shell32 (ordinals 9/10/11/13). OpenProperties у Win95 — ANSI, hProps — int,
   program group — MAKEINTRESOURCEA(1); PROPPRG имеет pack(1), размер 658 байт.
   Не используйте Unicode/выравнивание современного shlobj.h для этого ABI.
+  Второй аргумент OpenProperties — выходной PIF: его передача повторно создаёт
+  файл из свойств первого аргумента даже при существующем назначении. В alpha.48
+  это стирало real-mode при проверке (пользовательский лог: dos-pif, stage 8,
+  ERROR_INVALID_DATA). Для чтения используйте OpenProperties(pif, NULL, -1, 0):
+  PIF — источник, назначения нет, INF не обрабатывается. Не возвращайте
+  OpenProperties(command, pif, 0, 0) для проверки; это вызов создания.
   PRGINIT_REALMODE=0x0008 задаётся в flPrgInit; REALMODESILENT не используется,
   частная загрузочная конфигурация отключена. Файл сохраняется и перечитывается
   перед ShellExecuteExA; ошибка не подменяется обычным EWX_REBOOT.
@@ -1454,10 +1460,16 @@ Rename со скрытым расширением, системные Properties
 - Backend PIF тестируется только с инертными API callbacks и собственными файлами:
   ABI, режим, короткие пути, ошибки open/get/set/flush/reopen/verify/launch,
   освобождение handles, сохранность исходных файлов и удаление временных данных.
+  Mock OpenProperties обязан моделировать запись назначения при ненулевом втором
+  аргументе: прежняя модель без этого побочного эффекта пропустила реальный баг.
   Реальные PifMgr/ShellExecute для DOS и действия питания в тесте запрещены.
   Это не подтверждает реальный переход на Win95; его проверяет пользователь в ВМ.
   `--trace-render` пишет stage/error события `dos-pif`: 2 temp, 3 open, 4 get,
   5 set, 6 flush, 7 reopen, 8 verify, 9 launch, без записи путей файлов.
+  `dos-pif-readback`: a — размер полученных свойств, b — flPrgInit.
+  `dos-pif-verify`: a — маска несовпадений (1 размер, 2 нет real-mode,
+  4 silent, 8 private config, 16 command, 32 directory), b — real-mode options.
+  Итоговый `dos-pif` также несёт эту маску в b.
 - Shut Down открывает Explorer95.Shutdown над Explorer95.ShutdownShade. Это
   модальное окно с возвратом фокуса и блокировкой собственных окон приложения,
   а не механизм защиты/блокировки сеанса. Не отключайте системные аварийные клавиши
