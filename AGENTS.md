@@ -682,7 +682,11 @@ explorer95.exe --settings="C:\EX95TEST\Explorer95.ini"
   F5/LVM_UPDATE/замены native NORMAL. Ограничение — 4096 системных изображений.
   У исходной Win95 нет публичного запроса overlay mappings. PaintDesktopOverlays
   получает composite HICON из исходного списка с реальным LVIS_OVERLAYMASK и
-  выводит его в тот же buffered frame, учитывая selection/cut. Нельзя терять
+  выводит его в тот же buffered frame, учитывая selection/cut. Composite уже
+  содержит основной значок: перед его выводом восстанавливайте исходные обои
+  в пределах LVIR_ICON, сохраняя внешний clip и native-подпись. Иначе при
+  различии размещения основного и составного изображения на Win95 значок двоится.
+  Используйте кэшированный PaintBackground, а не заливку сплошным цветом. Нельзя терять
   стрелки ярлыков или вводить зависимость от ImageList_GetOverlayImage/IE4.
   DesktopIconsSetSourceImages передаёт заимствованный исходный список для ghost:
   при 48px его composite рисуется DrawIconEx в фактических размерах LVIR_ICON.
@@ -713,6 +717,9 @@ explorer95.exe --settings="C:\EX95TEST\Explorer95.ini"
   NativeDesktopOverlay48Test использует только свой временный source list,
   восстанавливает исходные изображения/состояние и сравнивает buffered результат
   с независимо нарисованным системным composite, включая прозрачные углы.
+  Дополнительно заменяет только собственную 48px-копию непрозрачной canary-иконкой:
+  под прозрачными пикселями composite не должно оставаться ни одного её пикселя.
+  Одной проверки сходства более 90% недостаточно — она пропускала второй силуэт.
   ImageList_Remove/GetIconSize/ReplaceIcon — API исходной Comctl32 4.0/Win95.
 - Подписи desktop остаются текстом системного ListView. Desktop WM_ERASEBKGND
   только возвращает TRUE: он не должен стирать готовые значки или оставлять

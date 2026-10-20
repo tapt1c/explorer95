@@ -297,7 +297,7 @@ static void NativeDesktopOverlay48Test(HWND list,HIMAGELIST original)
 {
     HIMAGELIST source=ImageList_Create(32,32,ILC_COLOR|ILC_MASK,2,1);
     LVITEMA item; UINT state; RECT area={0,0,48,48},bounds; PaintBuffer expected={0};
-    HDC screen,dc; HICON composite; int x,y,matches=0;
+    HDC screen,dc; HICON composite; int x,y,matches=0,ghosts=0;
     Check(source && ImageList_AddIcon(source,LoadIconA(NULL,IDI_APPLICATION))==0 &&
         ImageList_AddIcon(source,LoadIconA(NULL,IDI_EXCLAMATION))==1 && ImageList_SetOverlayImage(source,1,1),
         "create a private native-size image list with a distinctive overlay through public Win95 APIs");
@@ -308,6 +308,20 @@ static void NativeDesktopOverlay48Test(HWND list,HIMAGELIST original)
     ListView_SetItemState(list,0,INDEXTOOVERLAYMASK(1),LVIS_OVERLAYMASK|LVIS_SELECTED|LVIS_DROPHILITED);
     { LVITEMA replacement=item; replacement.iImage=0; ListView_SetItem(list,&replacement); }
     ListView_SetImageList(list,source,LVSIL_NORMAL);
+    /* Model the older control painting a differently positioned base under
+     * the composite. An opaque canary exposes even one leftover background
+     * pixel; the previous 90% similarity check could miss doubled edges. */
+    { HDC target=GetDC(list),colorDC=CreateCompatibleDC(target),maskDC=CreateCompatibleDC(target);
+      HBITMAP color=CreateCompatibleBitmap(target,48,48),mask=CreateBitmap(48,48,1,1,NULL);
+      HGDIOBJ oldColor=SelectObject(colorDC,color),oldMask=SelectObject(maskDC,mask);
+      HBRUSH marker=CreateSolidBrush(RGB(255,0,255)); ICONINFO info; HICON canary;
+      FillRect(colorDC,&area,marker); FillRect(maskDC,&area,(HBRUSH)GetStockObject(BLACK_BRUSH));
+      SelectObject(colorDC,oldColor); SelectObject(maskDC,oldMask); ZeroMemory(&info,sizeof(info));
+      info.fIcon=TRUE; info.hbmColor=color; info.hbmMask=mask; canary=CreateIconIndirect(&info);
+      Check(canary && ImageList_ReplaceIcon(ListView_GetImageList(list,LVSIL_NORMAL),0,canary)==0,
+          "replace only the private 48px base with a visible opaque canary");
+      DestroyIcon(canary); DeleteObject(marker); DeleteObject(color); DeleteObject(mask);
+      DeleteDC(colorDC); DeleteDC(maskDC); ReleaseDC(list,target); }
     SendMessageA(list,WM_SETREDRAW,TRUE,0);
     RedrawWindow(list,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_UPDATENOW);
     Check(ListView_GetItemRect(list,0,&bounds,LVIR_ICON) && bounds.right-bounds.left==48,
@@ -317,8 +331,12 @@ static void NativeDesktopOverlay48Test(HWND list,HIMAGELIST original)
     FillRect(dc,&area,(HBRUSH)(COLOR_DESKTOP+1));
     composite=ImageList_GetIcon(source,0,ILD_TRANSPARENT|INDEXTOOVERLAYMASK(1));
     Check(composite && DrawIconEx(dc,0,0,composite,48,48,0,NULL,DI_NORMAL),"draw the system-composed overlay directly as a 48px reference");
-    for(y=0;y<48;++y) for(x=0;x<48;++x)
-        if(GetPixel(dc,x,y)==GetPixel(screen,bounds.left+x,bounds.top+y)) ++matches;
+    for(y=0;y<48;++y) for(x=0;x<48;++x) {
+        COLORREF reference=GetPixel(dc,x,y),actual=GetPixel(screen,bounds.left+x,bounds.top+y);
+        if(reference==actual) ++matches;
+        if(reference==GetSysColor(COLOR_DESKTOP) && actual!=reference) ++ghosts;
+    }
+    Check(!ghosts,"transparent composite pixels contain only desktop background, never a second base icon");
     ListView_SetItemState(list,0,LVIS_DROPHILITED,LVIS_DROPHILITED);
     RedrawWindow(list,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_UPDATENOW);
     { int tinted=0;

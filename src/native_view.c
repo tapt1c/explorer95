@@ -51,6 +51,7 @@ struct NativeView {
 static EnvironmentHost host;
 static const char property[] = "Explorer95.NativeView";
 static BOOL OpenSelection(NativeView *view);
+static void PaintBackground(NativeView *view, HDC target, HWND window);
 /* Win95 has a 32px system list. Keep its indices in a private, scaled list;
  * never resize or destroy Shell32's shared artwork. AddIcon scales to 48px. */
 static BOOL DesktopImages48(NativeView *view)
@@ -74,7 +75,7 @@ static BOOL DesktopImages48(NativeView *view)
 }
 /* Overlay mappings belong to the system list and have no Win95 query API.
  * Obtain the real composite through public ImageList_GetIcon, then scale it
- * over the native base icon inside the same buffered frame. */
+ * in place of the native base icon inside the same buffered frame. */
 static void PaintDesktopOverlays(NativeView *view,HDC dc)
 {
     RECT clip,iconRect; int i,count;
@@ -90,8 +91,18 @@ static void PaintDesktopOverlays(NativeView *view,HDC dc)
         if(!icon) continue;
         if(!view->desktopOverlayImages) view->desktopOverlayImages=ImageList_Create(48,48,ILC_COLOR|ILC_MASK,1,1);
         if(view->desktopOverlayImages && ImageList_ReplaceIcon(view->desktopOverlayImages,ImageList_GetImageCount(view->desktopOverlayImages) ? 0 : -1,icon)>=0) {
-            if(item.state&(LVIS_SELECTED|LVIS_CUT|LVIS_DROPHILITED)) flags|=ILD_BLEND50;
-            ImageList_Draw(view->desktopOverlayImages,0,dc,iconRect.left,iconRect.top,flags);
+            int saved=SaveDC(dc);
+            if(saved) {
+                /* The composite already contains the base. Old controls can
+                 * place its pixels differently; drawing it over the first
+                 * image leaves a second silhouette in transparent areas.
+                 * Restore the cached wallpaper only in this icon rectangle. */
+                IntersectClipRect(dc,iconRect.left,iconRect.top,iconRect.right,iconRect.bottom);
+                PaintBackground(view,dc,view->list);
+                if(item.state&(LVIS_SELECTED|LVIS_CUT|LVIS_DROPHILITED)) flags|=ILD_BLEND50;
+                ImageList_Draw(view->desktopOverlayImages,0,dc,iconRect.left,iconRect.top,flags);
+                RestoreDC(dc,saved);
+            }
         }
         DestroyIcon(icon);
     }
@@ -332,7 +343,6 @@ static void PaintBackgroundDirect(NativeView *view, HDC dc, HWND window)
     }
 }
 
-static void PaintBackground(NativeView *view, HDC target, HWND window);
 void NativeViewPaintDesktop(NativeView *view, HDC dc, HWND window)
 {
     if (view) PaintBackground(view, dc, window);
