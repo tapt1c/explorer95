@@ -19,6 +19,8 @@ static int count, selected, nextPreview;
 static BOOL active, ending;
 static DWORD opened;
 static DWORD previousProcess;
+static DWORD readyProbes, reportedProbes;
+static BOOL lastReady;
 static UINT cookie;
 static HMODULE module;
 static char modulePath[MAX_PATH];
@@ -75,6 +77,11 @@ static void Remember(HWND window)
 void TaskSwitchObserve(void)
 {
     HWND windows[TASK_LIMIT],front; int i,n;
+    /* Never do trace I/O inside the hook's bounded synchronous owner probe. */
+    if(readyProbes!=reportedProbes) {
+        RenderTraceShell("task-switch-ready",lastReady ? S_OK : S_FALSE,readyProbes,0);
+        reportedProbes=readyProbes;
+    }
     if(active || !popup || env.closing || ShutdownActive()) return;
     front=GetForegroundWindow(); if(front==observed) return;
     n=EnvTaskWindows(windows);
@@ -230,7 +237,12 @@ BOOL TaskSwitchTranslate(MSG *message)
 LRESULT TaskSwitchMessage(WPARAM supplied,LPARAM command)
 {
     if(!cookie || supplied!=cookie) return 0;
-    if(command==TASK_SWITCH_PING) return !env.closing && !ShutdownActive() && !FileDragActive() ? TASK_SWITCH_ACK : 0;
+    if(command==TASK_SWITCH_PING) {
+        BOOL ready=!env.closing && !ShutdownActive() && !FileDragActive();
+        ++readyProbes; lastReady=ready;
+        return ready ? TASK_SWITCH_ACK : 0;
+    }
+    RenderTraceShell("task-switch-command",S_OK,(DWORD)command,active);
     if(env.closing || ShutdownActive()) { Finish(FALSE,FALSE); return 0; }
     if(command==TASK_SWITCH_NEXT || command==TASK_SWITCH_PREVIOUS) return Begin(command==TASK_SWITCH_NEXT ? 1 : -1);
     if(command==TASK_SWITCH_COMMIT) Finish(TRUE,FALSE);
@@ -239,7 +251,7 @@ LRESULT TaskSwitchMessage(WPARAM supplied,LPARAM command)
 }
 BOOL TaskSwitchCreate(void)
 {
-    HRSRC resource; HGLOBAL loaded; HANDLE file; DWORD size,written,error; char path[MAX_PATH]; int length;
+    HRSRC resource; HGLOBAL loaded; HANDLE file; DWORD size,written,error,stage=1; char path[MAX_PATH]; int length;
     TaskSwitchHookStartProc start; LOGFONTA font;
     if(!EnvRegister("Explorer95.TaskSwitch",SwitchProc,NULL,0)) return FALSE;
     popup=CreateWindowExA(WS_EX_TOOLWINDOW|WS_EX_TOPMOST|WS_EX_DLGMODALFRAME,"Explorer95.TaskSwitch","",WS_POPUP|WS_BORDER|WS_CLIPCHILDREN,0,0,632,390,NULL,NULL,env.host.instance,NULL);
@@ -248,10 +260,11 @@ BOOL TaskSwitchCreate(void)
     if(!taskList) goto fail;
     SendMessageA(taskList,WM_SETFONT,(WPARAM)env.host.font,FALSE);
     ZeroMemory(&font,sizeof(font)); if(GetObjectA(env.host.font,sizeof(font),&font)) { font.lfWeight=FW_BOLD; bold=CreateFontIndirectA(&font); }
-    resource=FindResourceA(env.host.instance,MAKEINTRESOURCEA(TASK_SWITCH_RESOURCE),RT_RCDATA);
+    stage=2; resource=FindResourceA(env.host.instance,MAKEINTRESOURCEA(TASK_SWITCH_RESOURCE),RT_RCDATA);
     if(!resource || !(size=SizeofResource(env.host.instance,resource)) || !(loaded=LoadResource(env.host.instance,resource)) || !LockResource(loaded)) goto fail;
     /* Injected modules are runtime files, not profile data. Another process
      * may retain its mapping briefly after UnhookWindowsHookEx. */
+    stage=3;
     { DWORD length=GetTempPathA(MAX_PATH,path);
       if(!length || length>=MAX_PATH || !GetTempFileNameA(path,"EAT",0,modulePath)) goto fail; }
     file=CreateFileA(modulePath,GENERIC_WRITE,0,NULL,TRUNCATE_EXISTING,FILE_ATTRIBUTE_NORMAL,NULL);
@@ -259,15 +272,17 @@ BOOL TaskSwitchCreate(void)
     { BOOL okay=WriteFile(file,LockResource(loaded),size,&written,NULL); CloseHandle(file); if(!okay || written!=size) goto fail; }
     length=lstrlenA(modulePath); if(length<4) goto fail;
     lstrcpyA(path,modulePath); lstrcpyA(path+length-4,".DLL"); if(!MoveFileA(modulePath,path)) goto fail; lstrcpyA(modulePath,path);
-    module=LoadLibraryA(modulePath); if(!module) goto fail;
+    stage=4; module=LoadLibraryA(modulePath); if(!module) goto fail;
+    stage=5;
     start=(TaskSwitchHookStartProc)(UINT_PTR)GetProcAddress(module,"TaskSwitchHookStart");
     hookStop=(TaskSwitchHookStopProc)(UINT_PTR)GetProcAddress(module,"TaskSwitchHookStop");
     hookReset=(TaskSwitchHookStopProc)(UINT_PTR)GetProcAddress(module,"TaskSwitchHookReset");
     cookie=((UINT)GetTickCount()^(UINT)(UINT_PTR)popup)|1;
-    if(!start || !hookStop || !hookReset || !start(env.bar,cookie)) goto fail;
+    if(!start || !hookStop || !hookReset) { SetLastError(ERROR_PROC_NOT_FOUND); goto fail; }
+    stage=6; if(!start(env.bar,cookie)) goto fail;
     RenderTraceShell("task-switch-hook",S_OK,0,0); return TRUE;
 fail:
-    error=GetLastError(); TaskSwitchDestroy(); RenderTraceShell("task-switch-hook",HRESULT_FROM_WIN32(error ? error : ERROR_GEN_FAILURE),0,0); return FALSE;
+    error=GetLastError(); TaskSwitchDestroy(); RenderTraceShell("task-switch-hook",HRESULT_FROM_WIN32(error ? error : ERROR_GEN_FAILURE),stage,0); return FALSE;
 }
 void TaskSwitchDestroy(void)
 {
@@ -286,4 +301,5 @@ void TaskSwitchDestroy(void)
     PaintBufferFree(&paintBuffer);
     for(i=0;i<PREVIEW_COUNT;++i) { if(previews[i].bitmap) DeleteObject(previews[i].bitmap); ZeroMemory(&previews[i],sizeof(previews[i])); }
     count=nextPreview=0; observed=NULL;
+    readyProbes=reportedProbes=0; lastReady=FALSE;
 }
