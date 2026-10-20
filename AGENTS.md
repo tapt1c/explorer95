@@ -79,7 +79,7 @@ Explorer95 — любительская нативная оболочка для
 | `src/tray_hook.c`, `src/tray_mirror.h` | Встроенная DLL наблюдения за потоком штатного трея и ограниченный протокол зеркала. |
 | `src/tray_image.c` | Передача 16×16 XOR/AND-плоскостей без дескрипторов чужого процесса. |
 | `src/render_trace.c`, `src/render_trace.h` | Ограниченная opt-in трассировка `--trace-render`, EX95REND.LOG рядом с EXE; события активации, Z-order и рисования. |
-| `src/paint.c`, `src/paint.h` | Сохраняемые GDI-буферы, тени подписей рабочего стола, TransparentBlt с Win95-совместимым запасным путём и флажок Start. |
+| `src/paint.c`, `src/paint.h` | Сохраняемые GDI-буферы, согласованное масштабирование XOR/AND значков, тени подписей рабочего стола, TransparentBlt с Win95-совместимым запасным путём и флажок Start. |
 | `src/shutdown.c` | Модальный выбор Stand By / Hibernate / Turn Off / Restart, GDI-затемнение снимка и необязательные API питания. |
 | `src/explorer95.rc` | Ресурсы EXE; bitmap кнопки Start имеет ID `143`. |
 | `resources/Bitmap143.bmp` | Предоставленный пользователем исходный флажок 16×16. |
@@ -89,6 +89,7 @@ Explorer95 — любительская нативная оболочка для
 | `tests/select_checks.py`, `tests/test_select_checks.py` | Консервативный выбор групп CI и проверка правил, включая переименования и неизвестные пути. |
 | `tests/check_incremental.py` | Проверка настоящих Make-правил во временном дереве без изменения checkout. |
 | `tests/smoke.c` | Интеграционные UI-проверки, геометрия, прозрачность, временные INI и вспомогательное окно теста. |
+| `tests/icon_scale_cases.h` | Проверка реального размера цветной/AND-плоскостей и каждого пикселя увеличенного значка на пёстром фоне, напрямую и через native ImageList; core/full. |
 | `tests/run_ui.sh`, `tests/openbox.xml` | Изолированный Xvfb/Openbox для headless UI без перехвата горячих клавиш Wine; отдельные XDG-данные корзины. |
 | `tests/desktop_icons_cases.h` | Сценарии переноса и сохранения раскладки на настоящем ListView внутри smoke-процесса; входят в core и full. |
 | `tests/shell_features_cases.h` | Проверки доступности пунктов Start на отдельных временных корнях реестра; входят в core/menu/full. |
@@ -318,6 +319,10 @@ Wine хранит Unix-корзину через XDG_DATA_HOME вне prefix п�
 
 ## Оформление, значки и геометрия «Пуска»
 
+- Имя пользователя в шапке двухколоночного меню рисуется жирным вариантом
+  env.host.font: сохраняйте размер и native charset. Это системное имя,
+  не переводимый ключ каталога. Кэшируйте HFONT на время жизни Start,
+  восстанавливайте прежний шрифт DC после рисования и освобождайте свой при teardown.
 - Правая колонка: Documents / Recent / Favorites / Computer / Network;
   Control Panel / Printers / Command Prompt; Help / Find / Run. Между непустыми
   группами — 6px с etched-разделителем. Расчёт `CalculateStartLayoutGroups`
@@ -684,8 +689,10 @@ explorer95.exe --settings="C:\EX95TEST\Explorer95.ini"
   Icon Size используют один параметр, Apply/Cancel и общий preview.
   NativeViewConfigureDesktop принимает размер последним аргументом. Для 32px
   NORMAL использует исходный системный список; для 48px NativeView владеет
-  отдельным ImageList 48×48 с теми же индексами. ImageList_GetIcon/AddIcon
-  копируют и масштабируют штатные изображения; общие списки нельзя изменять
+  отдельным ImageList 48×48 с теми же индексами. PaintScaleIcon читает XOR/AND
+  в исходном размере, затем выбирает для цвета и маски один и тот же исходный
+  пиксель. В AddIcon/ReplaceIcon поступает уже настоящий HICON 48×48: не поручайте
+  старой Comctl32 увеличение 32px-значка. Общие списки нельзя изменять
   или уничтожать. Копия дополняется при росте source list и обновляется после
   F5/LVM_UPDATE/замены native NORMAL. Ограничение — 4096 системных изображений.
   У исходной Win95 нет публичного запроса overlay mappings. PaintDesktopOverlays
@@ -697,7 +704,8 @@ explorer95.exe --settings="C:\EX95TEST\Explorer95.ini"
   Используйте кэшированный PaintBackground, а не заливку сплошным цветом. Нельзя терять
   стрелки ярлыков или вводить зависимость от ImageList_GetOverlayImage/IE4.
   DesktopIconsSetSourceImages передаёт заимствованный исходный список для ghost:
-  при 48px его composite рисуется DrawIconEx в фактических размерах LVIR_ICON.
+  при 48px его composite сначала проходит PaintScaleIcon, затем рисуется
+  DrawIconEx в фактических размерах LVIR_ICON без дополнительного увеличения.
   Сохраняйте native handle при LVM_SETIMAGELIST из Shell32, включая F5, и возвращайте
   Shell32 прежний native handle вместо своей копии. Перед teardown восстанавливайте
   NORMAL и исходный LVS_SHAREIMAGELISTS; свои 48px списки освобождайте отдельно.

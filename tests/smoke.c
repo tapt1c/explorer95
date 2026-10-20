@@ -270,8 +270,10 @@ static void DesktopLabelPaintTests(void)
     DestroyWindow(parent); DeleteObject(shadowTestBrush);
 }
 
+#include "icon_scale_cases.h"
 static void PaintTests(void)
 {
+    IconScaleTests();
     {
         int size;
         for (size = 16; size <= 32; size *= 2) {

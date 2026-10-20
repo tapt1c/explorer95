@@ -18,6 +18,7 @@ static BOOL showingRecent;
 static const char *rightLabels[] = {"My Documents", "Recent Documents", "My Computer", "Network Neighborhood", "Control Panel", "Printers", "Help", "Find...", "Run...", "Favorites", "Command Prompt"};
 static const int rightCommands[] = {ID_DOCUMENTS, ID_RECENTDOCS, ID_COMPUTER, ID_NETWORK, ID_CONTROL, ID_PRINTERS, ID_HELP, ID_FIND, ID_RUN, ID_FAVORITES, ID_COMMAND};
 static char user[128];
+static HFONT userFont;
 static BOOL popupActive, classicActive;
 static DWORD hoverStarted;
 static HWND openedHover;
@@ -677,8 +678,11 @@ static LRESULT CALLBACK StartProc(HWND window, UINT message, WPARAM wp, LPARAM l
 {
     switch (message) {
     case WM_CREATE: {
-        int i; DWORD bytes = sizeof(user);
+        int i; DWORD bytes = sizeof(user); LOGFONTA font;
         if (!GetUserNameA(user, &bytes)) lstrcpyA(user, "Explorer95");
+        if (GetObjectA(env.host.font, sizeof(font), &font)) {
+            font.lfWeight = FW_BOLD; userFont = CreateFontIndirectA(&font);
+        }
         for (i = 0; i < PIN_LIMIT; ++i) Item(window, "", ID_PINNED + i);
         Item(window, "All Programs", ID_PROGRAMS);
         Item(window, "More pinned...", ID_MOREPINS); Item(window, "More...", ID_MORECOMMANDS);
@@ -705,8 +709,10 @@ static LRESULT CALLBACK StartProc(HWND window, UINT message, WPARAM wp, LPARAM l
         FillRect(dc, &rect, (HBRUSH)(COLOR_BTNFACE + 1));
         SetRect(&part, 0, 42, rect.right / 2, geometry.footerY); FillRect(dc, &part, (HBRUSH)(COLOR_MENU + 1));
         SetRect(&part, 0, 0, rect.right, 40); FillRect(dc, &part, (HBRUSH)(COLOR_ACTIVECAPTION + 1));
-        SelectObject(dc, env.host.font); SetBkMode(dc, TRANSPARENT); SetTextColor(dc, GetSysColor(COLOR_CAPTIONTEXT));
+        HGDIOBJ previousFont = SelectObject(dc, userFont ? userFont : env.host.font);
+        SetBkMode(dc, TRANSPARENT); SetTextColor(dc, GetSysColor(COLOR_CAPTIONTEXT));
         part.left = 12; UiDrawNativeTextA(dc, user, -1, &part, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+        SelectObject(dc, previousFont);
         SetRect(&part, rect.right / 2, 44, rect.right / 2 + 2, geometry.footerY - 4); DrawEdge(dc, &part, EDGE_ETCHED, BF_LEFT);
         SetRect(&part, 7, geometry.footerY, rect.right - 7, geometry.footerY + 2); DrawEdge(dc, &part, EDGE_ETCHED, BF_TOP);
         SetRect(&part, 7, geometry.programsY, rect.right / 2 - 7, geometry.programsY + 2); DrawEdge(dc, &part, EDGE_ETCHED, BF_TOP);
@@ -835,6 +841,7 @@ void StartDestroy(void)
     int i;
     if (env.start) DestroyWindow(env.start);
     PaintBufferFree(&menuBuffer); PaintBufferFree(&itemBuffer); loadedIconSize = 0;
+    if (userFont) { DeleteObject(userFont); userFont = NULL; }
     for (i = 0; i < 16; ++i) if (itemIcons[i]) { DestroyIcon(itemIcons[i]); itemIcons[i] = NULL; }
     for (i = 0; i < RECENT_LIMIT; ++i) if (recentIcons[i]) { DestroyIcon(recentIcons[i]); recentIcons[i] = NULL; }
     for (i = 0; i < PIN_LIMIT; ++i) if (pinIcons[i]) { DestroyIcon(pinIcons[i]); pinIcons[i] = NULL; }

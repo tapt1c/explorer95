@@ -53,11 +53,13 @@ static const char property[] = "Explorer95.NativeView";
 static BOOL OpenSelection(NativeView *view);
 static void PaintBackground(NativeView *view, HDC target, HWND window);
 /* Win95 has a 32px system list. Keep its indices in a private, scaled list;
- * never resize or destroy Shell32's shared artwork. AddIcon scales to 48px. */
+ * never resize or destroy Shell32's shared artwork. Supply already sized
+ * colour/mask planes, bypassing old common-controls icon resizing. */
 static BOOL DesktopImages48(NativeView *view)
 {
-    int count,i; HICON icon;
+    int count,i,width,height; HICON icon;
     if(!view->desktopLargeImages) return FALSE;
+    if(!ImageList_GetIconSize(view->desktopLargeImages,&width,&height)) return FALSE;
     count=ImageList_GetImageCount(view->desktopLargeImages);
     if(count<0 || count>4096) return FALSE;
     if(!view->desktopScaledImages)
@@ -65,10 +67,12 @@ static BOOL DesktopImages48(NativeView *view)
     if(!view->desktopScaledImages) return FALSE;
     if(view->desktopImagesDirty) { ImageList_RemoveAll(view->desktopScaledImages); view->desktopImagesDirty=FALSE; }
     for(i=ImageList_GetImageCount(view->desktopScaledImages);i<count;++i) {
-        int added;
+        int added; HICON sized;
         icon=ImageList_GetIcon(view->desktopLargeImages,i,ILD_TRANSPARENT);
         if(!icon) return FALSE;
-        added=ImageList_AddIcon(view->desktopScaledImages,icon); DestroyIcon(icon);
+        sized=PaintScaleIcon(icon,width,height,48,48); DestroyIcon(icon);
+        if(!sized) return FALSE;
+        added=ImageList_AddIcon(view->desktopScaledImages,sized); DestroyIcon(sized);
         if(added!=i) return FALSE;
     }
     return TRUE;
@@ -78,16 +82,19 @@ static BOOL DesktopImages48(NativeView *view)
  * in place of the native base icon inside the same buffered frame. */
 static void PaintDesktopOverlays(NativeView *view,HDC dc)
 {
-    RECT clip,iconRect; int i,count;
+    RECT clip,iconRect; int i,count,width,height;
     if(view->desktopIconSize!=48 || !view->desktopLargeImages || !dc || GetClipBox(dc,&clip)<=NULLREGION) return;
+    if(!ImageList_GetIconSize(view->desktopLargeImages,&width,&height)) return;
     count=ListView_GetItemCount(view->list);
     for(i=0;i<count;++i) {
-        LVITEMA item; HICON icon; UINT flags=ILD_TRANSPARENT;
+        LVITEMA item; HICON icon,sized; UINT flags=ILD_TRANSPARENT;
         ZeroMemory(&item,sizeof(item)); item.mask=LVIF_IMAGE|LVIF_STATE; item.iItem=i;
         item.stateMask=LVIS_OVERLAYMASK|LVIS_SELECTED|LVIS_CUT|LVIS_DROPHILITED;
         if(!SendMessageA(view->list,LVM_GETITEMA,0,(LPARAM)&item) || !(item.state&(LVIS_OVERLAYMASK|LVIS_DROPHILITED)) || item.iImage<0 ||
            !ListView_GetItemRect(view->list,i,&iconRect,LVIR_ICON) || (iconRect.right<=clip.left || iconRect.left>=clip.right || iconRect.bottom<=clip.top || iconRect.top>=clip.bottom)) continue;
         icon=ImageList_GetIcon(view->desktopLargeImages,item.iImage,ILD_TRANSPARENT|(item.state&LVIS_OVERLAYMASK));
+        if(!icon) continue;
+        sized=PaintScaleIcon(icon,width,height,48,48); DestroyIcon(icon); icon=sized;
         if(!icon) continue;
         if(!view->desktopOverlayImages) view->desktopOverlayImages=ImageList_Create(48,48,ILC_COLOR|ILC_MASK,1,1);
         if(view->desktopOverlayImages && ImageList_ReplaceIcon(view->desktopOverlayImages,ImageList_GetImageCount(view->desktopOverlayImages) ? 0 : -1,icon)>=0) {

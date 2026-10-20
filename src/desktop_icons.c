@@ -463,7 +463,13 @@ static HIMAGELIST CreateGhost(DesktopIcons *icons, POINT *origin)
         if (!SendMessageA(icons->list,LVM_GETITEMA,0,(LPARAM)&item) || item.iImage < 0 ||
             !ListView_GetItemRect(icons->list,index,&iconRect,LVIR_ICON) || !ListView_GetItemRect(icons->list,index,&label,LVIR_LABEL)) goto done;
         if(icons->sourceImages && icons->sourceImages!=native) {
+            int sourceWidth,sourceHeight;
             HICON icon=ImageList_GetIcon(icons->sourceImages,item.iImage,ILD_TRANSPARENT|(item.state&LVIS_OVERLAYMASK));
+            if(icon && ImageList_GetIconSize(icons->sourceImages,&sourceWidth,&sourceHeight) &&
+               (sourceWidth!=iconRect.right-iconRect.left || sourceHeight!=iconRect.bottom-iconRect.top)) {
+                HICON sized=PaintScaleIcon(icon,sourceWidth,sourceHeight,iconRect.right-iconRect.left,iconRect.bottom-iconRect.top);
+                DestroyIcon(icon); icon=sized;
+            }
             BOOL drawn=icon && DrawIconEx(colorDC,iconRect.left-bounds.left,iconRect.top-bounds.top,icon,
                 iconRect.right-iconRect.left,iconRect.bottom-iconRect.top,0,NULL,DI_NORMAL);
             if(icon) DestroyIcon(icon);

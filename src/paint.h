@@ -18,6 +18,9 @@ typedef struct PaintBuffer {
 HDC PaintBufferBegin(PaintBuffer *buffer, HDC target, const RECT *rect);
 void PaintBufferEnd(PaintBuffer *buffer, HDC target, const RECT *rect);
 void PaintBufferFree(PaintBuffer *buffer);
+/* Caller owns the returned icon. Sample the native XOR/AND planes together;
+ * do not ask old ImageList_ReplaceIcon to resize a smaller HICON. */
+HICON PaintScaleIcon(HICON source, int sourceWidth, int sourceHeight, int width, int height);
 BOOL PaintColorKey(HDC target, int x, int y, HBITMAP bitmap, COLORREF key, BOOL allowExtension);
 void PaintStartLogo(HDC target, int x, int y);
 /* Paint only the shadow; the native control still owns its foreground text. */

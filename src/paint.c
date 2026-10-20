@@ -10,6 +10,71 @@ static HBITMAP startLogo;
 static HFONT marlett;
 static BOOL marlettChecked;
 
+typedef struct IconFormat { BITMAPINFOHEADER header; RGBQUAD palette[2]; } IconFormat;
+static void SetIconFormat(IconFormat *format, int width, int height, BOOL mask)
+{
+    ZeroMemory(format, sizeof(*format)); format->header.biSize = sizeof(format->header);
+    format->header.biWidth = width; format->header.biHeight = height;
+    format->header.biPlanes = 1; format->header.biBitCount = mask ? 1 : 32;
+    if (mask) format->palette[1].rgbRed = format->palette[1].rgbGreen = format->palette[1].rgbBlue = 255;
+}
+HICON PaintScaleIcon(HICON source, int sourceWidth, int sourceHeight, int width, int height)
+{
+    HDC screen = NULL, memory = NULL; HBITMAP bitmap = NULL; HICON result = NULL;
+    ICONINFO icon; IconFormat format; BYTE *pixels = NULL, *sourceMask, *targetMask;
+    DWORD *sourceColor, *targetColor; int sourceStride, targetStride, plane, x, y;
+    ZeroMemory(&icon, sizeof(icon)); icon.fIcon = TRUE;
+    if (!source || sourceWidth < 1 || sourceHeight < 1 || width < 1 || height < 1 ||
+        sourceWidth > 256 || sourceHeight > 256 || width > 256 || height > 256) return NULL;
+    sourceStride = ((sourceWidth + 31) / 32) * 4; targetStride = ((width + 31) / 32) * 4;
+    pixels = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+        (sourceWidth * 4 + sourceStride) * sourceHeight + (width * 4 + targetStride) * height);
+    if (!pixels) return NULL;
+    sourceColor = (DWORD *)pixels; sourceMask = pixels + sourceWidth * sourceHeight * 4;
+    targetColor = (DWORD *)(sourceMask + sourceStride * sourceHeight); targetMask = (BYTE *)(targetColor + width * height);
+    screen = GetDC(NULL); if (!screen) goto done;
+    memory = CreateCompatibleDC(screen); if (!memory) goto done;
+    /* Read at the source list's native size: neither GDI nor Common Controls
+     * may scale the colour plane independently of its one-bit AND mask. */
+    for (plane = 0; plane < 2; ++plane) {
+        HGDIOBJ old; BOOL drawn; RECT bounds = {0, 0, sourceWidth, sourceHeight};
+        bitmap = plane ? CreateBitmap(sourceWidth, sourceHeight, 1, 1, NULL) : CreateCompatibleBitmap(screen, sourceWidth, sourceHeight);
+        if (!bitmap) goto done;
+        old = SelectObject(memory, bitmap);
+        FillRect(memory, &bounds, GetStockObject(plane ? WHITE_BRUSH : BLACK_BRUSH));
+        drawn = DrawIconEx(memory, 0, 0, source, sourceWidth, sourceHeight, 0, NULL, plane ? DI_MASK : DI_IMAGE);
+        SelectObject(memory, old); SetIconFormat(&format, sourceWidth, sourceHeight, plane);
+        if (!drawn || GetDIBits(screen, bitmap, 0, sourceHeight, plane ? (void *)sourceMask : (void *)sourceColor,
+            (BITMAPINFO *)&format, DIB_RGB_COLORS) != sourceHeight) goto done;
+        DeleteObject(bitmap); bitmap = NULL;
+    }
+    /* Both DIBs are bottom-up; choose the same nearest source pixel for every
+     * output colour and mask bit, including the fractional 32 -> 48 ratio. */
+    for (y = 0; y < height; ++y) {
+        int sourceRow = sourceHeight - 1 - y * sourceHeight / height, targetRow = height - 1 - y;
+        for (x = 0; x < width; ++x) {
+            int column = x * sourceWidth / width;
+            targetColor[targetRow * width + x] = sourceColor[sourceRow * sourceWidth + column] & 0x00ffffffUL;
+            if (sourceMask[sourceRow * sourceStride + column / 8] & (0x80 >> (column % 8)))
+                targetMask[targetRow * targetStride + x / 8] |= 0x80 >> (x % 8);
+        }
+    }
+    icon.hbmColor = CreateCompatibleBitmap(screen, width, height); icon.hbmMask = CreateBitmap(width, height, 1, 1, NULL);
+    if (!icon.hbmColor || !icon.hbmMask) goto done;
+    SetIconFormat(&format, width, height, FALSE);
+    if (SetDIBits(screen, icon.hbmColor, 0, height, targetColor, (BITMAPINFO *)&format, DIB_RGB_COLORS) != height) goto done;
+    SetIconFormat(&format, width, height, TRUE);
+    if (SetDIBits(screen, icon.hbmMask, 0, height, targetMask, (BITMAPINFO *)&format, DIB_RGB_COLORS) != height) goto done;
+    result = CreateIconIndirect(&icon);
+done:
+    if (bitmap) DeleteObject(bitmap);
+    if (icon.hbmColor) DeleteObject(icon.hbmColor);
+    if (icon.hbmMask) DeleteObject(icon.hbmMask);
+    if (memory) DeleteDC(memory);
+    if (screen) ReleaseDC(NULL, screen);
+    HeapFree(GetProcessHeap(), 0, pixels); return result;
+}
+
 BOOL PaintColorsChanged(PaintColors *colors)
 {
     int i; BOOL changed = !colors->initialized;
