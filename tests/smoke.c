@@ -1767,7 +1767,7 @@ void start(void)
     wsprintfA(settingsDir, "%s profile", fixture);
     Check(CreateDirectoryA(settingsDir, NULL), "create isolated settings directory");
     wsprintfA(settings, "%s\\settings.ini", settingsDir);
-    if(group==GROUP_LANGUAGE) { LanguageTests(settingsDir); LanguageRestartTests(settingsDir,executable); goto cleanup; }
+    if(group==GROUP_LANGUAGE) { ShutdownDosTests(settingsDir); LanguageTests(settingsDir); LanguageRestartTests(settingsDir,executable); goto cleanup; }
     if (group == GROUP_FULL || group == GROUP_CORE || group == GROUP_BROWSER) ShellNewTests(settingsDir, module);
     if (group == GROUP_FULL || group == GROUP_CORE || group == GROUP_BROWSER) FileDropRegistrationTests();
     if (group == GROUP_FULL || group == GROUP_CORE || group == GROUP_MENU) ShutdownDosTests(settingsDir);

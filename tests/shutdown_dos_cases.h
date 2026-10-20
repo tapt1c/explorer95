@@ -26,7 +26,12 @@ static void ShutdownDosTests(const char *directory)
           "MS-DOS restart cannot execute on NT or an unvalidated Windows version");
     Check(!ShutdownDosRestart(owner, win95, folder, &host) && dosDialogs == 1 && !dosLaunches,
           "a missing system PIF delegates to the native Windows chooser");
+    { char note[96]; wsprintfA(note, "MS-DOS fixture: native ANSI code page %u\r\n", GetACP()); Log(note); }
     for (i = 0; i < 3; ++i) {
+        /* These are Win95 CP1251 filesystem names, not translated UI text.
+         * Other ACPs may reject the bytes (e.g. UTF-8/ASCII CI prefixes).
+         * The Russian-locale language run exercises both native names. */
+        if (i && GetACP() != 1251) continue;
         wsprintfA(path, "%s\\%s", folder, names[i]);
         file = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
         Check(file != INVALID_HANDLE_VALUE, "create an inert English/Russian stock-name fixture"); CloseHandle(file);
