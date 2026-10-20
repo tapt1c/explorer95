@@ -419,7 +419,7 @@ BOOL NativeViewSelection(NativeView *view, NativeSelection *selection)
     if (view->recycleBin && selection->count) {
         int index = ListView_GetNextItem(view->list, -1, LVNI_SELECTED);
         ListView_GetItemText(view->list, index, 0, selection->name, MAX_PATH);
-        lstrcpyA(selection->type, "Deleted item");
+        lstrcpyA(selection->type, UiText("Deleted item"));
         selection->capabilities = SFGAO_CANDELETE | SFGAO_HASPROPSHEET;
         return TRUE;
     }

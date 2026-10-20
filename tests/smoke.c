@@ -1001,6 +1001,7 @@ static void PumpFor(DWORD duration)
 }
 #include "quick_launch_cases.h"
 #include "backlog_menu_cases.h"
+#include "task_groups_cases.h"
 #include "browser_panes_cases.h"
 #include "desktop_delete_cases.h"
 #include "file_drag_cases.h"
@@ -1812,7 +1813,7 @@ void start(void)
         Check(!IsWindow(initial), "startup folder closes before keyboard focus tests begin");
     }
     if (group != GROUP_BROWSER) WinKeyTests(bar, FindWindowA("Explorer95.Start", NULL));
-    if (group != GROUP_BROWSER) { QuickLaunchTests(bar, settings); TaskTileTests(bar,settings); TaskManagerMenuTests(bar); StartOrderTests(bar,FindWindowA("Explorer95.Start",NULL),settings); }
+    if (group != GROUP_BROWSER) { QuickLaunchTests(bar, settings); TaskTileTests(bar,settings); TaskGroupProcessesTests(bar,settingsDir); TaskManagerMenuTests(bar); StartOrderTests(bar,FindWindowA("Explorer95.Start",NULL),settings); }
     if (group != GROUP_MENU) {
         FolderForwardTests(executable,settings,fixture,bar); DesktopRefreshTests(desktop);
         FolderSettingsTests(bar);

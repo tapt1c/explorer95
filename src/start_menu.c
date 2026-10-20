@@ -6,7 +6,7 @@
 #undef GetTextExtentPoint32A
 
 typedef struct RecentProgram { char path[MAX_PATH], arguments[512]; } RecentProgram;
-typedef struct ProgramItem { char path[MAX_PATH], label[MAX_PATH]; BOOL folder, fresh; HICON icon; LPITEMIDLIST pidl; } ProgramItem;
+typedef struct ProgramItem { char path[MAX_PATH], label[MAX_PATH]; BOOL folder, fresh, localize; HICON icon; LPITEMIDLIST pidl; } ProgramItem;
 static RecentProgram recent[RECENT_LIMIT];
 static char recentShortcuts[RECENT_LIMIT][MAX_PATH];
 static ProgramItem programs[256];
@@ -337,6 +337,7 @@ static HMENU FolderMenu(const char *directory, int depth)
         if (GetMenuItemCount(menu)) AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
         lstrcpynA(programs[programCount].path, directory, MAX_PATH);
         programs[programCount].folder = TRUE;
+        programs[programCount].localize = TRUE;
         lstrcpyA(programs[programCount].label, "Open this folder...");
         programs[programCount].icon = EnvPathIcon(directory);
         AppendMenuA(menu, MF_OWNERDRAW, 2000 + programCount, (LPCSTR)&programs[programCount]); ++programCount;
@@ -354,6 +355,7 @@ static HMENU ProgramsMenu(BOOL documents)
         if (programCount < 250) {
             ProgramItem *entry = &programs[programCount++]; HMENU child;
             lstrcpyA(entry->path, common); lstrcpyA(entry->label, "All Users");
+            entry->localize = TRUE;
             entry->folder = TRUE; entry->icon = EnvPathIcon(common);
             child = FolderMenu(common, 0);
             AppendMenuA(menu, MF_OWNERDRAW | MF_POPUP, (UINT_PTR)child, (LPCSTR)entry);
@@ -580,7 +582,10 @@ static BOOL DrawProgramItem(const DRAWITEMSTRUCT *draw)
     DrawIconEx(draw->hDC, text.left + 4, text.top + (text.bottom - text.top - iconSize) / 2,
         entry->icon ? entry->icon : LoadIconA(NULL, IDI_APPLICATION), iconSize, iconSize, 0, NULL, DI_NORMAL);
     text.left += iconSize + 10; text.right -= 16;
-    if(!lstrcmpA(entry->label,"Open this folder...")) DrawTextA(draw->hDC,entry->label,-1,&text,DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX);
+    if(entry->localize) {
+        UiMarkTranslated(entry->label);
+        DrawTextA(draw->hDC,entry->label,-1,&text,DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX);
+    }
     else UiDrawNativeTextA(draw->hDC, entry->label, -1, &text, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
     PaintBufferEnd(&itemBuffer, target, &draw->rcItem); return TRUE;
 }
@@ -619,6 +624,7 @@ static void MorePopup(BOOL pins)
         if (!pins && !(VisibleItems() & RightBit(index))) continue;
         if (visible++ < skip) continue;
         GetWindowTextA(GetDlgItem(env.start, id), entries[used].label, MAX_PATH);
+        entries[used].localize = !GetPropA(GetDlgItem(env.start,id),"Explorer95.UiLiteral");
         if (pins) {
             entries[used].icon = startPins[i].path[0] == '@' ?
                 (!lstrcmpA(startPins[i].path, "@explorer") ? SystemIcon(5, FALSE) : DosIcon(FALSE)) : EnvPathIcon(startPins[i].path);
@@ -731,7 +737,8 @@ static LRESULT CALLBACK StartProc(HWND window, UINT message, WPARAM wp, LPARAM l
         if (item->CtlType == ODT_MENU) {
             ProgramItem *entry = (ProgramItem *)item->itemData; SIZE size; HDC dc = GetDC(window); HFONT old;
             old = SelectObject(dc, env.host.font);
-            GetTextExtentPoint32A(dc, entry->label, lstrlenA(entry->label), &size);
+            if(entry->localize) { UiMarkTranslated(entry->label); UiGetTextExtentPoint32A(dc,entry->label,lstrlenA(entry->label),&size); }
+            else UiGetNativeTextExtentA(dc,entry->label,lstrlenA(entry->label),&size);
             SelectObject(dc, old); ReleaseDC(window, dc);
             item->itemWidth = size.cx + 44;
             item->itemHeight = size.cy + 4 > 22 ? size.cy + 4 : 22; return TRUE;
@@ -902,12 +909,15 @@ static void ClassicPopup(void)
     FreePrograms(); ZeroMemory(entries, sizeof(entries));
     for (i = 0; i < startPinCount; ++i) {
         ProgramItem *item = &entries[used++]; lstrcpynA(item->label, startPins[i].label, MAX_PATH);
+        item->localize = (!lstrcmpA(startPins[i].path,"@explorer") && !lstrcmpA(startPins[i].label,"Windows Explorer")) ||
+            (!lstrcmpA(startPins[i].path,"@command") && !lstrcmpA(startPins[i].label,"MS-DOS Prompt"));
         item->icon = startPins[i].path[0] == '@' ? SystemIcon(!lstrcmpA(startPins[i].path, "@explorer") ? 5 : 2, FALSE) : EnvPathIcon(startPins[i].path);
         AppendMenuA(menu, MF_OWNERDRAW, ID_PINNED + i, (LPCSTR)item);
     }
     if (startPinCount) AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
     if (env.host.specialPath(CSIDL_PROGRAMS, path)) {
         ProgramItem *item = &entries[used++]; lstrcpyA(item->label, "Programs"); item->icon = SystemIcon(37, FALSE);
+        item->localize=TRUE;
         AppendMenuA(menu, MF_OWNERDRAW | MF_POPUP, (UINT_PTR)ProgramsMenu(FALSE), (LPCSTR)item);
     }
     { int previous=-1;
@@ -919,6 +929,7 @@ static void ClassicPopup(void)
         if(previous>=0 && previous!=group) AppendMenuA(menu,MF_SEPARATOR,0,NULL);
         previous=group;
         item=&entries[used++]; lstrcpynA(item->label,rightLabels[index],MAX_PATH);
+        item->localize=TRUE;
         item->icon=RightSmallIcon(index);
         if ((index < 6 || index == 9) && (env.options.startMenus & RightBit(index))) {
             int folder = index == 9 ? CSIDL_FAVORITES : folders[index];
@@ -929,6 +940,7 @@ static void ClassicPopup(void)
     AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
     for (i = 0; i < 3; ++i) if (VisibleItems() & (1U << (9 + i))) {
         const int ids[] = {ID_EXIT, ID_LOGOFF, ID_SHUTDOWN}; ProgramItem *item = &entries[used++];
+        item->localize=TRUE;
         GetWindowTextA(GetDlgItem(env.start, ids[i]), item->label, MAX_PATH); item->icon = CopyIcon(StartIcon(ids[i])); AppendMenuA(menu, MF_OWNERDRAW, ids[i], (LPCSTR)item);
     }
     GetWindowRect(env.startButton, &button); classicActive = popupActive = TRUE;

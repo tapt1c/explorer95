@@ -139,15 +139,19 @@ static void LanguageTests(const char *directory)
     Check(UiReadLanguage(profile)==0,"a missing language preference preserves English");
     Check(WritePrivateProfileStringA("Interface","Language","invalid",profile) && UiReadLanguage(profile)==0,"an invalid language falls back to English");
     Check(WritePrivateProfileStringA("Interface","Language","ru",profile) && UiInitialize(profile) && UiLanguage()==1,
-        "Russian initializes with its bundled font on an English system locale");
+        "Russian initializes with the font appropriate to the system code page");
     Check(UiText(LPSTR_TEXTCALLBACKA)==LPSTR_TEXTCALLBACKA,"a tooltip callback sentinel is never dereferenced as text");
     Check(!lstrcmpA(UiText("Start"),"\xcf\xf3\xf1\xea"),"the catalogue produces the CP1251 bytes for the Start caption without an installed Russian code page");
     Check(!lstrcmpA(UiText("C:\\Start\\My Documents"),"C:\\Start\\My Documents"),"localisation never changes an actual filesystem path");
     HFONT cyrillic=UiFont((HFONT)GetStockObject(DEFAULT_GUI_FONT));
-    Check(cyrillic && GetObjectA(cyrillic,sizeof(font),&font) && font.lfCharSet==SYMBOL_CHARSET,"the ANSI fallback uses a symbol-encoded Cyrillic font instead of the system code page");
+    { int i; BOOL stable=TRUE; for(i=0;i<64;++i) stable &= UiFont((HFONT)GetStockObject(DEFAULT_GUI_FONT))==cyrillic;
+      Check(stable,"repeated GUI-font requests reuse one Cyrillic font instead of exhausting the cache and reverting to a different family"); }
+    Check(cyrillic && GetObjectA(cyrillic,sizeof(font),&font) &&
+        (GetACP()==1251 ? cyrillic==(HFONT)GetStockObject(DEFAULT_GUI_FONT) : font.lfCharSet==SYMBOL_CHARSET),
+        "Russian systems retain their native GUI font; other code pages use the bundled Cyrillic fallback");
     {
         HDC dc=GetDC(NULL); HFONT old=SelectObject(dc,cyrillic); GetTextFaceA(dc,sizeof(face),face); SelectObject(dc,old); ReleaseDC(NULL,dc);
-        Check(!lstrcmpA(face,"Explorer95 UI"),"GDI actually selected the embedded font, not a missing-font substitute");
+        Check(GetACP()==1251 || !lstrcmpA(face,"Explorer95 UI"),"GDI selects the embedded font when the native code page lacks Cyrillic");
     }
     ZeroMemory(&cls,sizeof(cls)); cls.lpfnWndProc=LanguageProc; cls.hInstance=GetModuleHandleA(NULL); cls.lpszClassName="Explorer95.LanguageProbe";
     cls.hbrBackground=(HBRUSH)(COLOR_BTNFACE+1);
@@ -157,13 +161,42 @@ static void LanguageTests(const char *directory)
     button=UiCreateWindowExA(0,"BUTTON","All Programs",WS_CHILD|WS_VISIBLE,20,30,220,28,window,(HMENU)1,cls.hInstance,NULL);
     edit=UiCreateWindowExA(0,"EDIT","Copy",WS_CHILD|WS_VISIBLE|WS_BORDER,20,80,220,24,window,(HMENU)2,cls.hInstance,NULL);
     LanguageToolbarFontTest(window);
+    {
+        HWND tooltip=CreateWindowExA(0,TOOLTIPS_CLASSA,"",WS_POPUP,0,0,0,0,window,NULL,cls.hInstance,NULL);
+        NMTTDISPINFOA ansi; NMTTDISPINFOW wide; HFONT normal=(HFONT)GetStockObject(DEFAULT_GUI_FONT);
+        ZeroMemory(&ansi,sizeof(ansi)); ansi.hdr.hwndFrom=tooltip; ansi.hdr.code=TTN_NEEDTEXTA;
+        UiTooltipText(&ansi.hdr,UiText("Back (right-click for history)"),normal);
+        Check(!lstrcmpA(ansi.lpszText,UiText("Back (right-click for history)")) &&
+            (HFONT)SendMessageA(tooltip,WM_GETFONT,0,0)==UiFont(normal),"ANSI callback tooltips return Russian text and its matching font");
+        ZeroMemory(&wide,sizeof(wide)); wide.hdr.hwndFrom=tooltip; wide.hdr.code=TTN_NEEDTEXTW;
+        UiTooltipText(&wide.hdr,UiText("Back (right-click for history)"),normal);
+        Check(wide.lpszText && wide.lpszText[0]==0x041d && wide.lpszText[1]==0x0430,
+            "Unicode callback tooltips receive actual Cyrillic instead of an ANSI pointer");
+        UiTooltipText(&ansi.hdr,"Copy",normal);
+        Check(!lstrcmpA(ansi.lpszText,"Copy") && (HFONT)SendMessageA(tooltip,WM_GETFONT,0,0)==normal,
+            "native task captions remain literal and restore the native tooltip font");
+        if(GetACP()==1251) {
+            LOGFONTA bold; GetObjectA(normal,sizeof(bold),&bold); bold.lfWeight=FW_BOLD;
+            HFONT nativeBold=CreateFontIndirectA(&bold);
+            Check(UiFont(normal)==normal && UiFont(NULL)==normal && nativeBold && UiFont(nativeBold)==nativeBold,
+                "native CP1251 menus retain the original normal and bold fonts without mixing a substitute family");
+            DeleteObject(nativeBold);
+        }
+        DestroyWindow(tooltip);
+    }
     ToolbarCompatTests(window);
     Check(window && button && edit && LanguageWideEqual(button,L"\u0412\u0441\u0435 \u043f\u0440\u043e\u0433\u0440\u0430\u043c\u043c\u044b"),
-        "native controls show real Cyrillic on an English NT locale through optional Unicode display calls");
+        "native controls show real Cyrillic through optional Unicode display calls on NT");
     UiGetWindowTextA(button,text,sizeof(text)); Check(!lstrcmpA(text,UiText("All Programs")),"owner-draw labels retain their CP1251 text instead of lossy ACP question marks");
     UiGetWindowTextA(edit,text,sizeof(text)); Check(!lstrcmpA(text,"Copy"),"editable user data equal to an English UI label stays unchanged");
     UiSetWindowTextA(edit,"Start"); UiGetWindowTextA(edit,text,sizeof(text)); Check(!lstrcmpA(text,"Start"),"setting editable user text does not translate a custom Start caption");
     menu=CreatePopupMenu(); Check(UiAppendMenuA(menu,MF_STRING,10,"Copy"),"append a translated command while preserving its numeric ID");
+    {
+        HMENU literal=CreatePopupMenu(); char caption[40];
+        Check(UiAppendLiteralMenuA(literal,MF_STRING,1,"Copy") && GetMenuStringA(literal,1,caption,sizeof(caption),MF_BYCOMMAND) && !lstrcmpA(caption,"Copy"),
+            "task-window captions matching a catalogue key stay literal in their native popup");
+        DestroyMenu(literal);
+    }
     {
         MENUITEMINFOA info; MEASUREITEMSTRUCT measure; ZeroMemory(&info,sizeof(info)); info.cbSize=sizeof(info); info.fMask=MIIM_DATA|MIIM_TYPE|MIIM_ID;
         Check(GetMenuItemInfoA(menu,0,TRUE,&info) && info.wID==10 && (info.fType&MFT_OWNERDRAW),"Cyrillic menus keep their commands and use their own font without changing Windows menu settings");
@@ -210,6 +243,7 @@ static void LanguageFontTrace(const char *path)
         "shell stage=font.register result=00000000", "font.face.selected name=\"Explorer95 UI\" charset=2", "shell stage=font.ready result=00000000",
         "shell stage=exit.ole ","shell stage=font.remove result=00000000","shell stage=exit.done "};
     for(stage=0;stage<sizeof(stages)/sizeof(stages[0]);++stage) {
+        if(GetACP()==1251 && stage!=5 && stage!=7) continue;
         DWORD length=lstrlenA(stages[stage]); BOOL found=FALSE;
         while(offset+length<=bytes) {
             DWORD j=0; while(j<length && contents[offset+j]==stages[stage][j]) ++j;

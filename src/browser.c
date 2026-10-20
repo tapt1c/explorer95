@@ -783,12 +783,12 @@ static LRESULT CALLBACK BrowserProc(HWND window, UINT message, WPARAM wp, LPARAM
                 NMTOOLBARA *dropdown = (NMTOOLBARA *)lp;
                 Command(browser, dropdown->iItem == ID_BACK ? ID_BACK_HISTORY : dropdown->iItem == ID_FORWARD ? ID_FORWARD_HISTORY : ID_VIEWS); return 0;
             }
-            if (header->code == TTN_NEEDTEXTA) {
-                NMTTDISPINFOA *tip = (NMTTDISPINFOA *)lp; int i;
+            if (header->code == TTN_NEEDTEXTA || header->code == TTN_NEEDTEXTW) {
+                int i;
                 static const int ids[] = {ID_BACK, ID_FORWARD, ID_UP, ID_SEARCH, ID_FOLDERS, ID_REFRESH, ID_VIEWS, ID_HISTORY};
                 static const char *names[] = {"Back (right-click for history)", "Forward (right-click for history)", "Up", "Search", "Folders", "Refresh", "Views", "History (Ctrl+H)"};
-                for (i = 0; i < 8; ++i) if ((int)header->idFrom == ids[i]) tip->lpszText = (LPSTR)names[i];
-                for (i = 0; i < BROWSER_EXTRA_TOOLS; ++i) if ((int)header->idFrom == extraCommands[i]) tip->lpszText = (LPSTR)extraNames[i];
+                for (i = 0; i < 8; ++i) if ((int)header->idFrom == ids[i]) UiTooltipText(header,UiText(names[i]),browserFont);
+                for (i = 0; i < BROWSER_EXTRA_TOOLS; ++i) if ((int)header->idFrom == extraCommands[i]) UiTooltipText(header,UiText(extraNames[i]),browserFont);
             }
             return BrowserFilesNotify(browser, header);
         } return 0;

@@ -188,13 +188,13 @@ static void BuildTasks(Browser *browser)
     else if (selected.count == 1) {
         wsprintfA(details, "%s\r\n%s", selected.name, selected.type[0] ? selected.type : folder ? "File folder" : "Item");
         if (entry && !folder) {
-            char size[80]; if (entry->sizeHigh) lstrcpyA(size, "\r\nSize: > 4 GB");
+            char size[80]; if (entry->sizeHigh) lstrcpyA(size, UiText("\r\nSize: > 4 GB"));
             else wsprintfA(size, "\r\nSize: %lu bytes", entry->sizeLow);
             lstrcatA(details, size);
         }
     } else if (root) { DriveDetails(s, browser->path); lstrcpyA(details, s->driveDetails); }
     else if (browser->path[0]) wsprintfA(details, "%s\r\nFile folder", browser->path);
-    else { GetWindowTextA(browser->window, details, MAX_PATH); lstrcatA(details, "\r\nSystem Folder"); }
+    else { char title[MAX_PATH]; GetWindowTextA(browser->window,title,MAX_PATH); wsprintfA(details,"%s\r\n%s",title,UiText("System folder")); }
     Row(browser, ROW_DETAILS, 3, 0, -1, details);
     for (i = s->count; i < oldCount; ++i) EnvShowControl(s->rows[i].window, FALSE);
 }

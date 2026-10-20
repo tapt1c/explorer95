@@ -3,11 +3,12 @@
 #include "file_drag.h"
 #include "render_trace.h"
 #include "tray_mirror.h"
+#include "task_groups.h"
 #define EX95_LOCALIZE_UI
 #include "localization.h"
 
 ShellState env;
-typedef struct TaskGroup { HWND windows[TASK_LIMIT], button; int count; DWORD process; BOOL active; HICON icon; } TaskGroup;
+typedef struct TaskGroup { HWND windows[TASK_LIMIT], button; int count; DWORD process; BOOL active; HICON icon; char application[MAX_PATH]; } TaskGroup;
 typedef struct QuickItem { char path[MAX_PATH]; HICON icon; HWND button; } QuickItem;
 static TaskGroup tasks[TASK_LIMIT];
 static HWND taskWindows[TASK_LIMIT], savedWindows[TASK_LIMIT], lastActive, bridge, quickTip, desktopButton;
@@ -241,9 +242,11 @@ static void TaskAction(int index)
     if (task->count > 1) {
         HMENU menu = CreatePopupMenu(); POINT point; int i, selected; char text[128];
         for (i = 0; i < task->count; ++i) {
-            GetWindowTextA(task->windows[i], text, sizeof(text)); AppendMenuA(menu, MF_STRING, i + 1, text);
+            GetWindowTextA(task->windows[i], text, sizeof(text)); UiAppendLiteralMenuA(menu, MF_STRING, i + 1, text);
         }
+        SetForegroundWindow(env.bar);
         GetCursorPos(&point); selected = TrackPopupMenu(menu, TPM_RETURNCMD, point.x, point.y, 0, env.bar, NULL);
+        PostMessageA(env.bar,WM_NULL,0,0);
         DestroyMenu(menu); if (selected > 0 && selected <= task->count) Activate(task->windows[selected - 1]);
     } else if (task->windows[0] == lastActive && !IsIconic(task->windows[0])) ShowWindowAsync(task->windows[0], SW_MINIMIZE);
     else Activate(task->windows[0]);
@@ -274,12 +277,17 @@ static void UpdateTasks(void)
         ZeroMemory(tasks, sizeof(tasks)); taskCount = 0;
         windowCount = count; previousGrouping = env.options.group; previousTaskTiles=env.options.taskTiles;
         for (i = 0; i < count; ++i) {
-            DWORD process;
-            taskWindows[i] = windows[i]; GetWindowThreadProcessId(windows[i], &process);
+            DWORD process=0; char application[MAX_PATH]; application[0]=0;
+            taskWindows[i] = windows[i]; if(!GetWindowThreadProcessId(windows[i], &process) || !process) continue;
             group = taskCount;
-            if (env.options.group) for (j = 0; j < taskCount; ++j) if (tasks[j].process == process) { group = j; break; }
+            if (env.options.group) {
+                for(j=0;j<taskCount;++j) if(tasks[j].process==process) { group=j; break; }
+                if(group==taskCount && TaskApplicationPath(process,application))
+                    for(j=0;j<taskCount;++j) if(tasks[j].application[0] && !lstrcmpiA(tasks[j].application,application)) { group=j; break; }
+            }
             if (group == taskCount) {
                 tasks[group].process = process;
+                lstrcpyA(tasks[group].application,application);
                 tasks[group].button = EnvControl(env.bar, "BUTTON", "", BS_OWNERDRAW, ID_TASK + taskCount++);
                 QuickTip(tasks[group].button,LPSTR_TEXTCALLBACKA,FALSE);
             }
@@ -914,9 +922,9 @@ static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
     }
     case WM_NOTIFY: {
         NMHDR *notice=(NMHDR *)lp;
-        if(notice->hwndFrom==quickTip && notice->code==TTN_NEEDTEXTA) {
-            static char caption[160]; NMTTDISPINFOA *tip=(NMTTDISPINFOA *)lp;
-            GetWindowTextA((HWND)notice->idFrom,caption,sizeof(caption)); tip->lpszText=caption; return 0;
+        if(notice->hwndFrom==quickTip && (notice->code==TTN_NEEDTEXTA || notice->code==TTN_NEEDTEXTW)) {
+            static char caption[160];
+            GetWindowTextA((HWND)notice->idFrom,caption,sizeof(caption)); UiTooltipText(notice,caption,env.host.font); return 0;
         }
         break;
     }

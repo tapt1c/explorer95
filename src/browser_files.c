@@ -59,7 +59,7 @@ static FileEntry *Selected(Browser *browser, int index)
 static void SizeText(FileEntry *entry, char *text)
 {
     if (entry->attributes & FILE_ATTRIBUTE_DIRECTORY) text[0] = 0;
-    else if (entry->sizeHigh) lstrcpyA(text, "> 4 GB");
+    else if (entry->sizeHigh) lstrcpyA(text, UiText("> 4 GB"));
     else wsprintfA(text, "%lu bytes", entry->sizeLow);
 }
 static int Preview(Browser *browser, FileEntry *entry, int fallback)

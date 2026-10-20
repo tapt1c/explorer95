@@ -25,6 +25,7 @@ static const WCHAR codepage[128]={
 };
 
 static BOOL legacy;
+static BOOL nativeCyrillic;
 static char strings[65536];
 static UiFontResource fontResource;
 static UINT stringBytes;
@@ -123,9 +124,9 @@ int UiReadLanguage(const char *profile)
 int UiLanguage(void) { return language; }
 BOOL UiInitialize(const char *profile)
 {
-    language=UiReadLanguage(profile); legacy=!!(GetVersion()&0x80000000UL);
+    language=UiReadLanguage(profile); legacy=!!(GetVersion()&0x80000000UL); nativeCyrillic=GetACP()==1251;
     if(!language) return TRUE;
-    if(!fontResource.registered && !UiFontResourceOpen(&fontResource,legacy)) {
+    if(!nativeCyrillic && !fontResource.registered && !UiFontResourceOpen(&fontResource,legacy)) {
         char message[384]; language=0;
         wsprintfA(message,"Cannot load the bundled Cyrillic font. Explorer95 will use English.\r\n\r\nStage: %s\r\nWindows error: %lu (0 = no extended error reported).\r\nRun with --trace-render to record the font loading stages.",fontResource.stage,fontResource.error);
         MessageBoxA(NULL,message,"Explorer95 language",MB_OK|MB_ICONEXCLAMATION); return FALSE;
@@ -152,7 +153,13 @@ HFONT UiFont(HFONT original)
     LOGFONTA font; int i,j;
     if(!language) return original;
     if(!original) original=(HFONT)GetStockObject(DEFAULT_GUI_FONT);
+    if(nativeCyrillic) return original;
+    ZeroMemory(&font,sizeof(font));
     if(!GetObjectA(original,sizeof(font),&font)) return original;
+    font.lfFaceName[LF_FACESIZE-1]=0;
+    /* GetObject need not initialise bytes after the face-name terminator.
+     * They must not make identical fonts occupy different cache entries. */
+    for(i=lstrlenA(font.lfFaceName)+1;i<LF_FACESIZE;++i) font.lfFaceName[i]=0;
     if(font.lfCharSet==SYMBOL_CHARSET && !lstrcmpiA(font.lfFaceName,fontResource.face)) return original;
     for(i=0;i<fontCount;++i) {
         const BYTE *a=(const BYTE *)&font,*b=(const BYTE *)&fonts[i].source;
@@ -163,6 +170,22 @@ HFONT UiFont(HFONT original)
     fonts[fontCount].source=font; font.lfCharSet=SYMBOL_CHARSET; lstrcpyA(font.lfFaceName,fontResource.face);
     fonts[fontCount].font=CreateFontIndirectA(&font);
     return fonts[fontCount].font ? fonts[fontCount++].font : original;
+}
+void UiTooltipText(NMHDR *tip,const char *text,HFONT nativeFont)
+{
+    if(tip->code==TTN_NEEDTEXTW) {
+        static WCHAR buffer[512]; NMTTDISPINFOW *wideTip=(NMTTDISPINFOW *)tip;
+        if(Localized(text)) {
+            int i; for(i=0;i<511 && text[i];++i) buffer[i]=(BYTE)text[i]<128 ? (BYTE)text[i] : codepage[(BYTE)text[i]-128];
+            buffer[i]=0;
+        } else {
+            int length=lstrlenA(text),used; if(length>511) length=511;
+            used=MultiByteToWideChar(CP_ACP,0,text,length,buffer,511); buffer[used]=0;
+        }
+        wideTip->lpszText=buffer;
+    } else ((NMTTDISPINFOA *)tip)->lpszText=(LPSTR)text;
+    if(tip->hwndFrom) SendMessageA(tip->hwndFrom,WM_SETFONT,
+        (WPARAM)(Localized(text) ? UiFont(nativeFont) : nativeFont),FALSE);
 }
 static void ControlFont(HWND window)
 {
@@ -504,6 +527,8 @@ static LPCSTR MenuText(HMENU menu,UINT *flags,LPCSTR text)
 }
 BOOL WINAPI UiAppendMenuA(HMENU menu,UINT flags,UINT_PTR id,LPCSTR text)
 { text=MenuText(menu,&flags,text); return AppendMenuA(menu,flags,id,text); }
+BOOL UiAppendLiteralMenuA(HMENU menu,UINT flags,UINT_PTR id,LPCSTR text)
+{ return AppendMenuA(menu,flags,id,text); }
 BOOL WINAPI UiInsertMenuA(HMENU menu,UINT position,UINT flags,UINT_PTR id,LPCSTR text)
 { text=MenuText(menu,&flags,text); return InsertMenuA(menu,position,flags,id,text); }
 int WINAPI UiDrawTextA(HDC dc,LPCSTR text,int length,LPRECT rect,UINT flags)

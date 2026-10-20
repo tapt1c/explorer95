@@ -10,6 +10,8 @@ int UiLanguage(void);
 void UiShutdown(void);
 const char *UiText(const char *english);
 HFONT UiFont(HFONT original);
+/* Pass translated catalogue text or literal native text, with stable lifetime. */
+void UiTooltipText(NMHDR *tip, const char *text, HFONT nativeFont);
 BOOL UiIsTranslated(const char *text);
 BOOL UiIsEncodedText(const char *text);
 void UiMarkTranslated(const char *text);
@@ -27,6 +29,7 @@ BOOL WINAPI UiDestroyMenu(HMENU menu);
 int WINAPI UiDrawNativeTextA(HDC dc, LPCSTR text, int length, LPRECT rect, UINT flags);
 ATOM WINAPI UiRegisterClassA(const WNDCLASSA *cls);
 BOOL WINAPI UiAppendMenuA(HMENU menu, UINT flags, UINT_PTR id, LPCSTR text);
+BOOL UiAppendLiteralMenuA(HMENU menu, UINT flags, UINT_PTR id, LPCSTR text);
 BOOL WINAPI UiInsertMenuA(HMENU menu, UINT position, UINT flags, UINT_PTR id, LPCSTR text);
 int WINAPI UiDrawTextA(HDC dc, LPCSTR text, int length, LPRECT rect, UINT flags);
 BOOL WINAPI UiGetTextExtentPoint32A(HDC dc, LPCSTR text, int length, LPSIZE size);
