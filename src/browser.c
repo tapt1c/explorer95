@@ -1,6 +1,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include "browser_internal.h"
 #include "render_trace.h"
+#include "toolbar_compat.h"
 #define EX95_LOCALIZE_UI
 #include "localization.h"
 
@@ -53,7 +54,7 @@ static void LoadOptions(BrowserOptions *options)
     if (options->pane < BROWSER_PANE_NONE || options->pane > BROWSER_PANE_HISTORY) options->pane = BROWSER_PANE_TASKS;
     options->toolbar = !!Option(optionKeys[1], TRUE);
     options->address = !!Option(optionKeys[2], TRUE); options->status = !!Option(optionKeys[3], TRUE);
-    options->labels = !!Option(optionKeys[4], TRUE); options->largeTools = !!Option(optionKeys[5], TRUE);
+    options->labels = !!Option(optionKeys[4], TRUE); options->largeTools = !!Option(optionKeys[5], FALSE);
     options->hidden = !!Option(optionKeys[6], FALSE); options->extensions = !!Option(optionKeys[7], TRUE);
 }
 static void SaveNumber(const char *name, int number)
@@ -133,6 +134,41 @@ static void ToolbarButton(Browser *browser, int command, const char *label, int 
          command == ID_EMPTY_RECYCLE || (command >= ID_COPY && command <= ID_BROWSER_OPTIONS)) ? string : -1;
     SendMessageA(browser->toolbar, TB_ADDBUTTONSA, 1, (LPARAM)&button);
 }
+static void CompactToolbar(Browser *browser, int size)
+{
+    HWND toolbar = browser->toolbar; HDC dc = GetDC(toolbar); HGDIOBJ old;
+    int i, count = (int)SendMessageA(toolbar, TB_BUTTONCOUNT, 0, 0), widths[32]; const char *captions[32];
+    ToolbarBitmap bitmaps[4]; BOOL sized;
+    if (!dc || count > 32) { if (dc) ReleaseDC(toolbar, dc); return; }
+    old = SelectObject(dc, (HFONT)SendMessageA(toolbar, WM_GETFONT, 0, 0));
+    for (i = 0; i < count; ++i) {
+        TBBUTTON button; SIZE text = {0, 0}; const char *label = ""; int j;
+        widths[i] = 8; captions[i] = "";
+        if (!SendMessageA(toolbar, TB_GETBUTTON, i, (LPARAM)&button) || (button.fsStyle & TBSTYLE_SEP)) continue;
+        if (browser->options.labels && button.iString != -1) {
+            switch (button.idCommand) {
+            case ID_BACK: label = "Back"; break;
+            case ID_SEARCH: label = "Search"; break;
+            case ID_FOLDERS: label = "Folders"; break;
+            case ID_HISTORY: label = "History"; break;
+            case ID_EMPTY_RECYCLE: label = "Empty Recycle Bin"; break;
+            default: for (j = 0; j < BROWSER_EXTRA_TOOLS; ++j)
+                if (button.idCommand == extraCommands[j]) { label = extraNames[j]; break; }
+            }
+        }
+        if (*label) GetTextExtentPoint32A(dc, label, lstrlenA(label), &text);
+        widths[i] = size + 8 + (text.cx ? text.cx + 4 : 0) + ((button.fsStyle & TBSTYLE_DROPDOWN) ? 12 : 0);
+        captions[i] = UiText(label);
+    }
+    SelectObject(dc, old); ReleaseDC(toolbar, dc);
+    bitmaps[0].bitmap.hInst = bitmaps[1].bitmap.hInst = bitmaps[2].bitmap.hInst = HINST_COMMCTRL;
+    bitmaps[0].bitmap.nID = size == 24 ? IDB_STD_LARGE_COLOR : IDB_STD_SMALL_COLOR; bitmaps[0].count = 15;
+    bitmaps[1].bitmap.nID = size == 24 ? IDB_VIEW_LARGE_COLOR : IDB_VIEW_SMALL_COLOR; bitmaps[1].count = 12;
+    bitmaps[2].bitmap.nID = size == 24 ? IDB_HIST_LARGE_COLOR : IDB_HIST_SMALL_COLOR; bitmaps[2].count = 5;
+    bitmaps[3].bitmap.hInst = NULL; bitmaps[3].bitmap.nID = (UINT_PTR)browser->toolbarImages; bitmaps[3].count = 8;
+    sized = ToolbarCompact(toolbar, size, count, widths, captions, bitmaps, browser->toolbarImages ? 4 : 3);
+    RenderTraceShell("toolbar.compact", sized ? S_OK : E_FAIL, (DWORD)size, ToolbarCompactLegacy(toolbar));
+}
 void BrowserBuildToolbar(Browser *browser)
 {
     TBADDBITMAP images; int stock, history, views, navigation, i, size = browser->options.largeTools ? 24 : 16; BYTE dropdown;
@@ -173,16 +209,7 @@ void BrowserBuildToolbar(Browser *browser)
     if (browser->options.extraTools) ToolbarButton(browser, 0, "", 8, TBSTYLE_SEP);
     for (i = 0; i < BROWSER_EXTRA_TOOLS; ++i) if (browser->options.extraTools & (1U << i))
         ToolbarButton(browser, extraCommands[i], extraNames[i], stock + extraImages[i], TBSTYLE_BUTTON);
-    /* Optional width hints fix mixed caption/icon wrapping on newer controls.
-     * Original Win95 ignores this message and retains its native button sizes. */
-    for (i = 0; i < (int)SendMessageA(browser->toolbar, TB_BUTTONCOUNT, 0, 0); ++i) {
-        TBBUTTON button; RECT rect; TBBUTTONINFOA info;
-        if (SendMessageA(browser->toolbar, TB_GETBUTTON, i, (LPARAM)&button) && !(button.fsStyle & TBSTYLE_SEP) &&
-            SendMessageA(browser->toolbar, TB_GETITEMRECT, i, (LPARAM)&rect)) {
-            ZeroMemory(&info, sizeof(info)); info.cbSize = sizeof(info); info.dwMask = TBIF_SIZE; info.cx = (WORD)(rect.right - rect.left);
-            SendMessageA(browser->toolbar, TB_SETBUTTONINFOA, button.idCommand, (LPARAM)&info);
-        }
-    }
+    CompactToolbar(browser, size);
     BrowserUpdate(browser);
 }
 static BOOL SameLayoutOptions(const BrowserOptions *a, const BrowserOptions *b)

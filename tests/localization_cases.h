@@ -1,5 +1,6 @@
 #include "../src/localization.h"
 #include "../src/font_resource.h"
+#include "toolbar_compat_cases.h"
 static BOOL LanguageWideEqual(HWND window,const WCHAR *expected)
 {
     WCHAR actual[160]; int i; ZeroMemory(actual,sizeof(actual)); GetWindowTextW(window,actual,160);
@@ -132,6 +133,7 @@ static void LanguageTests(const char *directory)
     button=UiCreateWindowExA(0,"BUTTON","All Programs",WS_CHILD|WS_VISIBLE,20,30,220,28,window,(HMENU)1,cls.hInstance,NULL);
     edit=UiCreateWindowExA(0,"EDIT","Copy",WS_CHILD|WS_VISIBLE|WS_BORDER,20,80,220,24,window,(HMENU)2,cls.hInstance,NULL);
     LanguageToolbarFontTest(window);
+    ToolbarCompatTests(window);
     Check(window && button && edit && LanguageWideEqual(button,L"\u0412\u0441\u0435 \u043f\u0440\u043e\u0433\u0440\u0430\u043c\u043c\u044b"),
         "native controls show real Cyrillic on an English NT locale through optional Unicode display calls");
     UiGetWindowTextA(button,text,sizeof(text)); Check(!lstrcmpA(text,UiText("All Programs")),"owner-draw labels retain their CP1251 text instead of lossy ACP question marks");
@@ -215,6 +217,7 @@ static void LanguageRestartTests(const char *directory,const char *executable)
     {
         HWND browser=WaitFor(BROWSER_CLASS,NULL); Check(browser!=NULL,"the Russian shell opens its own filesystem browser"); PumpFor(400);
         Check(LanguageWideEqual(GetDlgItem(browser,ID_GO),L"\u041f\u0435\u0440\u0435\u0445\u043e\u0434"),"the Explorer address bar uses Russian commands");
+        BrowserToolbarGeometry(browser,process.hProcess,16);
         HWND list=GetDlgItem(browser,ID_FILES); int index=NativeItemIndex(list,"Copy");
         Check(index>=0,"the Russian Explorer preserves an actual filename named Copy"); NativeSelectItem(list,index);
         SendMessageA(browser,WM_COMMAND,ID_RENAME,0); HWND edit=(HWND)SendMessageA(list,LVM_GETEDITCONTROL,0,0);
@@ -225,7 +228,11 @@ static void LanguageRestartTests(const char *directory,const char *executable)
         SaveScreen("build/language-browser-ru.bmp");
         SendMessageA(browser,WM_COMMAND,ID_BROWSER_OPTIONS,0); HWND options=WaitFor("Explorer95.FolderOptions",NULL);
         Check(options!=NULL,"open Russian Explorer options independently of environment settings"); PumpFor(200); SaveScreen("build/language-browser-options-ru.bmp");
-        SendMessageA(options,WM_COMMAND,IDCANCEL,0); SendMessageA(browser,WM_CLOSE,0,0); PumpFor(200);
+        SendDlgItemMessageA(options,491,BM_SETCHECK,BST_CHECKED,0); SendMessageA(options,WM_COMMAND,IDOK,0); PumpFor(150);
+        BrowserToolbarGeometry(browser,process.hProcess,24); SaveScreen("build/language-toolbar-large-ru.bmp");
+        SendMessageA(browser,WM_COMMAND,ID_BROWSER_OPTIONS,0); options=WaitFor("Explorer95.FolderOptions",NULL);
+        SendDlgItemMessageA(options,491,BM_SETCHECK,BST_UNCHECKED,0); SendMessageA(options,WM_COMMAND,IDOK,0);
+        SendMessageA(browser,WM_CLOSE,0,0); PumpFor(200);
     }
     SendMessageA(GetDlgItem(bar,100),BM_CLICK,0,0); PumpFor(200); SaveScreen("build/language-start-ru.bmp");
     SendMessageA(GetDlgItem(bar,100),BM_CLICK,0,0);
@@ -268,6 +275,8 @@ static void LanguageRestartTests(const char *directory,const char *executable)
     Check(CreateProcessA(NULL,command,NULL,NULL,FALSE,0,NULL,NULL,&startup,&process),"restart the same profile with saved English");
     bar=WaitFor("Explorer95.Taskbar",NULL); Check(bar!=NULL,"the English taskbar restarts"); PumpFor(500);
     Check(LanguageWideEqual(GetDlgItem(bar,100),L"Start"),"English returns after restart, without leaving the Russian default caption in the profile");
+    { HWND browser=WaitFor(BROWSER_CLASS,NULL); Check(browser!=NULL,"English restart opens the compact filesystem browser");
+      BrowserToolbarGeometry(browser,process.hProcess,16); SaveScreen("build/language-toolbar-small-en.bmp"); }
     PostMessageA(bar,WM_CLOSE,0,0); Check(WaitForGuiProcess(process.hProcess,5000)==WAIT_OBJECT_0,"the English restart exits cleanly");
     CloseHandle(process.hThread); CloseHandle(process.hProcess);
     Check(DeleteFileA(ownExe),"remove only our copied bilingual executable");
