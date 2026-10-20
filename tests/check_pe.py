@@ -53,8 +53,10 @@ ALLOWED = {
         DragAcceptFiles DragQueryFileA DragFinish
     """.split()),
     # GetMenuItemInfoA is stock Win95; callers use its original cbSize.
+    # keybd_event is original Win95 USER32; emergency chord dispatch is opt-in
+    # and refused on NT. Tests never send the actual system chord.
     "user32.dll": set("""
-        CreateIconIndirect
+        CreateIconIndirect keybd_event
         SetWindowsHookExA CallNextHookEx UnhookWindowsHookEx
         CharUpperBuffA SetScrollInfo IsRectEmpty SetRectEmpty OffsetRect
         AdjustWindowRectEx EnableWindow CheckMenuItem ClientToScreen CloseClipboard DeleteMenu EmptyClipboard EnableMenuItem

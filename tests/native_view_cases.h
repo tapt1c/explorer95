@@ -293,7 +293,17 @@ static void NativeDesktopPaintTests(HWND parent)
     NativeViewDestroy(view); ShowWindow(parent,SW_HIDE);
 }
 
-static void NativeDesktopOverlay48Test(HWND list,HIMAGELIST original)
+static WNDPROC nativePaddedOriginal;
+static LRESULT CALLBACK NativePaddedIconProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
+{
+    BOOL icon=message==LVM_GETITEMRECT && lp && ((RECT *)lp)->left==LVIR_ICON;
+    LRESULT result=CallWindowProcA(nativePaddedOriginal,window,message,wp,lp);
+    /* Win95 LVIR_ICON includes a selection margin, unlike Wine's tight box.
+     * Leave native painting and item positions alone; widen only this query. */
+    if(icon && result) InflateRect((RECT *)lp,8,2);
+    return result;
+}
+static void NativeDesktopOverlay48Test(HWND list,HIMAGELIST original,BOOL padded)
 {
     HIMAGELIST source=ImageList_Create(32,32,ILC_COLOR|ILC_MASK,2,1);
     LVITEMA item; UINT state; RECT area={0,0,48,48},bounds; PaintBuffer expected={0};
@@ -322,9 +332,12 @@ static void NativeDesktopOverlay48Test(HWND list,HIMAGELIST original)
           "replace only the private 48px base with a visible opaque canary");
       DestroyIcon(canary); DeleteObject(marker); DeleteObject(color); DeleteObject(mask);
       DeleteDC(colorDC); DeleteDC(maskDC); ReleaseDC(list,target); }
+    if(padded) nativePaddedOriginal=(WNDPROC)SetWindowLongPtrA(list,GWLP_WNDPROC,(LONG_PTR)NativePaddedIconProc);
     SendMessageA(list,WM_SETREDRAW,TRUE,0);
     RedrawWindow(list,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_UPDATENOW);
-    Check(ListView_GetItemRect(list,0,&bounds,LVIR_ICON) && bounds.right-bounds.left==48,
+    bounds.left=LVIR_ICON;
+    Check((padded ? CallWindowProcA(nativePaddedOriginal,list,LVM_GETITEMRECT,0,(LPARAM)&bounds) :
+          SendMessageA(list,LVM_GETITEMRECT,0,(LPARAM)&bounds)) && bounds.right-bounds.left==48,
         "the native control retains 48px icon geometry while its source list is replaced");
     screen=GetDC(list); dc=PaintBufferBegin(&expected,screen,&area);
     Check(dc!=screen,"allocate independent expected overlay artwork");
@@ -336,7 +349,8 @@ static void NativeDesktopOverlay48Test(HWND list,HIMAGELIST original)
         if(reference==actual) ++matches;
         if(reference==GetSysColor(COLOR_DESKTOP) && actual!=reference) ++ghosts;
     }
-    Check(!ghosts,"transparent composite pixels contain only desktop background, never a second base icon");
+    Check(!ghosts,padded ? "padded legacy icon bounds preserve native artwork position and transparent background" :
+        "transparent composite pixels contain only desktop background, never a second base icon");
     ListView_SetItemState(list,0,LVIS_DROPHILITED,LVIS_DROPHILITED);
     RedrawWindow(list,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_UPDATENOW);
     { int tinted=0;
@@ -344,6 +358,7 @@ static void NativeDesktopOverlay48Test(HWND list,HIMAGELIST original)
           if(GetPixel(dc,x,y)!=GetPixel(screen,bounds.left+x,bounds.top+y)) ++tinted;
       Check(tinted>48*48/10,"drop highlighting tints the 48px overlay composite as well as its base icon"); }
     DestroyIcon(composite); ReleaseDC(list,screen); PaintBufferFree(&expected);
+    if(padded) SetWindowLongPtrA(list,GWLP_WNDPROC,(LONG_PTR)nativePaddedOriginal);
     ListView_SetImageList(list,original,LVSIL_NORMAL);
     ListView_SetItem(list,&item); ListView_SetItemState(list,0,state,LVIS_OVERLAYMASK|LVIS_SELECTED|LVIS_DROPHILITED);
     ImageList_Destroy(source);
@@ -372,7 +387,8 @@ static void NativeDesktopIconSizeTests(void)
     NativeViewRefresh(view); DesktopPump();
     Check(ImageList_GetIconSize(ListView_GetImageList(list,LVSIL_NORMAL),&width,&height) && width==48 && height==48 && ListView_GetItemCount(list)==count,
         "F5 retains the selected desktop icon size and the same namespace objects");
-    NativeDesktopOverlay48Test(list,large);
+    NativeDesktopOverlay48Test(list,large,FALSE);
+    NativeDesktopOverlay48Test(list,large,TRUE);
     ListView_SetItemState(list,0,LVIS_SELECTED,LVIS_SELECTED);
     DesktopBegin(NativeViewWindow(view),list,0);
     Check(ImageList_GetDragImage(NULL,NULL) && DesktopGhostIsTransparent(list),

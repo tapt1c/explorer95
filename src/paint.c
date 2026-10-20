@@ -10,6 +10,20 @@ static HBITMAP startLogo;
 static HFONT marlett;
 static BOOL marlettChecked;
 
+BOOL PaintListIconRect(HWND list, int index, RECT *rect)
+{
+    int width, height;
+    if (!ListView_GetItemRect(list, index, rect, LVIR_ICON) ||
+        !ImageList_GetIconSize(ListView_GetImageList(list, LVSIL_NORMAL), &width, &height) ||
+        width < 1 || height < 1) return FALSE;
+    /* Win95 reserves 8px on either side and 2px above/below the image.
+     * Newer controls can return a tight box; use its centre in either case. */
+    rect->left += (rect->right - rect->left - width) / 2;
+    rect->top += (rect->bottom - rect->top - height) / 2;
+    rect->right = rect->left + width; rect->bottom = rect->top + height;
+    return TRUE;
+}
+
 typedef struct IconFormat { BITMAPINFOHEADER header; RGBQUAD palette[2]; } IconFormat;
 static void SetIconFormat(IconFormat *format, int width, int height, BOOL mask)
 {

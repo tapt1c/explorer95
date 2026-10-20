@@ -21,6 +21,8 @@ void PaintBufferFree(PaintBuffer *buffer);
 /* Caller owns the returned icon. Sample the native XOR/AND planes together;
  * do not ask old ImageList_ReplaceIcon to resize a smaller HICON. */
 HICON PaintScaleIcon(HICON source, int sourceWidth, int sourceHeight, int width, int height);
+/* LVIR_ICON on old controls includes selection padding, not just artwork. */
+BOOL PaintListIconRect(HWND list, int index, RECT *rect);
 BOOL PaintColorKey(HDC target, int x, int y, HBITMAP bitmap, COLORREF key, BOOL allowExtension);
 void PaintStartLogo(HDC target, int x, int y);
 /* Paint only the shadow; the native control still owns its foreground text. */

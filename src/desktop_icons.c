@@ -461,7 +461,7 @@ static HIMAGELIST CreateGhost(DesktopIcons *icons, POINT *origin)
         LVITEMA item; RECT iconRect, label; char text[MAX_PATH]; int index = icons->drag[i].index;
         ZeroMemory(&item,sizeof(item)); item.mask = LVIF_IMAGE | LVIF_STATE; item.iItem = index; item.stateMask = LVIS_OVERLAYMASK;
         if (!SendMessageA(icons->list,LVM_GETITEMA,0,(LPARAM)&item) || item.iImage < 0 ||
-            !ListView_GetItemRect(icons->list,index,&iconRect,LVIR_ICON) || !ListView_GetItemRect(icons->list,index,&label,LVIR_LABEL)) goto done;
+            !PaintListIconRect(icons->list,index,&iconRect) || !ListView_GetItemRect(icons->list,index,&label,LVIR_LABEL)) goto done;
         if(icons->sourceImages && icons->sourceImages!=native) {
             int sourceWidth,sourceHeight;
             HICON icon=ImageList_GetIcon(icons->sourceImages,item.iImage,ILD_TRANSPARENT|(item.state&LVIS_OVERLAYMASK));

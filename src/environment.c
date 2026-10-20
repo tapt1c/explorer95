@@ -1,5 +1,6 @@
 #define WIN32_LEAN_AND_MEAN
 #include "shell_internal.h"
+#include "task_manager.h"
 #include "file_drag.h"
 #include "render_trace.h"
 #include "tray_mirror.h"
@@ -145,6 +146,7 @@ static BOOL SettingsPath(void)
     env.options.rows = Clamp(Option("Rows", 1), 1, 3);
     env.options.taskWidth = Clamp(Option("TaskWidth", 160), 80, 300);
     env.options.taskTiles = !!Option("TaskTiles", FALSE);
+    env.options.closePrograms = !!Option("ClosePrograms", FALSE);
     env.options.locked = !!Option("Locked", TRUE); env.options.autoHide = !!Option("AutoHide", FALSE);
     env.options.topmost = !!Option("AlwaysOnTop", TRUE); env.options.clock = !!Option("Clock", TRUE);
     env.options.quick = !!Option("QuickLaunch", TRUE); env.options.largeIcons = !!Option("LargeIcons", FALSE);
@@ -725,8 +727,9 @@ static void BarMenu(HWND source)
     AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
     AppendMenuA(menu, MF_STRING | (env.options.locked ? MF_CHECKED : 0), ID_LOCK, "Lock the Taskbar");
     AppendMenuA(menu, MF_STRING | (env.options.autoHide ? MF_CHECKED : 0), ID_AUTOHIDE, "Auto-hide");
+    AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuA(menu, MF_STRING, ID_TASKMANAGER, "Task Manager...");
     AppendMenuA(menu, MF_STRING, ID_PROPERTIES, "Properties");
-    AppendMenuA(menu, MF_SEPARATOR, 0, NULL); AppendMenuA(menu, MF_STRING, ID_EXIT, "Exit Explorer95");
     SetForegroundWindow(env.bar);
     command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, 0, env.bar, NULL);
     DestroyMenu(menu); if (command) EnvCommand(command);
@@ -784,6 +787,24 @@ void EnvCommand(int id)
                     /* A cancelled session end may return FALSE without an error. */
                 }
             }
+        break;
+    case ID_TASKMANAGER:
+        if (env.options.closePrograms) {
+            DWORD error;
+            /* Focus our inert taskbar before a keyboard request: if the OS
+             * ignores it, Delete must not reach a file view or another app. */
+            SetForegroundWindow(env.bar); SetFocus(env.bar);
+            if (GetForegroundWindow() != env.bar || GetFocus() != env.bar) { EnvError(env.bar,"Windows could not open the task list.",ERROR_BUSY); break; }
+            error = TaskManagerClosePrograms(GetVersion(),keybd_event,GetAsyncKeyState);
+            if (error) EnvError(env.bar,"Windows could not open the task list.",error);
+        } else {
+            SHELLEXECUTEINFOA execute; DWORD length=GetWindowsDirectoryA(path,MAX_PATH);
+            if (!length || length>=MAX_PATH) { EnvError(env.bar,"Windows could not open the task list.",length ? ERROR_BUFFER_OVERFLOW : GetLastError()); break; }
+            if (!EnvJoin(path,path,"TASKMAN.EXE")) { EnvError(env.bar,"Windows could not open the task list.",ERROR_BUFFER_OVERFLOW); break; }
+            ZeroMemory(&execute,sizeof(execute)); execute.cbSize=sizeof(execute); execute.fMask=SEE_MASK_FLAG_NO_UI;
+            execute.hwnd=env.bar; execute.lpFile=path; execute.nShow=SW_SHOWNORMAL;
+            if (!ShellExecuteExA(&execute)) EnvError(env.bar,"Windows could not open the task list.",GetLastError());
+        }
         break;
     case ID_PROPERTIES: PropertiesOpen(); break;
     case ID_SHOWDESKTOP: EnvShowDesktop(); break;

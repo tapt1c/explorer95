@@ -45,6 +45,7 @@
 #define ID_CLEARRECENT 611
 #define ID_QUICKGRIP 612
 #define ID_QUICKMORE 613
+#define ID_TASKMANAGER 614
 #define ID_EDGE 620
 #define ID_ROWS 621
 #define ID_WIDTH 622
@@ -82,7 +83,7 @@
 
 typedef struct ShellOptions {
     int edge, rows, taskWidth, recentCount, quickSize;
-    BOOL locked, autoHide, topmost, clock, quick, largeIcons, largeStartIcons, group, hideInactive, taskTiles;
+    BOOL locked, autoHide, topmost, clock, quick, largeIcons, largeStartIcons, group, hideInactive, taskTiles, closePrograms;
     BOOL classicStart, hoverMenus, allowDrop, highlightNew, desktopIcons, autoArrange, classicShutdown;
     BOOL lockDesktopIcons, snapDesktopIcons;
     int desktopGridX, desktopGridY, desktopIconSize, language;

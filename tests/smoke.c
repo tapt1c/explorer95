@@ -271,6 +271,7 @@ static void DesktopLabelPaintTests(void)
 }
 
 #include "icon_scale_cases.h"
+#include "task_manager_cases.h"
 static void PaintTests(void)
 {
     IconScaleTests();
@@ -1761,7 +1762,7 @@ void start(void)
     if (group == GROUP_FULL || group == GROUP_CORE || group == GROUP_BROWSER) ShellNewTests(settingsDir, module);
     if (group == GROUP_FULL || group == GROUP_CORE || group == GROUP_BROWSER) FileDropRegistrationTests();
     if (group != GROUP_BROWSER) { LayoutTests(); HistoryTests(settingsDir, module, settings); ShellFeatureTests(); }
-    if (group == GROUP_FULL || group == GROUP_CORE) { PaintTests(); ConfigTests(settingsDir); DesktopIconTests(settingsDir); LanguageTests(settingsDir); FolderHandlerTests(module,settings); FolderSelectionTests(); DragDataTests(); NativeViewMessageTests(); TrayMirrorTests(); TrayMirrorCrossProcessTests(); }
+    if (group == GROUP_FULL || group == GROUP_CORE) { PaintTests(); TaskManagerRequestTests(); ConfigTests(settingsDir); DesktopIconTests(settingsDir); LanguageTests(settingsDir); FolderHandlerTests(module,settings); FolderSelectionTests(); DragDataTests(); NativeViewMessageTests(); TrayMirrorTests(); TrayMirrorCrossProcessTests(); }
     if (group == GROUP_CORE) goto cleanup;
     if (group == GROUP_MENU) NativeDesktopIconSizeTests();
     if(group==GROUP_MENU || group==GROUP_FULL) WritePrivateProfileStringA("Desktop","IconSize","16",settings);
@@ -1812,7 +1813,7 @@ void start(void)
         Check(!IsWindow(initial), "startup folder closes before keyboard focus tests begin");
     }
     if (group != GROUP_BROWSER) WinKeyTests(bar, FindWindowA("Explorer95.Start", NULL));
-    if (group != GROUP_BROWSER) { QuickLaunchTests(bar, settings); TaskTileTests(bar,settings); StartOrderTests(bar,FindWindowA("Explorer95.Start",NULL),settings); }
+    if (group != GROUP_BROWSER) { QuickLaunchTests(bar, settings); TaskTileTests(bar,settings); TaskManagerSettingsTests(bar,settings); StartOrderTests(bar,FindWindowA("Explorer95.Start",NULL),settings); }
     if (group != GROUP_MENU) {
         FolderForwardTests(executable,settings,fixture,bar); DesktopRefreshTests(desktop);
         FolderSettingsTests(bar);
@@ -1933,10 +1934,17 @@ shutdown:
         char caption[32]; RECT button;
         GetPrivateProfileStringA("Start","ButtonLabel","Start",caption,sizeof(caption),settings);
         Check(WritePrivateProfileStringA("Start","ButtonLabel","",settings),"save an explicitly blank Start caption before a real restart");
+        WritePrivateProfileStringA("Taskbar","ClosePrograms","1",settings);
         wsprintfA(command,"\"%s\" --settings=\"%s\"",executable,settings);
         Check(CreateProcessA(NULL,command,NULL,NULL,FALSE,0,NULL,NULL,&startup,&process),"restart the shell with an icon-only Start profile");
         bar = WaitFor("Explorer95.Taskbar",NULL); GetWindowRect(GetDlgItem(bar,100),&button);
         Check(bar && button.right - button.left == 26,"the real restarted shell retains the compact icon-only Start button");
+        {
+            HWND properties=OpenSettings(bar);
+            Check(SendDlgItemMessageA(properties,ID_TASKMANAGERSTYLE,CB_GETCURSEL,0,0)==1,
+                "task-list preference survives a real process restart without invoking a system action");
+            SendMessageA(properties,WM_COMMAND,IDCANCEL,0);
+        }
         {
             HWND desktopList=NULL,desktopWindow; DWORD ready=GetTickCount();
             do {
@@ -1950,6 +1958,7 @@ shutdown:
         Check(WaitForGuiProcess(process.hProcess,5000) == WAIT_OBJECT_0,"icon-only restart exits cleanly");
         CloseHandle(process.hThread); CloseHandle(process.hProcess);
         WritePrivateProfileStringA("Start","ButtonLabel",caption,settings);
+        WritePrivateProfileStringA("Taskbar","ClosePrograms","0",settings);
     }
     if (group != GROUP_FULL) goto cleanup;
     wsprintfA(command, "\"%s\" --settings=\"%s\" --trace-render", executable, settings);

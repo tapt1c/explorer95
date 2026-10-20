@@ -91,7 +91,7 @@ static void PaintDesktopOverlays(NativeView *view,HDC dc)
         ZeroMemory(&item,sizeof(item)); item.mask=LVIF_IMAGE|LVIF_STATE; item.iItem=i;
         item.stateMask=LVIS_OVERLAYMASK|LVIS_SELECTED|LVIS_CUT|LVIS_DROPHILITED;
         if(!SendMessageA(view->list,LVM_GETITEMA,0,(LPARAM)&item) || !(item.state&(LVIS_OVERLAYMASK|LVIS_DROPHILITED)) || item.iImage<0 ||
-           !ListView_GetItemRect(view->list,i,&iconRect,LVIR_ICON) || (iconRect.right<=clip.left || iconRect.left>=clip.right || iconRect.bottom<=clip.top || iconRect.top>=clip.bottom)) continue;
+           !PaintListIconRect(view->list,i,&iconRect) || (iconRect.right<=clip.left || iconRect.left>=clip.right || iconRect.bottom<=clip.top || iconRect.top>=clip.bottom)) continue;
         icon=ImageList_GetIcon(view->desktopLargeImages,item.iImage,ILD_TRANSPARENT|(item.state&LVIS_OVERLAYMASK));
         if(!icon) continue;
         sized=PaintScaleIcon(icon,width,height,48,48); DestroyIcon(icon); icon=sized;

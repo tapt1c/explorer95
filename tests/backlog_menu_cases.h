@@ -1,4 +1,35 @@
 /* Exercise the real settings transaction, task buttons and visible Start order. */
+static void TaskManagerSettingsTests(HWND bar,const char *settings)
+{
+    HWND properties=OpenSettings(bar),popup;
+    Check(SendDlgItemMessageA(properties,ID_TASKMANAGERSTYLE,CB_GETCOUNT,0,0)==2 &&
+        SendDlgItemMessageA(properties,ID_TASKMANAGERSTYLE,CB_GETCURSEL,0,0)==0,"task-list settings offer both styles and default to TASKMAN.EXE");
+    SendDlgItemMessageA(properties,ID_TASKMANAGERSTYLE,CB_SETCURSEL,1,0);
+    SendMessageA(properties,WM_COMMAND,MAKEWPARAM(ID_TASKMANAGERSTYLE,CBN_SELCHANGE),0);
+    SendMessageA(properties,WM_COMMAND,IDCANCEL,0);
+    Check(!GetPrivateProfileIntA("Taskbar","ClosePrograms",0,settings),"Cancel discards the pending task-list choice");
+    properties=OpenSettings(bar);
+    SendDlgItemMessageA(properties,ID_TASKMANAGERSTYLE,CB_SETCURSEL,1,0);
+    SendMessageA(properties,WM_COMMAND,MAKEWPARAM(ID_TASKMANAGERSTYLE,CBN_SELCHANGE),0);
+    SendMessageA(properties,WM_COMMAND,0x3021,0);
+    Check(GetPrivateProfileIntA("Taskbar","ClosePrograms",0,settings)==1,"Apply persists the Ctrl+Alt+Del preference without invoking it");
+    SendMessageA(properties,WM_COMMAND,IDCANCEL,0); properties=OpenSettings(bar);
+    Check(SendDlgItemMessageA(properties,ID_TASKMANAGERSTYLE,CB_GETCURSEL,0,0)==1,"reopening settings retains the chosen task-list mode");
+    PumpFor(150); SaveScreen("build/task-manager-settings.bmp");
+    SendDlgItemMessageA(properties,ID_TASKMANAGERSTYLE,CB_SETCURSEL,0,0);
+    SendMessageA(properties,WM_COMMAND,IDOK,0);
+    Check(!GetPrivateProfileIntA("Taskbar","ClosePrograms",1,settings),"OK restores and persists native Task List mode");
+    SetCursorPos(5,440); PostMessageA(bar,WM_CONTEXTMENU,(WPARAM)bar,0);
+    popup=WaitFor("#32768",NULL); Check(popup!=NULL,"open the real taskbar background menu");
+    PumpFor(150); SaveScreen("build/task-manager-menu.bmp");
+    /* End selects the last entry: this used to exit the shell. Never select
+     * Task Manager here: a test must not open the system's emergency dialog. */
+    keybd_event(VK_END,0,0,0); keybd_event(VK_END,0,KEYEVENTF_KEYUP,0); PumpFor(80);
+    keybd_event(VK_RETURN,0,0,0); keybd_event(VK_RETURN,0,KEYEVENTF_KEYUP,0);
+    properties=WaitFor("Explorer95.Properties",NULL);
+    Check(properties!=NULL,"the last taskbar command now opens Properties instead of exiting the shell");
+    SendMessageA(properties,WM_COMMAND,IDCANCEL,0);
+}
 static int TileFixtureButtons(HWND bar, BOOL square)
 {
     int i,count=0;
