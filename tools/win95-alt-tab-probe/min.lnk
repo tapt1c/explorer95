@@ -1,0 +1,6 @@
+format windows vxd dynamic
+option quiet,nodefaultlibs,map=min.map
+name EX95MIN0.VXD
+file min.obj
+segment '_DATA' preload nondiscardable
+export ProbeDDB.1

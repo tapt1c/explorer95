@@ -1,0 +1,7 @@
+format windows vxd dynamic
+option quiet,nodefaultlibs,map=probe.map
+name EX95KEY0.VXD
+file probe.obj
+segment '_TEXT' preload nondiscardable
+segment '_DATA' preload nondiscardable
+export ProbeDDB.1

@@ -46,8 +46,14 @@ successful `RegisterHotKey` return value, or call a passing Wine scenario a
 Windows 95 fix. The experiments indicate interception must occur earlier than
 these application-level mechanisms on the tested system.
 
-An isolated dynamic VxD prototype is being evaluated outside the application
-build. It is not integrated or a released fix. Before adopting such a backend,
+An isolated dynamic VxD prototype is saved in
+[tools/win95-alt-tab-probe](../tools/win95-alt-tab-probe/README.md), outside the
+application build. In the test VM its hook installs and accepts the client.
+Native emulated input exercises forward/reverse, Alt release, and Escape.
+The user's subsequent physical Alt+Tab and Alt+Shift+Tab presses increase the
+corresponding counters. This establishes a working early interception path;
+the prototype is not integrated or a released Explorer95 fix.
+Before adopting such a backend,
 prove physical interception, forward/reverse switching, cancellation, modifier
 release, and restoration of native behavior when its client stops responding
 or exits. Review loader validation, driver lifetime, protocol boundaries, and
