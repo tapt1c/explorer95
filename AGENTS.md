@@ -542,6 +542,14 @@ Wine хранит Unix-корзину через XDG_DATA_HOME вне prefix п�
   сообщение ошибки сообщает stage и код (0 — нет расширенной ошибки).
   font.face.selected записывает только имя нашего выбранного GDI-шрифта, charset
   и tmPitchAndFamily; не добавляйте в этот журнал пользовательские подписи/пути.
+- Собственный перевод native caption применяется только при полном совпадении
+  `(style & WS_CAPTION) == WS_CAPTION` и отсутствии WS_CHILD. WS_CAPTION состоит
+  из WS_BORDER и WS_DLGFRAME: проверка любого одного бита ошибочно рисовала серую
+  полосу «Пуск» поверх шапки меню при активации Win95. И сохранение titleProperty,
+  и Caption проверяют текущий стиль; после удаления caption очищайте старые данные.
+  LanguageCaptionStyleTest проверяет реальные WS_BORDER/WS_DLGFRAME/WS_CAPTION
+  окна, сохранность пикселей клиентской шапки и изменение стиля; LanguageRestartTests
+  дополнительно проверяет отсутствие ложного caption у запущенного русского Start.
 - Не переводите имена файлов, пути, пользовательские подписи, чужие заголовки
   и private item data. Для них есть UiSetLiteralWindowTextA, UiDrawNativeTextA,
   UiGetNativeTextExtentA. GetWindowText чужого процесса не должен читать наши

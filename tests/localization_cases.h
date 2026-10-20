@@ -108,6 +108,29 @@ static void LanguageMenuCheckTest(HWND window,ULONG_PTR token)
     }
     SelectObject(actual,oldA); SelectObject(native,oldB); DeleteObject(a); DeleteObject(b); DeleteDC(actual); DeleteDC(native); ReleaseDC(window,screen);
 }
+static void LanguageCaptionStyleTest(const WNDCLASSA *cls)
+{
+    DWORD frames[]={WS_BORDER,WS_DLGFRAME,WS_CAPTION}; int i;
+    for(i=0;i<3;++i) {
+        HWND popup=UiCreateWindowExA(0,cls->lpszClassName,"Start",WS_POPUP|WS_VISIBLE|frames[i],
+            40,40,300,120,NULL,NULL,cls->hInstance,NULL);
+        RECT marker={32,3,120,17}; COLORREF expected=RGB(17,213,91); HBRUSH brush=CreateSolidBrush(expected); HDC dc;
+        Check(popup!=NULL,"create a real translated popup with a single or complete caption-frame style");
+        RedrawWindow(popup,NULL,NULL,RDW_INVALIDATE|RDW_UPDATENOW);
+        dc=GetDC(popup); FillRect(dc,&marker,brush); GetPixel(dc,42,8); ReleaseDC(popup,dc);
+        UiSetWindowTextA(popup,"Start");
+        dc=GetDC(popup); COLORREF actual=GetPixel(dc,42,8); ReleaseDC(popup,dc); DeleteObject(brush);
+        Check(actual==expected,"translating a border-only popup never paints a phantom caption over its client header");
+        Check((GetPropA(popup,"Explorer95.UiCaption")!=NULL)==(i==2),"only the complete WS_CAPTION style owns translated nonclient caption data");
+        if(i==2) {
+            SetWindowLongA(popup,GWL_STYLE,WS_POPUP|WS_VISIBLE|WS_DLGFRAME);
+            SetWindowPos(popup,NULL,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE|SWP_FRAMECHANGED);
+            UiSetWindowTextA(popup,"Start");
+            Check(GetPropA(popup,"Explorer95.UiCaption")==NULL,"removing the real caption clears its old translated-title data");
+        }
+        DestroyWindow(popup);
+    }
+}
 static void LanguageTests(const char *directory)
 {
     char profile[MAX_PATH],text[64],face[64]; LOGFONTA font; WNDCLASSA cls; HWND window,button,edit; HMENU menu;
@@ -129,6 +152,7 @@ static void LanguageTests(const char *directory)
     ZeroMemory(&cls,sizeof(cls)); cls.lpfnWndProc=LanguageProc; cls.hInstance=GetModuleHandleA(NULL); cls.lpszClassName="Explorer95.LanguageProbe";
     cls.hbrBackground=(HBRUSH)(COLOR_BTNFACE+1);
     Check(UiRegisterClassA(&cls)!=0,"register the translated caption/menu owner");
+    LanguageCaptionStyleTest(&cls);
     window=UiCreateWindowExA(0,cls.lpszClassName,"Explorer95 Environment Properties",WS_OVERLAPPEDWINDOW|WS_VISIBLE,20,20,500,240,NULL,NULL,cls.hInstance,NULL);
     button=UiCreateWindowExA(0,"BUTTON","All Programs",WS_CHILD|WS_VISIBLE,20,30,220,28,window,(HMENU)1,cls.hInstance,NULL);
     edit=UiCreateWindowExA(0,"EDIT","Copy",WS_CHILD|WS_VISIBLE|WS_BORDER,20,80,220,24,window,(HMENU)2,cls.hInstance,NULL);
@@ -235,6 +259,9 @@ static void LanguageRestartTests(const char *directory,const char *executable)
         SendMessageA(browser,WM_CLOSE,0,0); PumpFor(200);
     }
     SendMessageA(GetDlgItem(bar,100),BM_CLICK,0,0); PumpFor(200); SaveScreen("build/language-start-ru.bmp");
+    { HWND start=FindWindowA("Explorer95.Start",NULL);
+      Check(start && IsWindowVisible(start) && GetPropA(start,"Explorer95.UiCaption")==NULL,
+          "the real Russian Start menu has no phantom translated system caption over its custom header"); }
     SendMessageA(GetDlgItem(bar,100),BM_CLICK,0,0);
     SendMessageA(bar,WM_COMMAND,600,0); properties=WaitFor("Explorer95.Properties",NULL); Check(properties!=NULL,"open translated environment settings");
     SettingsPage(properties,SETTINGS_LANGUAGE,-1); SaveScreen("build/language-settings-ru.bmp");

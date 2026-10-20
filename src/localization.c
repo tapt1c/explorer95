@@ -214,10 +214,17 @@ static void ClearTitle(HWND window)
 {
     char *title=(char *)RemovePropA(window,titleProperty); if(title) HeapFree(GetProcessHeap(),0,title);
 }
+static BOOL HasCaption(HWND window)
+{
+    LONG style=GetWindowLongA(window,GWL_STYLE);
+    /* WS_CAPTION combines WS_BORDER and WS_DLGFRAME. Either bit alone is
+     * also used by captionless popups such as our Start menu. */
+    return (style&WS_CAPTION)==WS_CAPTION && !(style&WS_CHILD);
+}
 static void RememberTitle(HWND window,const char *text)
 {
-    if(!(GetWindowLongA(window,GWL_STYLE)&WS_CAPTION) || (GetWindowLongA(window,GWL_STYLE)&WS_CHILD)) return;
     ClearTitle(window);
+    if(!HasCaption(window)) return;
     if(Localized(text)) {
         char *copy=HeapAlloc(GetProcessHeap(),0,lstrlenA(text)+1);
         if(copy) { lstrcpyA(copy,text); if(!SetPropA(window,titleProperty,copy)) HeapFree(GetProcessHeap(),0,copy); }
@@ -226,7 +233,7 @@ static void RememberTitle(HWND window,const char *text)
 static void Caption(HWND window,BOOL active)
 {
     const char *text=(const char *)GetPropA(window,titleProperty); HDC dc; RECT frame,rect; NONCLIENTMETRICSA metrics; HFONT font,old; LONG style;
-    if(!text || !IsWindowVisible(window)) return;
+    if(!text || !IsWindowVisible(window) || !HasCaption(window)) return;
     style=GetWindowLongA(window,GWL_STYLE); GetWindowRect(window,&frame);
     int border=GetSystemMetrics(style&WS_THICKFRAME ? SM_CXFRAME : SM_CXDLGFRAME),buttons=1;
     if(style&(WS_MINIMIZEBOX|WS_MAXIMIZEBOX)) buttons+=2;
