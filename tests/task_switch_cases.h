@@ -72,7 +72,13 @@ static void TaskSwitchTests(HWND bar)
     Check(!IsIconic(windows[0]) && GetForegroundWindow()==windows[0],"Alt+Tab restores the selected minimized window");
     SendMessageA(windows[0],WM_APP+36,0,0); PumpFor(120);
     owned=(HWND)GetPropA(windows[0],"Explorer95.ModalFixture"); Check(owned && !IsWindowEnabled(windows[0]),"create a real modal-owned fixture in the foreign task process");
-    popup=SwitchOpen(windows[1]); SwitchChoose(popup,windows[0]); SwitchKey(VK_MENU,TRUE); PumpFor(200);
+    popup=SwitchOpen(windows[1]); SwitchChoose(popup,windows[0]); SwitchKey(VK_MENU,TRUE);
+    { DWORD started=GetTickCount();
+      while(GetForegroundWindow()!=owned && GetTickCount()-started<2000) PumpFor(30);
+      if(GetForegroundWindow()!=owned) {
+          char note[240]; wsprintfA(note,"Task switch modal: foreground=%p expected=%p last-popup=%p owner-enabled=%d popup-visible=%d\r\n",
+              GetForegroundWindow(),owned,GetLastActivePopup(windows[0]),IsWindowEnabled(windows[0]),IsWindowVisible(popup)); Log(note);
+      } }
     Check(GetForegroundWindow()==owned,"switching a task with a modal dialog activates its visible popup rather than its disabled owner");
     SendMessageA(windows[0],WM_APP+37,0,0); PumpFor(100);
     popup=SwitchOpen(windows[0]); SwitchChoose(popup,windows[1]);

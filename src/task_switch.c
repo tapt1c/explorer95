@@ -130,10 +130,13 @@ static void Finish(BOOL commit,BOOL restore)
     ending=TRUE;
     if(commit && SameWindow(tasks[selected].window,tasks[selected].process)) target=tasks[selected].window;
     else if((restore || commit) && SameWindow(previous,previousProcess)) target=previous;
-    active=FALSE; if(hookReset) hookReset(); KillTimer(popup,1); ShowWindow(popup,SW_HIDE);
+    active=FALSE; if(hookReset) hookReset(); KillTimer(popup,1);
+    /* Transfer foreground while we still own it. Hiding first lets the window
+     * manager activate another process, which can reject the modal activation. */
+    if(target) EnvActivateWindow(target);
+    ShowWindow(popup,SW_HIDE);
     for(i=0;i<count;++i) { if(tasks[i].icon) DestroyIcon(tasks[i].icon); tasks[i].icon=NULL; }
     SendMessageA(taskList,LB_RESETCONTENT,0,0); count=0;
-    if(target) EnvActivateWindow(target);
     ending=FALSE;
 }
 static void Paint(HDC dc)
