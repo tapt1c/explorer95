@@ -275,8 +275,8 @@ static void LanguageRestartTests(const char *directory,const char *executable)
     {
         HWND dialog;
         SendMessageA(bar,WM_COMMAND,ID_SHUTDOWN,0); dialog=WaitFor("Explorer95.Shutdown",NULL);
-        Check(dialog && LanguageWideEqual(GetDlgItem(dialog,1703),L"\u0420\u0435\u0436\u0438\u043c MS-DOS..."),
-              "the compact MS-DOS command has its Russian label in the real shutdown window");
+        Check(dialog && LanguageWideEqual(GetDlgItem(dialog,1703),L"\u041f\u0435\u0440\u0435\u0437\u0430\u0433\u0440\u0443\u0437\u043a\u0430 \u0432 MS-DOS"),
+              "the MS-DOS restart checkbox has its Russian label in the real shutdown window");
         PumpFor(80); SaveScreen("build/shutdown-dos-ru.bmp");
         SendMessageA(dialog,WM_COMMAND,IDCANCEL,0); /* Cleanup only; never select a power command. */
     }

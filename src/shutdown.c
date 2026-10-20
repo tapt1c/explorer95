@@ -18,6 +18,7 @@ static int screenWidth, screenHeight, step, choiceWidth, choiceHeight;
 static HFONT titleFont, buttonFont;
 static PaintBuffer dialogBuffer, buttonBuffer, logoBuffer;
 static HMODULE powerLibrary;
+static HBRUSH dosBackground;
 typedef BOOLEAN (WINAPI *PowerAllowed)(void);
 typedef BOOLEAN (WINAPI *SuspendState)(BOOLEAN, BOOLEAN, BOOLEAN);
 typedef BOOL (WINAPI *SystemPowerState)(BOOL, BOOL);
@@ -186,23 +187,6 @@ static void DrawAction(const DRAWITEMSTRUCT *item)
     if (item->itemState & ODS_FOCUS) { InflateRect(&rect, -3, -3); DrawFocusRect(dc, &rect); }
     SelectObject(dc, oldFont); PaintBufferEnd(&buttonBuffer, item->hDC, &item->rcItem);
 }
-static DWORD LaunchDosPif(HWND owner, const char *path)
-{
-    SHELLEXECUTEINFOA execute; DWORD error;
-    ZeroMemory(&execute, sizeof(execute)); execute.cbSize = sizeof(execute);
-    execute.fMask = SEE_MASK_FLAG_NO_UI; execute.hwnd = owner; execute.lpFile = path; execute.nShow = SW_SHOWNORMAL;
-    SetLastError(ERROR_SUCCESS);
-    if (ShellExecuteExA(&execute)) return ERROR_SUCCESS;
-    error = GetLastError(); return error ? error : ERROR_GEN_FAILURE;
-}
-static DWORD NativeDosDialog(HWND owner)
-{
-    typedef void (WINAPI *SessionDialog)(HWND);
-    SessionDialog dialog = (SessionDialog)(void *)GetProcAddress(GetModuleHandleA("shell32.dll"), MAKEINTRESOURCEA(60));
-    if (!dialog) return ERROR_NOT_SUPPORTED;
-    MessageBoxA(owner, "Select Restart the computer in MS-DOS mode in the Windows dialog.", "MS-DOS mode", MB_OK | MB_ICONINFORMATION);
-    dialog(owner); return ERROR_SUCCESS;
-}
 static void PowerAction(int id)
 {
     DWORD error = ERROR_SUCCESS; BOOL okay;
@@ -210,11 +194,9 @@ static void PowerAction(int id)
     if (!Windows95()) {
         MessageBoxA(choice, "Power actions are supported only on Windows 95.\r\nNo system power action was performed.", "Explorer95", MB_OK | MB_ICONINFORMATION); return;
     }
-    if (id == ID_DOS) {
-        char directory[MAX_PATH]; UINT length = GetWindowsDirectoryA(directory, MAX_PATH);
-        ShutdownDosHost host = {LaunchDosPif, NativeDosDialog};
-        ShutdownClose(); /* Native PIF/session prompts need enabled application windows. */
-        error = length && length < MAX_PATH ? ShutdownDosRestart(env.bar, GetVersion(), directory, &host) : ERROR_PATH_NOT_FOUND;
+    if (id == ID_RESTART && SendDlgItemMessageA(choice, ID_DOS, BM_GETCHECK, 0, 0) == BST_CHECKED) {
+        ShutdownClose(); /* Restore enabled windows for native save/confirmation prompts. */
+        error = ShutdownDosRestart(env.bar);
         if (error) EnvError(env.bar, "Windows could not start MS-DOS mode.", error);
         return;
     }
@@ -264,9 +246,16 @@ static LRESULT CALLBACK ChoiceProc(HWND window, UINT message, WPARAM wp, LPARAM 
         SelectObject(dc, old); PaintBufferEnd(&dialogBuffer, target, &rect); EndPaint(window, &paint); return 0;
     }
     case WM_DRAWITEM: DrawAction((const DRAWITEMSTRUCT *)lp); return TRUE;
+    case WM_CTLCOLORSTATIC: case WM_CTLCOLORBTN:
+        if (!classic && (HWND)lp == GetDlgItem(window, ID_DOS) && dosBackground) {
+            SetBkColor((HDC)wp, RGB(0,45,140)); SetBkMode((HDC)wp, TRANSPARENT);
+            SetTextColor((HDC)wp, IsWindowEnabled((HWND)lp) ? RGB(255,255,255) : RGB(180,180,180));
+            return (LRESULT)dosBackground;
+        }
+        break;
     case WM_COMMAND:
         if (LOWORD(wp) == IDCANCEL) ShutdownClose();
-        else if (LOWORD(wp) >= ID_SLEEP && LOWORD(wp) <= ID_DOS) PowerAction(LOWORD(wp));
+        else if (LOWORD(wp) >= ID_SLEEP && LOWORD(wp) <= ID_RESTART) PowerAction(LOWORD(wp));
         return 0;
     case WM_SYSCOMMAND:
         if ((wp & 0xfff0) == SC_NEXTWINDOW || (wp & 0xfff0) == SC_PREVWINDOW || (wp & 0xfff0) == SC_TASKLIST) return 0;
@@ -295,6 +284,7 @@ void ShutdownClose(void)
     if (titleFont) { DeleteObject(titleFont); } titleFont = NULL;
     if (buttonFont) { DeleteObject(buttonFont); } buttonFont = NULL;
     if (powerLibrary) { FreeLibrary(powerLibrary); } powerLibrary = NULL;
+    if (dosBackground) { DeleteObject(dosBackground); } dosBackground = NULL;
     PaintBufferFree(&dialogBuffer); PaintBufferFree(&buttonBuffer); PaintBufferFree(&logoBuffer);
     while (disabledCount) {
         HWND window = disabledWindows[--disabledCount];
@@ -336,8 +326,10 @@ void ShutdownShow(void)
     for (i = 0; i < 3; ++i) MoveWindow(EnvControl(choice, "BUTTON", labels[i], WS_TABSTOP | BS_OWNERDRAW, ID_SLEEP + i),
         24 + i * column, classic ? 39 : 73, column - (classic ? 5 : 0), 64, FALSE);
     MoveWindow(EnvControl(choice, "BUTTON", "Cancel", WS_TABSTOP | BS_DEFPUSHBUTTON, IDCANCEL), choiceWidth - 69, choiceHeight - 30, 58, 20, FALSE);
-    MoveWindow(EnvControl(choice, "BUTTON", "MS-DOS mode...", WS_TABSTOP, ID_DOS), 12, choiceHeight - 30, 120, 20, FALSE);
-    EnableWindow(GetDlgItem(choice, ID_DOS), Windows95());
+    if (!classic) dosBackground = CreateSolidBrush(RGB(0,45,140));
+    MoveWindow(EnvControl(choice, "BUTTON", "Restart in MS-DOS mode", WS_TABSTOP | BS_AUTOCHECKBOX, ID_DOS),
+        12, choiceHeight - 30, choiceWidth - 90, 20, FALSE);
+    EnableWindow(GetDlgItem(choice, ID_DOS), ShutdownDosAvailable());
     SleepChoice(); EnumWindows(DisableOwnWindow, 0);
     /* Paint the captured desktop before starting the timer, so opening does
      * not expose a blank frame before the first fade step. */
@@ -353,8 +345,9 @@ BOOL ShutdownTranslate(MSG *message)
         if (message->message == WM_KEYDOWN && message->wParam == VK_ESCAPE) { ShutdownClose(); return TRUE; }
         if (message->message == WM_KEYDOWN && message->wParam == VK_RETURN) {
             HWND focus = GetFocus(); int id = GetDlgCtrlID(focus);
+            if (id == ID_DOS && IsWindowEnabled(focus)) { SendMessageA(focus, BM_CLICK, 0, 0); return TRUE; }
             if (focus && IsChild(choice, focus) && IsWindowEnabled(focus) &&
-                (id == IDCANCEL || (id >= ID_SLEEP && id <= ID_DOS))) SendMessageA(choice, WM_COMMAND, id, 0);
+                (id == IDCANCEL || (id >= ID_SLEEP && id <= ID_RESTART))) SendMessageA(choice, WM_COMMAND, id, 0);
             return TRUE;
         }
         if ((message->message == WM_SYSKEYDOWN && (message->wParam == VK_TAB || message->wParam == VK_ESCAPE)) ||

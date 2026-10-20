@@ -1135,10 +1135,18 @@ static void ShutdownStyleTests(HWND bar, const char *settings)
         { RECT dos, cancel, overlap; DWORD version = GetVersion();
           GetWindowRect(GetDlgItem(dialog, 1703), &dos); GetWindowRect(GetDlgItem(dialog, IDCANCEL), &cancel);
           Check(!IntersectRect(&overlap, &dos, &cancel) && dos.top == cancel.top && dos.bottom == cancel.bottom,
-                "MS-DOS sits beside Cancel without changing the three main power buttons");
+                "the MS-DOS checkbox fits beside Cancel without moving the power buttons");
           Check(IsWindowEnabled(GetDlgItem(dialog, 1703)) == !!((version & 0x80000000UL) &&
                 LOBYTE(LOWORD(version)) == 4 && HIBYTE(LOWORD(version)) == 0),
-                "MS-DOS mode is available only on Windows 95"); }
+                "MS-DOS mode is available only on Windows 95");
+          Check((GetWindowLongA(GetDlgItem(dialog,1703),GWL_STYLE) & BS_TYPEMASK) == BS_AUTOCHECKBOX &&
+                SendDlgItemMessageA(dialog,1703,BM_GETCHECK,0,0) == BST_UNCHECKED,
+                "MS-DOS is an initially unchecked option, not a separate power command");
+          /* Set/read a checkbox state only; never click Restart or execute power. */
+          SendDlgItemMessageA(dialog,1703,BM_SETCHECK,BST_CHECKED,0);
+          SendMessageA(dialog,WM_COMMAND,1703,0);
+          Check(IsWindow(dialog) && SendDlgItemMessageA(dialog,1703,BM_GETCHECK,0,0) == BST_CHECKED,
+                "selecting MS-DOS only changes the option and performs no power action"); }
         PumpFor(80); dc = GetDC(dialog);
         Check(GetPixel(dc, 8, 8) == (style ? GetSysColor(COLOR_BTNFACE) : RGB(0,45,140)),
               "selected style paints the classic system face or XP blue header");

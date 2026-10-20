@@ -39,7 +39,7 @@ ALLOWED = {
         GetFileSize ReadFile WriteFile GlobalAlloc GlobalFree GlobalLock GlobalSize GlobalUnlock
         CloseHandle CopyFileA CreateDirectoryA CreateFileA ExitProcess ExpandEnvironmentStringsA FindClose FindFirstFileA
         FindNextFileA FindFirstChangeNotificationA FindNextChangeNotification FindCloseChangeNotification WaitForSingleObject FormatMessageA GetFileAttributesA GetFullPathNameA
-        DeleteFileA GetSystemDirectoryA GetShortPathNameA SetLastError GetTimeFormatA GetLastError GetLocalTime GetLogicalDriveStringsA GetModuleHandleA
+        DeleteFileA RemoveDirectoryA GetSystemDirectoryA GetShortPathNameA SetLastError GetTimeFormatA GetLastError GetLocalTime GetLogicalDriveStringsA GetModuleHandleA
         GetCurrentProcessId GetProcessHeap GetWindowsDirectoryA HeapAlloc HeapFree SetErrorMode
         LoadLibraryA FreeLibrary GetProcAddress GetCommandLineA GetEnvironmentVariableA GetModuleFileNameA GetPrivateProfileIntA
         GetPrivateProfileStringA GetPrivateProfileSectionA GetTickCount GetVersion MultiByteToWideChar WritePrivateProfileStringA
