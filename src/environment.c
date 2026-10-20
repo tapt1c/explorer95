@@ -4,6 +4,7 @@
 #include "render_trace.h"
 #include "tray_mirror.h"
 #include "task_groups.h"
+#include "task_switch.h"
 #define EX95_LOCALIZE_UI
 #include "localization.h"
 
@@ -230,10 +231,17 @@ static BOOL CALLBACK CollectWindows(HWND window, LPARAM context)
     for (i = 0; i < TASK_LIMIT; ++i) if (!windows[i]) { windows[i] = window; break; }
     return TRUE;
 }
-static void Activate(HWND target)
+int EnvTaskWindows(HWND windows[TASK_LIMIT])
+{
+    int count; ZeroMemory(windows,sizeof(HWND)*TASK_LIMIT); EnumWindows(CollectWindows,(LPARAM)windows);
+    for(count=0;count<TASK_LIMIT && windows[count];++count) {}
+    return count;
+}
+void EnvActivateWindow(HWND target)
 {
     if (!IsWindow(target)) return;
     if (IsIconic(target)) ShowWindowAsync(target, SW_RESTORE);
+    { HWND modal=GetLastActivePopup(target); if(modal && IsWindowVisible(modal)) target=modal; }
     SetForegroundWindow(target); lastActive = target;
 }
 static void TaskAction(int index)
@@ -247,11 +255,11 @@ static void TaskAction(int index)
         SetForegroundWindow(env.bar);
         GetCursorPos(&point); selected = TrackPopupMenu(menu, TPM_RETURNCMD, point.x, point.y, 0, env.bar, NULL);
         PostMessageA(env.bar,WM_NULL,0,0);
-        DestroyMenu(menu); if (selected > 0 && selected <= task->count) Activate(task->windows[selected - 1]);
+        DestroyMenu(menu); if (selected > 0 && selected <= task->count) EnvActivateWindow(task->windows[selected - 1]);
     } else if (task->windows[0] == lastActive && !IsIconic(task->windows[0])) ShowWindowAsync(task->windows[0], SW_MINIMIZE);
-    else Activate(task->windows[0]);
+    else EnvActivateWindow(task->windows[0]);
 }
-static HICON WindowIcon(HWND target, BOOL large)
+HICON EnvWindowIcon(HWND target, BOOL large)
 {
     DWORD_PTR result = 0; HICON icon;
     SendMessageTimeoutA(target, WM_GETICON, large ? ICON_BIG : ICON_SMALL, 0, SMTO_ABORTIFHUNG, 80, &result);
@@ -265,7 +273,7 @@ static void UpdateTasks(void)
     HWND windows[TASK_LIMIT], active = GetForegroundWindow();
     BOOL changed = previousGrouping != env.options.group || previousTaskTiles != env.options.taskTiles;
     int count, i, j, group; char text[128], label[160];
-    ZeroMemory(windows, sizeof(windows)); EnumWindows(CollectWindows, (LPARAM)windows);
+    EnvTaskWindows(windows);
     for (count = 0; count < TASK_LIMIT && windows[count]; ++count) {}
     if (count != windowCount) changed = TRUE;
     if (!changed) for (i = 0; i < count; ++i) {
@@ -298,7 +306,7 @@ static void UpdateTasks(void)
     for (i = 0; i < taskCount; ++i) {
         BOOL selected = FALSE;
         BOOL explorerGroup = tasks[i].count > 1 && tasks[i].process == GetCurrentProcessId();
-        HICON icon = explorerGroup ? (env.options.taskTiles && explorerLargeIcon ? explorerLargeIcon : explorerIcon) : WindowIcon(tasks[i].windows[0],env.options.taskTiles);
+        HICON icon = explorerGroup ? (env.options.taskTiles && explorerLargeIcon ? explorerLargeIcon : explorerIcon) : EnvWindowIcon(tasks[i].windows[0],env.options.taskTiles);
         if (icon != tasks[i].icon) { tasks[i].icon = icon; InvalidateRect(tasks[i].button, NULL, FALSE); }
         if (explorerGroup) { lstrcpyA(text,UiText("Windows Explorer")); if(UiLanguage()) UiMarkTranslated(text); }
         else GetWindowTextA(tasks[i].windows[0], text, sizeof(text));
@@ -313,6 +321,7 @@ static void UpdateTasks(void)
         }
         if (selected) lastActive = active;
     }
+    TaskSwitchObserve();
 }
 void EnvShowDesktop(void)
 {
@@ -902,6 +911,7 @@ static PaintBuffer barBuffer, barButtonBuffer;
 
 static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
 {
+    if(message==TASK_SWITCH_MESSAGE) return TaskSwitchMessage(wp,lp);
     RenderTraceEvent("taskbar", window, message, wp, lp);
     if (NativeViewMenuMessage(env.desktopView, message, wp, lp)) return 0;
     if (ShutdownActive() && (message == WM_COMMAND || message == WM_HOTKEY || message == WM_CONTEXTMENU)) { ShutdownFocus(); return 0; }
@@ -1127,6 +1137,7 @@ HWND EnvironmentCreate(const EnvironmentHost *callbacks)
     }
     RefreshQuick(); EnvApplyOptions(); ShowWindow(env.desktop, SW_SHOWNOACTIVATE);
     SetWindowPos(env.desktop, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    TaskSwitchCreate();
     ShowWindow(env.bar, SW_SHOWNOACTIVATE); UpdateTasks(); SetTimer(env.bar, 1, 400, NULL);
     DragAcceptFiles(env.bar, TRUE);
     hotkeyDesktop = RegisterHotKey(env.bar, 1, MOD_WIN, 'D'); hotkeyStart = RegisterHotKey(env.bar, 2, MOD_CONTROL, VK_ESCAPE);
@@ -1137,6 +1148,7 @@ HWND EnvironmentCreate(const EnvironmentHost *callbacks)
 }
 BOOL EnvironmentTranslate(MSG *message)
 {
+    if(TaskSwitchTranslate(message)) return TRUE;
     if (quickResizing && message->message == WM_KEYDOWN && message->wParam == VK_ESCAPE) {
         EndQuickResize(FALSE); return TRUE;
     }
@@ -1154,6 +1166,7 @@ void EnvironmentShutdown(void)
     APPBARDATA data; int i;
     if (env.closing) return;
     env.closing = TRUE;
+    TaskSwitchDestroy();
     RenderTraceShutdown("exit.begin",S_OK,0);
     folderHead = folderCount = 0;
     ShutdownClose(); EndQuickResize(FALSE); QuickHover(NULL);

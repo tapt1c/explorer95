@@ -13,6 +13,7 @@
 #include "../src/browser.h"
 #include "../src/program_history.h"
 #include "../src/settings_internal.h"
+#include "../src/task_switch.h"
 
 static PROCESS_INFORMATION process;
 static HWND child;
@@ -187,6 +188,14 @@ static void Navigate(HWND browser, const char *path)
 
 static LRESULT CALLBACK ChildProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam)
 {
+    if(message==WM_KEYDOWN && wParam==VK_TAB) SetPropA(window,"Explorer95.PlainTabs",(HANDLE)((UINT_PTR)GetPropA(window,"Explorer95.PlainTabs")+1));
+    if(message==WM_APP+36) {
+        HWND modal=CreateWindowExA(WS_EX_DLGMODALFRAME,"STATIC","Own modal fixture",WS_POPUP|WS_VISIBLE|WS_CAPTION,100,100,180,90,window,NULL,GetModuleHandleA(NULL),NULL);
+        SetPropA(window,"Explorer95.ModalFixture",modal); EnableWindow(window,FALSE); SetForegroundWindow(modal); return 0;
+    }
+    if(message==WM_APP+37) {
+        HWND modal=(HWND)RemovePropA(window,"Explorer95.ModalFixture"); EnableWindow(window,TRUE); if(modal) DestroyWindow(modal); return 0;
+    }
     if (message == WM_COMMAND && wParam == 95 && lParam == WM_RBUTTONUP) {
         SetPropA(window,"Explorer95.TrayCommandCallback",(HANDLE)1); return 0;
     }
@@ -1003,6 +1012,7 @@ static void PumpFor(DWORD duration)
 #include "backlog_menu_cases.h"
 #include "shutdown_dos_cases.h"
 #include "task_groups_cases.h"
+#include "task_switch_cases.h"
 #include "browser_panes_cases.h"
 #include "desktop_delete_cases.h"
 #include "file_drag_cases.h"
@@ -1802,6 +1812,7 @@ void start(void)
     bar = WaitFor("Explorer95.Taskbar", NULL);
     desktop = WaitFor("Explorer95.Desktop", NULL);
     Check(bar && desktop, "taskbar and full desktop created");
+    if(group==GROUP_MENU || group==GROUP_FULL) TaskSwitchTests(bar);
     Check((GetWindowLongA(bar, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0,
           "taskbar starts in its configured topmost band before creating owned popups");
     if (group != GROUP_BROWSER) {

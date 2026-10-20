@@ -17,6 +17,7 @@ TEST_GROUP = full
 SOURCES = src/font_resource.c src/localization.c src/toolbar_compat.c src/browser.c src/browser_address.c src/browser_files.c src/browser_tree.c src/browser_toolbar.c src/browser_sidebar.c src/browser_search.c src/browser_history.c src/program_history.c src/paint.c src/tray_image.c src/explorer95.c src/environment.c src/native_view.c src/shell_new.c src/start_menu.c src/start_layout.c src/start_settings.c src/tray.c src/settings.c src/shell_config.c src/shutdown.c src/render_trace.c src/file_drag.c src/file_operations.c src/desktop_icons.c src/shell_features.c src/folder_open.c src/folder_handler.c
 TEST_SOURCES = src/font_resource.c src/localization.c src/toolbar_compat.c tests/smoke.c src/tray_image.c src/program_history.c src/paint.c src/shell_config.c src/start_layout.c src/desktop_icons.c src/shell_features.c src/folder_open.c src/folder_handler.c src/native_view.c src/shell_new.c src/render_trace.c src/file_drag.c src/file_operations.c
 SOURCES += src/task_groups.c
+SOURCES += src/task_switch.c
 SOURCES += src/shutdown_dos.c
 TEST_SOURCES += src/shutdown_dos.c
 OBJECTS = $(SOURCES:%.c=build/obj32/%.o)
@@ -68,11 +69,18 @@ build/ui64/tray_hook.dll: build/obj64/src/tray_hook.o build/obj64/src/tray_image
 	@mkdir -p $(@D)
 	$(CC64) $(CFLAGS_COMMON) -shared -nostdlib $(filter %.o,$^) -Wl,--entry,DllMain -Wl,--kill-at -lcomctl32 -lgdi32 -luser32 -lkernel32 -o $@
 
-build/resources.o: src/explorer95.rc resources/Bitmap143.bmp resources/explorer95.ico resources/Explorer95UI.ttf resources/Explorer95UI95.ttf resources/LiberationSans-LICENSE.txt build/tray_hook.dll build/obj32/.flags Makefile
+build/task_switch_hook.dll: build/obj32/src/task_switch_hook.o Makefile
+	$(CC) $(CFLAGS) -shared -nostdlib $(filter %.o,$^) -Wl,--entry,_DllMain@12 -Wl,--kill-at -Wl,--subsystem,windows:4.0 -Wl,--major-os-version,4 -Wl,--minor-os-version,0 -Wl,--disable-dynamicbase -Wl,--disable-nxcompat -luser32 -lkernel32 -o $@
+
+build/ui64/task_switch_hook.dll: build/obj64/src/task_switch_hook.o Makefile
+	@mkdir -p $(@D)
+	$(CC64) $(CFLAGS_COMMON) -shared -nostdlib $(filter %.o,$^) -Wl,--entry,DllMain -Wl,--kill-at -luser32 -lkernel32 -o $@
+
+build/resources.o: src/explorer95.rc resources/Bitmap143.bmp resources/explorer95.ico resources/Explorer95UI.ttf resources/Explorer95UI95.ttf resources/LiberationSans-LICENSE.txt build/tray_hook.dll build/task_switch_hook.dll build/obj32/.flags Makefile
 	@mkdir -p $(@D)
 	$(WINDRES) --preprocessor="$(CC)" --preprocessor-arg=-E --preprocessor-arg=-xc -I. -i $< -o $@
 
-build/ui64/resources.o: src/explorer95.rc resources/Bitmap143.bmp resources/explorer95.ico resources/Explorer95UI.ttf resources/Explorer95UI95.ttf resources/LiberationSans-LICENSE.txt build/ui64/tray_hook.dll build/obj64/.flags Makefile
+build/ui64/resources.o: src/explorer95.rc resources/Bitmap143.bmp resources/explorer95.ico resources/Explorer95UI.ttf resources/Explorer95UI95.ttf resources/LiberationSans-LICENSE.txt build/ui64/tray_hook.dll build/ui64/task_switch_hook.dll build/obj64/.flags Makefile
 	@mkdir -p $(@D)
 	$(WINDRES64) --preprocessor="$(CC64)" --preprocessor-arg=-E --preprocessor-arg=-xc -I. -i $< -o $@
 
@@ -80,6 +88,7 @@ check: all
 	python3 -m unittest discover -s tests -p test_check_pe.py
 	python3 -m unittest discover -s tests -p test_localization.py
 	python3 tests/check_pe.py build/tray_hook.dll --dll
+	python3 tests/check_pe.py build/task_switch_hook.dll --dll
 	python3 tests/check_pe.py build/explorer95.exe
 
 check-build:
@@ -114,7 +123,7 @@ build/ui64/smoke.exe: $(TEST_OBJECTS64) build/ui64/resources.o Makefile
 ui64-smoke: build/ui64/smoke.exe
 	$(WINE) build/ui64/smoke.exe --group="$(TEST_GROUP)"
 
--include $(sort $(OBJECTS:.o=.d) $(OBJECTS64:.o=.d) $(TEST_OBJECTS:.o=.d) $(TEST_OBJECTS64:.o=.d) build/obj32/src/tray_hook.d build/obj64/src/tray_hook.d)
+-include $(sort $(OBJECTS:.o=.d) $(OBJECTS64:.o=.d) $(TEST_OBJECTS:.o=.d) $(TEST_OBJECTS64:.o=.d) build/obj32/src/tray_hook.d build/obj64/src/tray_hook.d build/obj32/src/task_switch_hook.d build/obj64/src/task_switch_hook.d)
 
 clean:
 	rm -rf build

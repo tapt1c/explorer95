@@ -49,16 +49,22 @@ def hook_image(function="EndPaint"):
     return data
 
 
-def embedded_image(payload):
+def embedded_image(payload, switch_payload=None, include_switch=True):
+    if switch_payload is None:
+        switch_payload = payload
     data = image()
-    data.extend(bytes(256) + payload)
-    struct.pack_into("<II", data, 0x108, 0x1200, 256 + len(payload))
+    data.extend(bytes(256) + payload + switch_payload)
+    struct.pack_into("<II", data, 0x108, 0x1200, 256 + len(payload) + len(switch_payload))
     struct.pack_into("<IIII", data, 0x180, len(data) - 512, 0x1000, len(data) - 512, 512)
     root = 1024
-    for directory, name, target in ((0, 10, 0x80000018), (24, 201, 0x80000030), (48, 1033, 72)):
+    for directory, name, target in ((0, 10, 0x80000018), (24, 201, 0x80000038), (56, 1033, 80), (96, 1033, 120)):
         struct.pack_into("<HH", data, root + directory + 12, 0, 1)
         struct.pack_into("<II", data, root + directory + 16, name, target)
-    struct.pack_into("<IIII", data, root + 72, 0x1300, len(payload), 0, 0)
+    if include_switch:
+        struct.pack_into("<H", data, root + 24 + 14, 2)
+        struct.pack_into("<II", data, root + 48, 205, 0x80000060)
+    struct.pack_into("<IIII", data, root + 80, 0x1300, len(payload), 0, 0)
+    struct.pack_into("<IIII", data, root + 120, 0x1300 + len(payload), len(switch_payload), 0, 0)
     return data
 
 
@@ -142,9 +148,17 @@ class LoaderGateTests(unittest.TestCase):
 
     def test_truncated_embedded_hook_is_rejected(self):
         data = embedded_image(hook_image())
-        struct.pack_into("<I", data, 1024 + 76, 0xffffffff)
+        struct.pack_into("<I", data, 1024 + 84, 0xffffffff)
         with self.assertRaisesRegex(ValueError, "truncated embedded tray hook"):
             self.run_gate(data, require_hook=True)
+
+    def test_keyboard_hook_cannot_be_omitted(self):
+        with self.assertRaisesRegex(ValueError, "missing embedded task switch hook"):
+            self.run_gate(embedded_image(hook_image(), include_switch=False), require_hook=True)
+
+    def test_keyboard_hook_imports_are_checked(self):
+        with self.assertRaisesRegex(ValueError, "user32.dll!EndMenu"):
+            self.run_gate(embedded_image(hook_image(), hook_image(function="EndMenu")), require_hook=True)
 
 
 if __name__ == "__main__":

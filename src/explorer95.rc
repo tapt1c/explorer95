@@ -2,8 +2,10 @@
 143 BITMAP "resources/Bitmap143.bmp"
 #ifdef _WIN64
 201 RCDATA "build/ui64/tray_hook.dll"
+205 RCDATA "build/ui64/task_switch_hook.dll"
 #else
 201 RCDATA "build/tray_hook.dll"
+205 RCDATA "build/task_switch_hook.dll"
 #endif
 
 202 RCDATA "resources/Explorer95UI.ttf"

@@ -56,6 +56,9 @@ def main():
         icon = work / "resources/explorer95.ico"
         icon.write_bytes(icon.read_bytes())
         run("application icon changes rebuild only resources", 0, 1)
+        hook_header = work / "src/task_switch.h"
+        hook_header.write_text(hook_header.read_text() + "\n/* keyboard hook dependency probe */\n")
+        run("keyboard hook header rebuilds its embedded DLL and resources", 0, 1)
         source = work / "src/start_layout.c"
         source.write_text(source.read_text() + "\n/* source probe */\n")
         run("one source change rebuilds only that object", 1, 0)

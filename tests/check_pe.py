@@ -30,7 +30,7 @@ ALLOWED = {
     # Font registration/selection are original Win95 GDI APIs; Unicode calls
     # remain optional GetProcAddress paths, never loader dependencies.
     "gdi32.dll": {"CreateScalableFontResourceA", "AddFontResourceA", "RemoveFontResourceA", "GetCurrentObject", "CreatePatternBrush", "PatBlt", "GetDeviceCaps", "GetClipBox", "SaveDC", "RestoreDC", "IntersectClipRect", "ExcludeClipRect", "Arc", "CreatePen", "Ellipse", "CreateSolidBrush", "GetDIBits", "SetDIBits", "LineTo", "MoveToEx", "GetStockObject", "SelectObject", "SetBkMode", "SetTextColor", "BitBlt",
-                  "Polygon", "StretchBlt", "CreateCompatibleBitmap", "CreateBitmap", "SetBkColor", "SetWindowOrgEx", "CreateFontIndirectA", "GetTextFaceA", "GetTextExtentPoint32A", "GetTextMetricsA", "CreateCompatibleDC", "DeleteDC", "DeleteObject", "GetObjectA"},
+                  "Polygon", "StretchBlt", "SetStretchBltMode", "CreateCompatibleBitmap", "CreateBitmap", "SetBkColor", "SetWindowOrgEx", "CreateFontIndirectA", "GetTextFaceA", "GetTextExtentPoint32A", "GetTextMetricsA", "CreateCompatibleDC", "DeleteDC", "DeleteObject", "GetObjectA"},
     "kernel32.dll": set("""
         FindResourceA LoadResource SizeofResource LockResource GetCurrentProcess ReadProcessMemory GetACP Module32First
         GetDiskFreeSpaceA GetVolumeInformationA WideCharToMultiByte WritePrivateProfileSectionA
@@ -120,7 +120,7 @@ def check_data(data, dll=False, require_hook=False):
         if data[base:base + 8].rstrip(b"\0") == b".shared":
             shared = unpack("I", base + 36)[0] & 0xd0000000 == 0xd0000000
     if dll:
-        require(shared, "tray DLL must have a readable, writable shared handle section")
+        require(shared, "hook DLL must have a readable, writable shared handle section")
 
     def offset(rva):
         for start, size, raw in sections:
@@ -161,7 +161,7 @@ def check_data(data, dll=False, require_hook=False):
         require(resource_rva and resource_size, "missing embedded tray hook")
         root = offset(resource_rva)
 
-        def resource_entry(directory, wanted=None):
+        def resource_entry(directory, wanted=None, description="tray hook"):
             require(0 <= directory <= resource_size - 16, "invalid resource directory")
             named, ids = unpack("HH", root + directory + 12)
             count = named + ids
@@ -170,18 +170,19 @@ def check_data(data, dll=False, require_hook=False):
                 name, target = unpack("II", root + directory + 16 + index * 8)
                 if wanted is None or name == wanted:
                     return target
-            raise ValueError("missing embedded tray hook")
+            raise ValueError(f"missing embedded {description}")
 
         kind = resource_entry(0, 10)
         require(kind & 0x80000000, "invalid RCDATA directory")
-        hook = resource_entry(kind & 0x7fffffff, 201)
-        require(hook & 0x80000000, "invalid tray hook resource directory")
-        leaf = resource_entry(hook & 0x7fffffff)
-        require(not leaf & 0x80000000 and leaf + 16 <= resource_size, "invalid tray hook resource leaf")
-        payload_rva, size = unpack("II", root + leaf)
-        start = offset(payload_rva)
-        require(size and start + size <= len(data), "truncated embedded tray hook")
-        check_data(data[start:start + size], dll=True)
+        for identifier, description in ((201, "tray hook"), (205, "task switch hook")):
+            hook = resource_entry(kind & 0x7fffffff, identifier, description)
+            require(hook & 0x80000000, f"invalid {description} resource directory")
+            leaf = resource_entry(hook & 0x7fffffff, description=description)
+            require(not leaf & 0x80000000 and leaf + 16 <= resource_size, f"invalid {description} resource leaf")
+            payload_rva, size = unpack("II", root + leaf)
+            start = offset(payload_rva)
+            require(size and start + size <= len(data), f"truncated embedded {description}")
+            check_data(data[start:start + size], dll=True)
     print(f"PASS: x86 PE32 {'DLL' if dll else 'EXE'}, GUI/OS 4.0, {functions} reviewed imports in {libraries} system DLLs; no CRT")
 
 
