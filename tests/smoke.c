@@ -860,26 +860,26 @@ static void ContextPinTest(HWND bar, HWND menu, const char *settings)
     Check(popup != NULL, "right-clicking a recent program opens its context menu");
     PostMessageA(menu, WM_KEYDOWN, VK_DOWN, 0); PostMessageA(menu, WM_KEYDOWN, VK_RETURN, 0);
     started = GetTickCount();
-    while (GetPrivateProfileIntA("Pinned", "Count", 0, settings) != 3 && GetTickCount() - started < 5000) Sleep(50);
-    Check(GetPrivateProfileIntA("Pinned", "Count", 0, settings) == 3, "context action pins the recent program and saves immediately");
-    GetPrivateProfileStringA("Pinned", "Arguments2", "", value, sizeof(value), settings);
+    while (GetPrivateProfileIntA("Pinned", "Count", 0, settings) != 2 && GetTickCount() - started < 5000) Sleep(50);
+    Check(GetPrivateProfileIntA("Pinned", "Count", 0, settings) == 2, "context action pins the recent program and saves immediately");
+    GetPrivateProfileStringA("Pinned", "Arguments1", "", value, sizeof(value), settings);
     Check(!lstrcmpA(value, "!\"--child\""), "pinning preserves fully quoted launch arguments");
     /* Persistence precedes rebuilding the visible Start controls. */
     started = GetTickCount();
     while (IsWindowVisible(GetDlgItem(menu, 800)) && GetTickCount() - started < 5000) Sleep(50);
     Check(!IsWindowVisible(GetDlgItem(menu, 800)), "a pinned command is no longer duplicated in the recent list");
-    PostMessageA(menu, WM_CONTEXTMENU, (WPARAM)GetDlgItem(menu, 902), (LPARAM)-1);
+    PostMessageA(menu, WM_CONTEXTMENU, (WPARAM)GetDlgItem(menu, 901), (LPARAM)-1);
     popup = WaitFor("#32768", NULL);
     Check(popup != NULL, "pinned program supports a keyboard context menu");
     PostMessageA(menu, WM_KEYDOWN, VK_DOWN, 0); PostMessageA(menu, WM_KEYDOWN, VK_RETURN, 0);
     started = GetTickCount();
-    while (GetPrivateProfileIntA("Pinned", "Count", 0, settings) != 2 && GetTickCount() - started < 5000) Sleep(50);
-    Check(GetPrivateProfileIntA("Pinned", "Count", 0, settings) == 2, "context action unpins without deleting history");
+    while (GetPrivateProfileIntA("Pinned", "Count", 0, settings) != 1 && GetTickCount() - started < 5000) Sleep(50);
+    Check(GetPrivateProfileIntA("Pinned", "Count", 0, settings) == 1, "context action unpins without deleting history");
     started = GetTickCount();
     while (!IsWindowVisible(GetDlgItem(menu, 800)) && GetTickCount() - started < 5000) Sleep(50);
     Check(IsWindowVisible(GetDlgItem(menu, 800)), "unpinning makes the preserved recent program visible again");
     { RECT pin, recent;
-      GetWindowRect(GetDlgItem(menu, 901), &pin); GetWindowRect(GetDlgItem(menu, 800), &recent);
+      GetWindowRect(GetDlgItem(menu, 900), &pin); GetWindowRect(GetDlgItem(menu, 800), &recent);
       Check(recent.top >= pin.bottom + 8, "pin and recent lists leave room for a visible separator"); }
     SendMessageA(GetDlgItem(bar, 100), BM_CLICK, 0, 0);
 }
@@ -1001,6 +1001,7 @@ static void PumpFor(DWORD duration)
 }
 #include "quick_launch_cases.h"
 #include "backlog_menu_cases.h"
+#include "shutdown_dos_cases.h"
 #include "task_groups_cases.h"
 #include "browser_panes_cases.h"
 #include "desktop_delete_cases.h"
@@ -1126,15 +1127,23 @@ static void ShutdownStyleTests(HWND bar, const char *settings)
               "both shutdown styles use compact 314 by 200 outer dimensions");
         Check(((GetWindowLongA(dialog, GWL_STYLE) & WS_CAPTION) == WS_CAPTION) == (style == 1),
               "Windows 95 uses the native caption and XP uses its compact custom header");
-        for (id = 1700; id <= 1702; ++id) {
+        for (id = 1700; id <= 1703; ++id) {
             GetWindowRect(GetDlgItem(dialog, id), &button); MapWindowPoints(NULL, dialog, (POINT *)&button, 2);
             Check(button.left >= 0 && button.top >= 0 && button.right <= client.right && button.bottom <= client.bottom,
                   "shutdown action and its label fit inside the compact dialog");
         }
+        { RECT dos, cancel, overlap; DWORD version = GetVersion();
+          GetWindowRect(GetDlgItem(dialog, 1703), &dos); GetWindowRect(GetDlgItem(dialog, IDCANCEL), &cancel);
+          Check(!IntersectRect(&overlap, &dos, &cancel) && dos.top == cancel.top && dos.bottom == cancel.bottom,
+                "MS-DOS sits beside Cancel without changing the three main power buttons");
+          Check(IsWindowEnabled(GetDlgItem(dialog, 1703)) == !!((version & 0x80000000UL) &&
+                LOBYTE(LOWORD(version)) == 4 && HIBYTE(LOWORD(version)) == 0),
+                "MS-DOS mode is available only on Windows 95"); }
         PumpFor(80); dc = GetDC(dialog);
         Check(GetPixel(dc, 8, 8) == (style ? GetSysColor(COLOR_BTNFACE) : RGB(0,45,140)),
               "selected style paints the classic system face or XP blue header");
         ReleaseDC(dialog, dc);
+        SaveScreen(style ? "build/shutdown-dos-95.bmp" : "build/shutdown-dos-xp.bmp");
         SendMessageA(dialog, WM_COMMAND, IDCANCEL, 0); /* Cleanup only; never execute a power action. */
         properties = OpenSettings(bar); SettingsPage(properties, 2, -1);
         Check(SendDlgItemMessageA(properties, 1029, CB_GETCURSEL, 0, 0) == style,
@@ -1269,11 +1278,11 @@ static void StartBehaviorTests(HWND properties, HWND bar, HWND menu, const char 
         SendMessageA(properties, WM_COMMAND, 1023 + i, 0);
     }
     SendMessageA(properties, WM_COMMAND, 0x3021, 0);
-    Check(GetPrivateProfileIntA("Pinned", "Count", 0, settings) == 5 && GetPrivateProfileIntA("Pinned", "Client0", 0, settings) == 1 &&
+    Check(GetPrivateProfileIntA("Pinned", "Count", 0, settings) == 4 && GetPrivateProfileIntA("Pinned", "Client0", 0, settings) == 1 &&
         GetPrivateProfileIntA("Pinned", "Client1", 0, settings) == 2, "Internet and e-mail choices persist as separate top pins");
     for (i = 0; i < 2; ++i) { SendDlgItemMessageA(properties, 1023 + i, BM_SETCHECK, BST_UNCHECKED, 0); SendMessageA(properties, WM_COMMAND, 1023 + i, 0); }
     SendMessageA(properties, WM_COMMAND, 0x3021, 0);
-    Check(GetPrivateProfileIntA("Pinned", "Count", 0, settings) == 3, "disabling optional clients preserves other pinned programs");
+    Check(GetPrivateProfileIntA("Pinned", "Count", 0, settings) == 2, "disabling optional clients preserves other pinned programs");
     SettingsPage(properties, 1, 1);
     SendDlgItemMessageA(properties, 654, BM_SETCHECK, BST_CHECKED, 0);
     SendDlgItemMessageA(properties, 1007, CB_SETCURSEL, 4, 0); SendMessageA(properties, WM_COMMAND, MAKELONG(1007, CBN_SELCHANGE), 0);
@@ -1332,7 +1341,7 @@ static HWND StartSettingsTests(HWND bar, HWND menu, const char *settings)
 
     SettingsPage(properties, 1, 2);
     Check(IsWindowVisible(GetDlgItem(properties, 630)) && !IsWindowVisible(GetDlgItem(properties, 601)), "tabs expose only the selected settings page");
-    Check(SendDlgItemMessageA(properties, 630, LB_GETCOUNT, 0, 0) == 2, "default Explorer and DOS entries belong to the pinned list");
+    Check(SendDlgItemMessageA(properties, 630, LB_GETCOUNT, 0, 0) == 1, "only Explorer is pinned by default; MS-DOS Prompt is absent");
     SetDlgItemTextA(properties, 625, "Discard me"); SetDlgItemInt(properties, 622, 211, FALSE);
     SendMessageA(properties, WM_COMMAND, 611, 0); SendMessageA(properties, WM_COMMAND, IDCANCEL, 0);
     GetWindowTextA(GetDlgItem(bar, 100), title, sizeof(title));
@@ -1356,21 +1365,21 @@ static HWND StartSettingsTests(HWND bar, HWND menu, const char *settings)
     GetModuleFileNameA(NULL, module, MAX_PATH); SetDlgItemTextA(properties, 631, module);
     SetDlgItemTextA(properties, 636, "Pinned smoke program"); SetDlgItemTextA(properties, 637, "\"--child\"");
     SendMessageA(properties, WM_COMMAND, 632, 0);
-    Check(SendDlgItemMessageA(properties, 630, LB_GETCOUNT, 0, 0) == 3, "add a program with its own label and arguments");
+    Check(SendDlgItemMessageA(properties, 630, LB_GETCOUNT, 0, 0) == 2, "add a program with its own label and arguments");
     SendMessageA(properties, WM_COMMAND, 634, 0);
     Check(IsWindowEnabled(GetDlgItem(properties, 0x3021)), "editing a pinned draft enables Apply");
     SendMessageA(properties, WM_COMMAND, 0x3021, 0);
     Check(IsWindow(properties) && !IsWindowEnabled(GetDlgItem(properties, 0x3021)), "Apply commits all tabs without closing the window");
     GetWindowTextA(GetDlgItem(bar, 100), title, sizeof(title)); Check(!lstrcmpA(title, "Launch & Go"), "Start button accepts a custom caption including a literal ampersand");
-    Check(GetPrivateProfileIntA("Pinned", "Count", 0, settings) == 3, "pinned list is persisted independently of history");
+    Check(GetPrivateProfileIntA("Pinned", "Count", 0, settings) == 2, "pinned list is persisted independently of history");
     GetPrivateProfileStringA("Explorer", "SettingsSentinel", "", value, sizeof(value), settings);
     Check(!lstrcmpA(value, "keep"), "environment Apply preserves the separate Explorer settings section");
-    GetWindowTextA(GetDlgItem(menu, 901), title, sizeof(title)); Check(!lstrcmpA(title, "Pinned smoke program"), "pinned program order follows Move Up");
+    GetWindowTextA(GetDlgItem(menu, 900), title, sizeof(title)); Check(!lstrcmpA(title, "Pinned smoke program"), "pinned program order follows Move Up");
     Check(!(GetWindowLongA(GetDlgItem(menu, 304), GWL_STYLE) & WS_VISIBLE) && !(GetWindowLongA(GetDlgItem(menu, 309), GWL_STYLE) & WS_VISIBLE), "unchecked right-column commands are hidden");
     SendDlgItemMessageA(properties, 630, LB_SETCURSEL, 1, 0); SendMessageA(properties, WM_COMMAND, 633, 0);
-    Check(SendDlgItemMessageA(properties, 630, LB_GETCOUNT, 0, 0) == 2, "pinned-program editor removes selected entries");
+    Check(SendDlgItemMessageA(properties, 630, LB_GETCOUNT, 0, 0) == 1, "pinned-program editor removes selected entries");
     SendMessageA(properties, WM_COMMAND, IDCANCEL, 0);
-    GetWindowTextA(GetDlgItem(menu, 901), title, sizeof(title)); Check(!lstrcmpA(title, "Pinned smoke program"), "Cancel after Apply preserves the applied pins");
+    GetWindowTextA(GetDlgItem(menu, 900), title, sizeof(title)); Check(!lstrcmpA(title, "Pinned smoke program"), "Cancel after Apply preserves the applied pins");
     properties = OpenSettings(bar); SettingsPage(properties, 1, 0);
     SetDlgItemInt(properties, 627, 0, FALSE); SendMessageA(properties, WM_COMMAND, 0x3021, 0);
     { int i; BOOL none = TRUE; SendMessageA(GetDlgItem(bar, 100), BM_CLICK, 0, 0);
@@ -1761,6 +1770,7 @@ void start(void)
     if(group==GROUP_LANGUAGE) { LanguageTests(settingsDir); LanguageRestartTests(settingsDir,executable); goto cleanup; }
     if (group == GROUP_FULL || group == GROUP_CORE || group == GROUP_BROWSER) ShellNewTests(settingsDir, module);
     if (group == GROUP_FULL || group == GROUP_CORE || group == GROUP_BROWSER) FileDropRegistrationTests();
+    if (group == GROUP_FULL || group == GROUP_CORE || group == GROUP_MENU) ShutdownDosTests(settingsDir);
     if (group != GROUP_BROWSER) { LayoutTests(); HistoryTests(settingsDir, module, settings); ShellFeatureTests(); }
     if (group == GROUP_FULL || group == GROUP_CORE) { PaintTests(); ConfigTests(settingsDir); DesktopIconTests(settingsDir); LanguageTests(settingsDir); FolderHandlerTests(module,settings); FolderSelectionTests(); DragDataTests(); NativeViewMessageTests(); TrayMirrorTests(); TrayMirrorCrossProcessTests(); }
     if (group == GROUP_CORE) goto cleanup;
@@ -1812,6 +1822,7 @@ void start(void)
         while (IsWindow(initial) && GetTickCount() - started < 3000) PumpFor(20);
         Check(!IsWindow(initial), "startup folder closes before keyboard focus tests begin");
     }
+    if (group != GROUP_BROWSER) FirstStartDefaultsTests(bar, FindWindowA("Explorer95.Start", NULL), settings);
     if (group != GROUP_BROWSER) WinKeyTests(bar, FindWindowA("Explorer95.Start", NULL));
     if (group != GROUP_BROWSER) { QuickLaunchTests(bar, settings); TaskTileTests(bar,settings); TaskGroupProcessesTests(bar,settingsDir); TaskManagerMenuTests(bar); StartOrderTests(bar,FindWindowA("Explorer95.Start",NULL),settings); }
     if (group != GROUP_MENU) {
@@ -1984,9 +1995,9 @@ shutdown:
     SendMessageA(bar, WM_COMMAND, 600, 0);
     dialog = WaitFor("Explorer95.Properties", NULL);
     SendMessageA(dialog, WM_COMMAND, 611, 0); SendMessageA(dialog, WM_COMMAND, 0x3021, 0); SendMessageA(dialog, WM_COMMAND, IDCANCEL, 0);
-    GetWindowTextA(GetDlgItem(menu, 901), actual, sizeof(actual));
+    GetWindowTextA(GetDlgItem(menu, 900), actual, sizeof(actual));
     Check(!lstrcmpA(actual, "Pinned smoke program"), "clearing recent programs preserves the separate pinned list");
-    SendMessageA(menu, WM_COMMAND, 901, 0);
+    SendMessageA(menu, WM_COMMAND, 900, 0);
     child = WaitFor("Explorer95.SmokeChild", "Explorer95 smoke child");
     Check(child != NULL && SendMessageA(child, WM_APP + 35, 0, 0), "persisted pinned program launches with its quoted arguments");
     PostMessageA(child, WM_CLOSE, 0, 0);

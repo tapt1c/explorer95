@@ -21,9 +21,8 @@ void StartLoadPins(void)
     startPinCount = GetPrivateProfileIntA("Pinned", "Count", -1, env.ini);
     ZeroMemory(startPins, sizeof(startPins));
     if (startPinCount < 0) {
-        startPinCount = 2;
+        startPinCount = 1;
         lstrcpyA(startPins[0].path, "@explorer"); lstrcpyA(startPins[0].label, "Windows Explorer");
-        lstrcpyA(startPins[1].path, "@command"); lstrcpyA(startPins[1].label, "MS-DOS Prompt");
         return;
     }
     if (startPinCount > PIN_LIMIT) startPinCount = PIN_LIMIT;

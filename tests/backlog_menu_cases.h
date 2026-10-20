@@ -93,3 +93,31 @@ static void StartOrderTests(HWND bar, HWND menu, const char *settings)
     SendMessageA(properties,WM_COMMAND,ID_VISIBLE,0); SendMessageA(properties,WM_COMMAND,IDOK,0);
     Check(GetPrivateProfileIntA("Start","ItemsVersion",0,settings)==2,"visibility migration is saved once so hidden Command Prompt stays hidden");
 }
+static void FirstStartDefaultsTests(HWND bar, HWND menu, const char *settings)
+{
+    static const int modes[] = {0,1,0,0,0,1,1};
+    HWND properties = OpenSettings(bar); char path[MAX_PATH]; int i;
+    SettingsPage(properties, SETTINGS_START, START_ADVANCED);
+    for (i = 0; i < START_OPTION_COUNT; ++i)
+        Check(SendDlgItemMessageA(properties, ID_VISIBLE+i, BM_GETCHECK, 0, 0) == BST_CHECKED,
+              "a fresh profile enables all requested Start items, including Favorites");
+    for (i = 0; i < 7; ++i) {
+        SendDlgItemMessageA(properties, ID_FOLDERITEM, CB_SETCURSEL, i, 0);
+        SendMessageA(properties, WM_COMMAND, MAKEWPARAM(ID_FOLDERITEM, CBN_SELCHANGE), 0);
+        Check(SendDlgItemMessageA(properties, ID_FOLDERMODE, CB_GETCURSEL, 0, 0) == modes[i],
+              "only Recent Documents, Printers and Favorites are default submenus");
+    }
+    SettingsPage(properties, SETTINGS_START, START_PINNED);
+    Check(SendDlgItemMessageA(properties, ID_PINLIST, LB_GETCOUNT, 0, 0) == 1,
+          "the fresh pinned list contains only Windows Explorer");
+    SendMessageA(properties, WM_COMMAND, ID_VISIBLE, 0);
+    SendMessageA(properties, WM_COMMAND, 0x3021, 0);
+    Check(GetPrivateProfileIntA("Start", "VisibleItems", 0, settings) == 16383 &&
+          GetPrivateProfileIntA("Start", "FolderMenus", 0, settings) == (2|32|4096),
+          "saving a fresh profile writes the pictured visibility and submenu defaults");
+    GetPrivateProfileStringA("Pinned", "Path0", "", path, sizeof(path), settings);
+    Check(GetPrivateProfileIntA("Pinned", "Count", 0, settings) == 1 && !lstrcmpA(path, "@explorer"),
+          "saving defaults does not recreate the removed MS-DOS Prompt pin");
+    SendMessageA(properties, WM_COMMAND, IDCANCEL, 0);
+    OrderedStartGeometry(bar, menu, "build/start-first-run.bmp");
+}

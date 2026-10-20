@@ -17,6 +17,8 @@ TEST_GROUP = full
 SOURCES = src/font_resource.c src/localization.c src/toolbar_compat.c src/browser.c src/browser_address.c src/browser_files.c src/browser_tree.c src/browser_toolbar.c src/browser_sidebar.c src/browser_search.c src/browser_history.c src/program_history.c src/paint.c src/tray_image.c src/explorer95.c src/environment.c src/native_view.c src/shell_new.c src/start_menu.c src/start_layout.c src/start_settings.c src/tray.c src/settings.c src/shell_config.c src/shutdown.c src/render_trace.c src/file_drag.c src/file_operations.c src/desktop_icons.c src/shell_features.c src/folder_open.c src/folder_handler.c
 TEST_SOURCES = src/font_resource.c src/localization.c src/toolbar_compat.c tests/smoke.c src/tray_image.c src/program_history.c src/paint.c src/shell_config.c src/start_layout.c src/desktop_icons.c src/shell_features.c src/folder_open.c src/folder_handler.c src/native_view.c src/shell_new.c src/render_trace.c src/file_drag.c src/file_operations.c
 SOURCES += src/task_groups.c
+SOURCES += src/shutdown_dos.c
+TEST_SOURCES += src/shutdown_dos.c
 OBJECTS = $(SOURCES:%.c=build/obj32/%.o)
 OBJECTS64 = $(SOURCES:%.c=build/obj64/%.o)
 TEST_OBJECTS = $(TEST_SOURCES:%.c=build/obj32/%.o)

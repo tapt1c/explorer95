@@ -155,7 +155,7 @@ static BOOL SettingsPath(void)
     env.options.hoverMenus = !!GetPrivateProfileIntA("Start", "HoverMenus", TRUE, env.ini);
     env.options.allowDrop = !!GetPrivateProfileIntA("Start", "AllowDrop", TRUE, env.ini);
     env.options.highlightNew = !!GetPrivateProfileIntA("Start", "HighlightNew", FALSE, env.ini);
-    env.options.startMenus = GetPrivateProfileIntA("Start", "FolderMenus", 2, env.ini);
+    env.options.startMenus = GetPrivateProfileIntA("Start", "FolderMenus", (1U << 1) | (1U << 5) | (1U << 12), env.ini);
     env.options.desktopIcons = !!GetPrivateProfileIntA("Desktop", "ShowIcons", TRUE, env.ini);
     env.options.autoArrange = !!GetPrivateProfileIntA("Desktop", "AutoArrange", FALSE, env.ini);
     env.options.lockDesktopIcons = !!GetPrivateProfileIntA("Desktop", "LockIcons", FALSE, env.ini);
@@ -167,7 +167,7 @@ static BOOL SettingsPath(void)
     env.options.traySeconds = Clamp(Option("InactiveSeconds", 60), 5, 3600);
     env.options.largeStartIcons = !!GetPrivateProfileIntA("Start", "LargeIcons", FALSE, env.ini);
     env.options.recentCount = Clamp((int)GetPrivateProfileIntA("Start", "RecentCount", 7, env.ini), 0, RECENT_LIMIT);
-    env.options.startItems = GetPrivateProfileIntA("Start", "VisibleItems", ((1U << 12) - 1) | (1U << 13), env.ini);
+    env.options.startItems = GetPrivateProfileIntA("Start", "VisibleItems", (1U << START_OPTION_COUNT) - 1, env.ini);
     if (GetPrivateProfileIntA("Start", "ItemsVersion", 0, env.ini) < 2) env.options.startItems |= 1U << 13;
     GetPrivateProfileStringA("Start", "ButtonLabel", "Start", env.options.startLabel, sizeof(env.options.startLabel), env.ini);
     return TRUE;

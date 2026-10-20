@@ -273,6 +273,14 @@ static void LanguageRestartTests(const char *directory,const char *executable)
     bar=WaitFor("Explorer95.Taskbar",NULL); Check(bar!=NULL,"the Russian taskbar starts"); PumpFor(500);
     Check(LanguageWideEqual(GetDlgItem(bar,100),L"\u041f\u0443\u0441\u043a"),"the actual Start button reads Пуск on an English system locale");
     {
+        HWND dialog;
+        SendMessageA(bar,WM_COMMAND,ID_SHUTDOWN,0); dialog=WaitFor("Explorer95.Shutdown",NULL);
+        Check(dialog && LanguageWideEqual(GetDlgItem(dialog,1703),L"\u0420\u0435\u0436\u0438\u043c MS-DOS..."),
+              "the compact MS-DOS command has its Russian label in the real shutdown window");
+        PumpFor(80); SaveScreen("build/shutdown-dos-ru.bmp");
+        SendMessageA(dialog,WM_COMMAND,IDCANCEL,0); /* Cleanup only; never select a power command. */
+    }
+    {
         HWND browser=WaitFor(BROWSER_CLASS,NULL); Check(browser!=NULL,"the Russian shell opens its own filesystem browser"); PumpFor(400);
         Check(LanguageWideEqual(GetDlgItem(browser,ID_GO),L"\u041f\u0435\u0440\u0435\u0445\u043e\u0434"),"the Explorer address bar uses Russian commands");
         BrowserToolbarGeometry(browser,process.hProcess,16);
