@@ -3,12 +3,77 @@
  * per visible button supplies an independently sized caption and bitmap. */
 #define WIN32_LEAN_AND_MEAN
 #include "toolbar_compat.h"
+#include "paint.h"
 #define TOOLBAR_ITEMS 32
+#define ARROW_WIDTH 12
+#define EDGE_TIMER 0xe950
+static const char edgesProperty[] = "Explorer95.ToolbarEdges";
+static const char hotProperty[] = "Explorer95.ToolbarHot";
+static void PaintEdges(HWND window, HDC dc)
+{
+    int i, count = (int)SendMessageA(window, TB_BUTTONCOUNT, 0, 0);
+    int hot = (int)(INT_PTR)GetPropA(window, hotProperty) - 1;
+    BOOL legacy = ToolbarCompactLegacy(window);
+    for (i = 0; i < count; ++i) {
+        TBBUTTON button; RECT rect;
+        if (!SendMessageA(window, TB_GETBUTTON, i, (LPARAM)&button) ||
+            !SendMessageA(window, TB_GETITEMRECT, i, (LPARAM)&rect)) continue;
+        if (button.fsStyle & TBSTYLE_SEP) {
+            rect.left += (rect.right - rect.left - 2) / 2; rect.right = rect.left + 2;
+            rect.top += 2; rect.bottom -= 2; DrawEdge(dc, &rect, EDGE_ETCHED, BF_LEFT);
+        } else if (!legacy && (button.fsState & TBSTATE_ENABLED)) {
+            BOOL down = (button.fsState & (TBSTATE_PRESSED | TBSTATE_CHECKED)) != 0;
+            if (down || hot == i) DrawEdge(dc, &rect, down ? EDGE_SUNKEN : EDGE_RAISED, BF_RECT);
+        }
+    }
+}
+static LRESULT CALLBACK EdgesProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
+{
+    WNDPROC original = (WNDPROC)GetPropA(window, edgesProperty); LRESULT result;
+    if (message == WM_MOUSEMOVE) {
+        int i, hot = -1, count = (int)SendMessageA(window, TB_BUTTONCOUNT, 0, 0);
+        POINT point = {(short)LOWORD(lp), (short)HIWORD(lp)};
+        for (i = 0; i < count; ++i) { RECT rect;
+            if (SendMessageA(window, TB_GETITEMRECT, i, (LPARAM)&rect) && PtInRect(&rect, point)) { hot = i; break; }
+        }
+        if ((int)(INT_PTR)GetPropA(window, hotProperty) != hot + 1) {
+            SetPropA(window, hotProperty, (HANDLE)(INT_PTR)(hot + 1)); InvalidateRect(window, NULL, FALSE);
+        }
+        if (hot >= 0) SetTimer(window, EDGE_TIMER, 80, NULL);
+        else KillTimer(window, EDGE_TIMER);
+    }
+    if (message == WM_TIMER && wp == EDGE_TIMER) {
+        POINT point, screen; RECT rect; GetCursorPos(&screen); point = screen;
+        ScreenToClient(window, &point); GetClientRect(window, &rect);
+        if (!PtInRect(&rect, point) || WindowFromPoint(screen) != window) {
+            KillTimer(window, EDGE_TIMER); RemovePropA(window, hotProperty); InvalidateRect(window, NULL, FALSE);
+        }
+        return 0;
+    }
+    if (message == WM_NCDESTROY) {
+        KillTimer(window, EDGE_TIMER); RemovePropA(window, hotProperty);
+        SetWindowLongPtrA(window, GWLP_WNDPROC, (LONG_PTR)original); RemovePropA(window, edgesProperty);
+        return CallWindowProcA(original, window, message, wp, lp);
+    }
+    result = CallWindowProcA(original, window, message, wp, lp);
+    if (message == WM_PAINT) { HDC dc = GetDC(window);
+        if (dc) { PaintEdges(window, dc); ReleaseDC(window, dc); }
+    }
+    return result;
+}
+static void InstallEdges(HWND window)
+{
+    WNDPROC original = (WNDPROC)GetWindowLongPtrA(window, GWLP_WNDPROC);
+    if (SetPropA(window, edgesProperty, (HANDLE)original))
+        SetWindowLongPtrA(window, GWLP_WNDPROC, (LONG_PTR)EdgesProc);
+}
 typedef struct CompactToolbar {
     WNDPROC original;
     int count, height, widths[TOOLBAR_ITEMS];
     RECT rects[TOOLBAR_ITEMS];
     HWND buttons[TOOLBAR_ITEMS];
+    BOOL arrows[TOOLBAR_ITEMS];
+    int pressedArrow;
 } CompactToolbar;
 static const char compactProperty[] = "Explorer95.CompactToolbar";
 
@@ -24,9 +89,33 @@ static void Layout(HWND window, CompactToolbar *bar)
             RECT native;
             SendMessageA(bar->buttons[i], TB_GETITEMRECT, 0, (LPARAM)&native);
             MoveWindow(bar->buttons[i], x - native.left, y - native.top,
-                width + native.left, bar->height + native.top, FALSE);
+                width + native.left - (bar->arrows[i] ? ARROW_WIDTH : 0), bar->height + native.top, FALSE);
         }
         x += width;
+    }
+}
+static RECT ArrowRect(CompactToolbar *bar, int i)
+{ RECT rect = bar->rects[i]; rect.left = rect.right - ARROW_WIDTH; return rect; }
+static int HitArrow(HWND window, CompactToolbar *bar, POINT point)
+{
+    int i;
+    for (i = 0; i < bar->count; ++i) if (bar->arrows[i]) {
+        RECT rect = ArrowRect(bar, i); TBBUTTON button;
+        SendMessageA(window, TB_GETBUTTON, i, (LPARAM)&button);
+        if ((button.fsState & TBSTATE_ENABLED) && PtInRect(&rect, point)) return i;
+    }
+    return -1;
+}
+static void PaintArrows(HWND window, CompactToolbar *bar, HDC dc)
+{
+    int i; POINT point; GetCursorPos(&point); ScreenToClient(window, &point);
+    for (i = 0; i < bar->count; ++i) if (bar->arrows[i]) {
+        RECT rect = ArrowRect(bar, i); TBBUTTON button; BOOL down, enabled;
+        SendMessageA(window, TB_GETBUTTON, i, (LPARAM)&button); enabled = (button.fsState & TBSTATE_ENABLED) != 0;
+        down = enabled && bar->pressedArrow == i && PtInRect(&rect, point);
+        if (enabled && PtInRect(&rect, point)) DrawEdge(dc, &rect, down ? EDGE_SUNKEN : EDGE_RAISED, BF_RECT);
+        if (down) OffsetRect(&rect, 1, 1);
+        PaintArrow(dc, &rect, DFCS_SCROLLDOWN, GetSysColor(enabled ? COLOR_BTNTEXT : COLOR_GRAYTEXT), TRUE);
     }
 }
 static LRESULT CALLBACK CompactProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
@@ -44,8 +133,39 @@ static LRESULT CALLBACK CompactProc(HWND window, UINT message, WPARAM wp, LPARAM
         Layout(window, bar); return result;
     case WM_PAINT: {
         PAINTSTRUCT paint; HDC dc = BeginPaint(window, &paint);
-        FillRect(dc, &paint.rcPaint, (HBRUSH)(COLOR_BTNFACE + 1)); EndPaint(window, &paint); return 0;
+        FillRect(dc, &paint.rcPaint, (HBRUSH)(COLOR_BTNFACE + 1)); PaintArrows(window, bar, dc);
+        EndPaint(window, &paint); return 0;
     }
+    case WM_LBUTTONDOWN: {
+        POINT point = {(short)LOWORD(lp), (short)HIWORD(lp)}; int index = HitArrow(window, bar, point);
+        if (index >= 0) { bar->pressedArrow = index; SetCapture(window); InvalidateRect(window, &bar->rects[index], FALSE); return 0; }
+        break;
+    }
+    case WM_MOUSEMOVE:
+        if (bar->pressedArrow >= 0) InvalidateRect(window, &bar->rects[bar->pressedArrow], FALSE);
+        break;
+    case WM_LBUTTONUP:
+        if (bar->pressedArrow >= 0) {
+            POINT point = {(short)LOWORD(lp), (short)HIWORD(lp)}; int index = bar->pressedArrow;
+            BOOL activate = HitArrow(window, bar, point) == index; TBBUTTON button; NMTOOLBARA notice;
+            bar->pressedArrow = -1; if (GetCapture() == window) ReleaseCapture();
+            InvalidateRect(window, &bar->rects[index], FALSE);
+            if (activate) {
+                SendMessageA(window, TB_GETBUTTON, index, (LPARAM)&button); ZeroMemory(&notice, sizeof(notice));
+                notice.hdr.hwndFrom = window; notice.hdr.idFrom = (UINT)GetDlgCtrlID(window);
+                notice.hdr.code = TBN_DROPDOWN; notice.iItem = button.idCommand;
+                SendMessageA(GetParent(window), WM_NOTIFY, notice.hdr.idFrom, (LPARAM)&notice);
+            }
+            return 0;
+        }
+        break;
+    case WM_CANCELMODE: case WM_CAPTURECHANGED:
+        if (bar->pressedArrow >= 0) {
+            int index = bar->pressedArrow; bar->pressedArrow = -1;
+            if (GetCapture() == window) ReleaseCapture();
+            InvalidateRect(window, &bar->rects[index], FALSE);
+        }
+        break;
     case WM_COMMAND: return SendMessageA(GetParent(window), message, wp, lp);
     case WM_CONTEXTMENU:
         return SendMessageA(GetParent(window), message, (WPARAM)window, lp);
@@ -79,25 +199,28 @@ BOOL ToolbarCompact(HWND toolbar, int size, int count, const int *widths,
     const char *const *captions, const ToolbarBitmap *bitmaps, int bitmapCount)
 {
     int i, j; BOOL native = TRUE; CompactToolbar *bar;
+    BOOL nativeArrows = (SendMessageA(toolbar, TB_GETEXTENDEDSTYLE, 0, 0) & TBSTYLE_EX_DRAWDDARROWS) != 0;
     if (count < 1 || count > TOOLBAR_ITEMS || ToolbarCompactLegacy(toolbar)) return FALSE;
     SendMessageA(toolbar, TB_SETBUTTONSIZE, 0, MAKELONG(size + 8, size + 8));
     for (i = 0; i < count; ++i) {
         TBBUTTON button; TBBUTTONINFOA info; RECT rect;
         if (!SendMessageA(toolbar, TB_GETBUTTON, i, (LPARAM)&button)) return FALSE;
         if (button.fsStyle & TBSTYLE_SEP) continue;
+        if ((button.fsStyle & TBSTYLE_DROPDOWN) && !nativeArrows) native = FALSE;
         ZeroMemory(&info, sizeof(info)); info.cbSize = sizeof(info); info.dwMask = TBIF_SIZE; info.cx = (WORD)widths[i];
         if (!SendMessageA(toolbar, TB_SETBUTTONINFOA, button.idCommand, (LPARAM)&info) ||
             !SendMessageA(toolbar, TB_GETITEMRECT, i, (LPARAM)&rect) || rect.right - rect.left != widths[i]) native = FALSE;
     }
-    if (native) return TRUE;
+    if (native) { InstallEdges(toolbar); return TRUE; }
     bar = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*bar));
     if (!bar) return FALSE;
-    bar->count = count; bar->height = size + 8;
+    bar->count = count; bar->height = size + 8; bar->pressedArrow = -1;
     for (i = 0; i < count; ++i) {
         TBBUTTON button; HWND child; char text[256];
         bar->widths[i] = widths[i];
         SendMessageA(toolbar, TB_GETBUTTON, i, (LPARAM)&button);
         if (button.fsStyle & TBSTYLE_SEP) continue;
+        bar->arrows[i] = (button.fsStyle & TBSTYLE_DROPDOWN) != 0;
         child = CreateWindowExA(0, TOOLBARCLASSNAMEA, "", WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS |
             TBSTYLE_LIST | TBSTYLE_FLAT | TBSTYLE_TOOLTIPS | CCS_NOPARENTALIGN | CCS_NORESIZE | CCS_NODIVIDER,
             0, 0, widths[i], bar->height, toolbar, (HMENU)(INT_PTR)button.idCommand, GetModuleHandleA(NULL), NULL);
@@ -111,18 +234,20 @@ BOOL ToolbarCompact(HWND toolbar, int size, int count, const int *widths,
             SendMessageA(child, TB_ADDBITMAP, bitmaps[j].count, (LPARAM)&bitmaps[j].bitmap);
         ZeroMemory(text, sizeof(text)); lstrcpynA(text, captions[i], sizeof(text) - 1);
         button.iString = *text ? SendMessageA(child, TB_ADDSTRINGA, 0, (LPARAM)text) : -1;
-        button.fsStyle &= ~TBSTYLE_AUTOSIZE;
+        button.fsStyle &= ~(TBSTYLE_AUTOSIZE | TBSTYLE_DROPDOWN);
         /* The original control only promises TB_SETBUTTONSIZE before the
          * first button is inserted; newer versions also accept the final reset. */
-        SendMessageA(child, TB_SETBUTTONSIZE, 0, MAKELONG(widths[i], bar->height));
+        SendMessageA(child, TB_SETBUTTONSIZE, 0, MAKELONG(widths[i] - (bar->arrows[i] ? ARROW_WIDTH : 0), bar->height));
         SendMessageA(child, TB_ADDBUTTONSA, 1, (LPARAM)&button);
         /* No shared caption width can leak between these one-button controls. */
-        SendMessageA(child, TB_SETBUTTONSIZE, 0, MAKELONG(widths[i], bar->height));
+        SendMessageA(child, TB_SETBUTTONSIZE, 0, MAKELONG(widths[i] - (bar->arrows[i] ? ARROW_WIDTH : 0), bar->height));
+        InstallEdges(child);
     }
     bar->original = (WNDPROC)GetWindowLongPtrA(toolbar, GWLP_WNDPROC);
     if (!SetPropA(toolbar, compactProperty, (HANDLE)bar)) goto fail;
     SetWindowLongA(toolbar, GWL_STYLE, GetWindowLongA(toolbar, GWL_STYLE) | WS_CLIPCHILDREN);
     SetWindowLongPtrA(toolbar, GWLP_WNDPROC, (LONG_PTR)CompactProc);
+    InstallEdges(toolbar);
     Layout(toolbar, bar); return TRUE;
 fail:
     for (i = 0; i < count; ++i) if (bar->buttons[i]) DestroyWindow(bar->buttons[i]);

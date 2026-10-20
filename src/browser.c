@@ -171,7 +171,7 @@ static void CompactToolbar(Browser *browser, int size)
 }
 void BrowserBuildToolbar(Browser *browser)
 {
-    TBADDBITMAP images; int stock, history, views, navigation, i, size = browser->options.largeTools ? 24 : 16; BYTE dropdown;
+    TBADDBITMAP images; int stock, history, views, navigation, i, size = browser->options.largeTools ? 24 : 16;
     if (browser->toolbar) DestroyWindow(browser->toolbar);
     if (browser->toolbarImages) { DeleteObject(browser->toolbarImages); browser->toolbarImages = NULL; }
     /* FLAT/LIST are optional rendering hints on later common controls. All
@@ -183,10 +183,8 @@ void BrowserBuildToolbar(Browser *browser)
     SendMessageA(browser->toolbar,WM_SETFONT,(WPARAM)UiFont(browserFont),FALSE);
     BrowserToolbarSubclass(browser);
     SendMessageA(browser->toolbar, TB_BUTTONSTRUCTSIZE, sizeof(TBBUTTON), 0);
-    /* Split arrows are optional. Older controls keep ordinary navigation
-     * buttons and the right-click history menu rather than eating Back clicks. */
+    /* toolbar_compat supplies split arrows when the control cannot draw them. */
     SendMessageA(browser->toolbar, TB_SETEXTENDEDSTYLE, 0, TBSTYLE_EX_DRAWDDARROWS);
-    dropdown = (SendMessageA(browser->toolbar, TB_GETEXTENDEDSTYLE, 0, 0) & TBSTYLE_EX_DRAWDDARROWS) ? TBSTYLE_DROPDOWN : 0;
     SendMessageA(browser->toolbar, TB_SETBITMAPSIZE, 0, MAKELONG(size, size));
     images.hInst = HINST_COMMCTRL; images.nID = browser->options.largeTools ? IDB_STD_LARGE_COLOR : IDB_STD_SMALL_COLOR;
     stock = (int)SendMessageA(browser->toolbar, TB_ADDBITMAP, 15, (LPARAM)&images); if (stock < 0) stock = 0;
@@ -195,8 +193,8 @@ void BrowserBuildToolbar(Browser *browser)
     images.nID = browser->options.largeTools ? IDB_HIST_LARGE_COLOR : IDB_HIST_SMALL_COLOR;
     history = (int)SendMessageA(browser->toolbar, TB_ADDBITMAP, 5, (LPARAM)&images);
     navigation = BrowserToolbarAddImages(browser, size);
-    ToolbarButton(browser, ID_BACK, "Back", navigation >= 0 ? navigation : history >= 0 ? history + HIST_BACK : stock + STD_UNDO, TBSTYLE_BUTTON | dropdown);
-    ToolbarButton(browser, ID_FORWARD, "", navigation >= 0 ? navigation + 1 : history >= 0 ? history + HIST_FORWARD : stock + STD_REDOW, TBSTYLE_BUTTON | dropdown);
+    ToolbarButton(browser, ID_BACK, "Back", navigation >= 0 ? navigation : history >= 0 ? history + HIST_BACK : stock + STD_UNDO, TBSTYLE_BUTTON | TBSTYLE_DROPDOWN);
+    ToolbarButton(browser, ID_FORWARD, "", navigation >= 0 ? navigation + 1 : history >= 0 ? history + HIST_FORWARD : stock + STD_REDOW, TBSTYLE_BUTTON | TBSTYLE_DROPDOWN);
     ToolbarButton(browser, ID_UP, "", navigation >= 0 ? navigation + 2 : views >= 0 ? views + VIEW_PARENTFOLDER : stock + STD_FILEOPEN, TBSTYLE_BUTTON | TBSTYLE_AUTOSIZE);
     ToolbarButton(browser, 0, "", 8, TBSTYLE_SEP);
     ToolbarButton(browser, ID_SEARCH, "Search", navigation >= 0 ? navigation + 3 : stock + STD_FIND, TBSTYLE_CHECK);
@@ -204,7 +202,7 @@ void BrowserBuildToolbar(Browser *browser)
     ToolbarButton(browser, ID_HISTORY, "History", navigation >= 0 ? navigation + 7 : stock + STD_PROPERTIES, TBSTYLE_CHECK);
     ToolbarButton(browser, ID_REFRESH, "", navigation >= 0 ? navigation + 5 : stock + STD_REDOW, TBSTYLE_BUTTON | TBSTYLE_AUTOSIZE);
     ToolbarButton(browser, 0, "", 8, TBSTYLE_SEP);
-    ToolbarButton(browser, ID_VIEWS, "", navigation >= 0 ? navigation + 6 : views >= 0 ? views + VIEW_LARGEICONS : stock + STD_PRINTPRE, TBSTYLE_BUTTON | dropdown);
+    ToolbarButton(browser, ID_VIEWS, "", navigation >= 0 ? navigation + 6 : views >= 0 ? views + VIEW_LARGEICONS : stock + STD_PRINTPRE, TBSTYLE_BUTTON | TBSTYLE_DROPDOWN);
     if (browser->recycleBin) ToolbarButton(browser, ID_EMPTY_RECYCLE, "Empty Recycle Bin", stock + STD_DELETE, TBSTYLE_BUTTON);
     if (browser->options.extraTools) ToolbarButton(browser, 0, "", 8, TBSTYLE_SEP);
     for (i = 0; i < BROWSER_EXTRA_TOOLS; ++i) if (browser->options.extraTools & (1U << i))
