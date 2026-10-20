@@ -1812,7 +1812,6 @@ void start(void)
     bar = WaitFor("Explorer95.Taskbar", NULL);
     desktop = WaitFor("Explorer95.Desktop", NULL);
     Check(bar && desktop, "taskbar and full desktop created");
-    if(group==GROUP_MENU || group==GROUP_FULL) TaskSwitchTests(bar);
     Check((GetWindowLongA(bar, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0,
           "taskbar starts in its configured topmost band before creating owned popups");
     if (group != GROUP_BROWSER) {
@@ -1843,6 +1842,9 @@ void start(void)
     }
     if (group != GROUP_BROWSER) FirstStartDefaultsTests(bar, FindWindowA("Explorer95.Start", NULL), settings);
     if (group != GROUP_BROWSER) WinKeyTests(bar, FindWindowA("Explorer95.Start", NULL));
+    /* Finish the cold-start folder activation check before deliberately
+     * moving foreground among independent Alt+Tab fixture processes. */
+    if(group==GROUP_MENU || group==GROUP_FULL) TaskSwitchTests(bar);
     if (group != GROUP_BROWSER) { QuickLaunchTests(bar, settings); TaskTileTests(bar,settings); TaskGroupProcessesTests(bar,settingsDir); TaskManagerMenuTests(bar); StartOrderTests(bar,FindWindowA("Explorer95.Start",NULL),settings); }
     if (group != GROUP_MENU) {
         FolderForwardTests(executable,settings,fixture,bar); DesktopRefreshTests(desktop);
