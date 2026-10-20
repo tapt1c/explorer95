@@ -153,6 +153,7 @@ HFONT UiFont(HFONT original)
     if(!language) return original;
     if(!original) original=(HFONT)GetStockObject(DEFAULT_GUI_FONT);
     if(!GetObjectA(original,sizeof(font),&font)) return original;
+    if(font.lfCharSet==SYMBOL_CHARSET && !lstrcmpiA(font.lfFaceName,fontResource.face)) return original;
     for(i=0;i<fontCount;++i) {
         const BYTE *a=(const BYTE *)&font,*b=(const BYTE *)&fonts[i].source;
         for(j=0;j<(int)sizeof(font) && a[j]==b[j];++j) {}
@@ -165,11 +166,12 @@ HFONT UiFont(HFONT original)
 }
 static void ControlFont(HWND window)
 {
-    char kind[40]; LONG style=GetWindowLongA(window,GWL_STYLE); HFONT font;
+    char kind[40]; LONG style=GetWindowLongA(window,GWL_STYLE); HFONT font,current;
     GetClassNameA(window,kind,sizeof(kind));
     if((!lstrcmpiA(kind,"COMBOBOX") && (style&(CBS_OWNERDRAWFIXED|CBS_OWNERDRAWVARIABLE))) ||
        (!lstrcmpiA(kind,"LISTBOX") && (style&(LBS_OWNERDRAWFIXED|LBS_OWNERDRAWVARIABLE)))) return;
-    font=UiFont((HFONT)SendMessageA(window,WM_GETFONT,0,0)); SendMessageA(window,WM_SETFONT,(WPARAM)font,TRUE);
+    current=(HFONT)SendMessageA(window,WM_GETFONT,0,0); font=UiFont(current);
+    if(font!=current) SendMessageA(window,WM_SETFONT,(WPARAM)font,TRUE);
 }
 typedef struct UiLabel { WNDPROC original; char *text; BOOL wide; } UiLabel;
 static const char labelProperty[]="Explorer95.UiLabel";
@@ -273,9 +275,9 @@ static BOOL MenuMessage(UINT message,LPARAM lp)
             UiDrawTextA(d->hDC,tab+1,-1,&rect,DT_RIGHT|DT_VCENTER|DT_SINGLELINE|DT_NOPREFIX);
         } else UiDrawTextA(d->hDC,text,-1,&rect,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
         if(d->itemState&ODS_CHECKED) {
-            HPEN pen=CreatePen(PS_SOLID,2,color); HGDIOBJ previous=SelectObject(d->hDC,pen); int mid=(d->rcItem.top+d->rcItem.bottom)/2;
-            MoveToEx(d->hDC,d->rcItem.left+5,mid,NULL); LineTo(d->hDC,d->rcItem.left+8,mid+3); LineTo(d->hDC,d->rcItem.left+14,mid-4);
-            SelectObject(d->hDC,previous); if(pen) DeleteObject(pen);
+            RECT mark=d->rcItem; mark.left+=3; mark.right=mark.left+GetSystemMetrics(SM_CXMENUCHECK);
+            int height=GetSystemMetrics(SM_CYMENUCHECK); mark.top+=(mark.bottom-mark.top-height)/2; mark.bottom=mark.top+height;
+            PaintMenuCheck(d->hDC,&mark,color,GetSysColor(selected ? COLOR_HIGHLIGHT : COLOR_MENU));
         }
         if((token&0x8000) && !(token&0x4000)) { arrow.left=arrow.right-13; PaintArrow(d->hDC,&arrow,DFCS_SCROLLRIGHT,color,TRUE); }
         RestoreDC(d->hDC,saved); SelectObject(d->hDC,old);
@@ -415,7 +417,9 @@ LRESULT WINAPI UiSendMessageA(HWND window,UINT message,WPARAM wp,LPARAM lp)
     if(text && (UINT_PTR)text>0xffff) {
         value=UiText(text);
         if(Localized(value)) {
-            ControlFont(window);
+            /* Win95 may reset every button width on WM_SETFONT, even when
+             * given the same HFONT. Hosts configure toolbar fonts while empty. */
+            if(message!=TB_ADDSTRINGA || !SendMessageA(window,TB_BUTTONCOUNT,0,0)) ControlFont(window);
             if(sendWide) {
                 WCHAR *wide=Wide(value); UINT mapped=message;
                 if(message==SB_SETTEXTA) mapped=SB_SETTEXTW;
@@ -533,32 +537,48 @@ int WINAPIV UiWsprintfA(LPSTR buffer,LPCSTR format,...)
 }
 /* Private classic modal box: Win95's native English MessageBox cannot select
  * a Cyrillic font or Russian button captions without changing system settings. */
-typedef struct UiBox { const char *text; UINT flags; int result; } UiBox;
+typedef struct UiBox {
+    const char *text; UINT flags; int result;
+    int ids[3],count,buttonWidth,buttonHeight,buttonY,contentHeight;
+    const char *labels[3]; RECT body; BOOL scrolling;
+} UiBox;
+static void BoxButtons(UiBox *box)
+{
+    UINT type=box->flags&MB_TYPEMASK;
+    box->ids[0]=IDOK; box->labels[0]="OK"; box->count=1;
+    if(type==MB_YESNO || type==MB_YESNOCANCEL) {
+        box->ids[0]=IDYES; box->ids[1]=IDNO; box->labels[0]="Yes"; box->labels[1]="No"; box->count=2;
+    } else if(type==MB_RETRYCANCEL) { box->ids[0]=IDRETRY; box->labels[0]="Retry"; }
+    else if(type==MB_ABORTRETRYIGNORE) {
+        box->ids[0]=IDABORT; box->ids[1]=IDRETRY; box->ids[2]=IDIGNORE;
+        box->labels[0]="Abort"; box->labels[1]="Retry"; box->labels[2]="Ignore"; box->count=3;
+    }
+    if(type==MB_OKCANCEL || type==MB_RETRYCANCEL || type==MB_YESNOCANCEL) {
+        box->ids[box->count]=IDCANCEL; box->labels[box->count++]="Cancel";
+    }
+}
 static LRESULT CALLBACK BoxProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
 {
     UiBox *box=(UiBox *)GetWindowLongPtrA(window,GWLP_USERDATA);
     if(message==WM_CREATE) {
         CREATESTRUCTA *create=(CREATESTRUCTA *)lp; box=create->lpCreateParams; SetWindowLongPtrA(window,GWLP_USERDATA,(LONG_PTR)box);
-        UINT type=box->flags&MB_TYPEMASK; int ids[3]={IDOK,0,0},count=1,i; const char *labels[3]={"OK",NULL,NULL}; RECT client;
-        GetClientRect(window,&client);
-        if(type==MB_YESNO || type==MB_YESNOCANCEL) { ids[0]=IDYES; ids[1]=IDNO; labels[0]="Yes"; labels[1]="No"; count=2; }
-        else if(type==MB_RETRYCANCEL) { ids[0]=IDRETRY; labels[0]="Retry"; }
-        else if(type==MB_ABORTRETRYIGNORE) { ids[0]=IDABORT; ids[1]=IDRETRY; ids[2]=IDIGNORE; labels[0]="Abort"; labels[1]="Retry"; labels[2]="Ignore"; count=3; }
-        if(type==MB_OKCANCEL || type==MB_RETRYCANCEL || type==MB_YESNOCANCEL) { ids[count]=IDCANCEL; labels[count++]="Cancel"; }
-        BOOL longText=lstrlenA(box->text)>1200; int left=20;
+        RECT client; int i; GetClientRect(window,&client);
         if(box->flags&MB_ICONMASK) {
             LPCSTR name=(box->flags&MB_ICONMASK)==MB_ICONHAND ? IDI_ERROR : (box->flags&MB_ICONMASK)==MB_ICONQUESTION ? IDI_QUESTION :
                 (box->flags&MB_ICONMASK)==MB_ICONEXCLAMATION ? IDI_WARNING : IDI_INFORMATION;
-            HWND icon=CreateWindowExA(0,"STATIC","",WS_CHILD|WS_VISIBLE|SS_ICON,18,20,32,32,window,(HMENU)101,create->hInstance,NULL);
-            SendMessageA(icon,STM_SETICON,(WPARAM)LoadIconA(NULL,name),0); left=64;
+            HWND icon=CreateWindowExA(0,"STATIC","",WS_CHILD|WS_VISIBLE|SS_ICON,12,12+(box->contentHeight-32)/2,32,32,window,(HMENU)101,create->hInstance,NULL);
+            SendMessageA(icon,STM_SETICON,(WPARAM)LoadIconA(NULL,name),0);
         }
-        HWND body=UiCreateWindowExA(0,longText ? "EDIT" : "STATIC",box->text,WS_CHILD|WS_VISIBLE|(longText ? WS_BORDER|WS_VSCROLL|ES_MULTILINE|ES_READONLY : SS_NOPREFIX),
-            left,18,client.right-left-20,client.bottom-74,window,(HMENU)100,create->hInstance,NULL);
+        HWND body=UiCreateWindowExA(0,box->scrolling ? "EDIT" : "STATIC",box->text,
+            WS_CHILD|WS_VISIBLE|(box->scrolling ? WS_BORDER|WS_VSCROLL|ES_MULTILINE|ES_READONLY : SS_NOPREFIX),
+            box->body.left,box->body.top,box->body.right-box->body.left,box->body.bottom-box->body.top,
+            window,(HMENU)100,create->hInstance,NULL);
         ControlFont(body);
-        int def=(box->flags&MB_DEFMASK)>>8; if(def>=count) def=0;
-        for(i=0;i<count;++i) {
-            HWND button=UiCreateWindowExA(0,"BUTTON",labels[i],WS_CHILD|WS_VISIBLE|WS_TABSTOP|(i==def ? BS_DEFPUSHBUTTON : 0),
-                (client.right-count*96)/2+i*96,client.bottom-42,88,26,window,(HMENU)(INT_PTR)ids[i],create->hInstance,NULL);
+        int def=(box->flags&MB_DEFMASK)>>8; if(def>=box->count) def=0;
+        for(i=0;i<box->count;++i) {
+            HWND button=UiCreateWindowExA(0,"BUTTON",box->labels[i],WS_CHILD|WS_VISIBLE|WS_TABSTOP|(i==def ? BS_DEFPUSHBUTTON : 0),
+                (client.right-box->count*box->buttonWidth-(box->count-1)*8)/2+i*(box->buttonWidth+8),box->buttonY,
+                box->buttonWidth,box->buttonHeight,window,(HMENU)(INT_PTR)box->ids[i],create->hInstance,NULL);
             ControlFont(button); if(i==def) SetFocus(button);
         }
         return 0;
@@ -574,16 +594,46 @@ static LRESULT CALLBACK BoxProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
 int WINAPI UiMessageBoxA(HWND owner,LPCSTR text,LPCSTR title,UINT flags)
 {
     if(!language && lstrlenA(text)<1200) return MessageBoxA(owner,text,title,flags);
-    UiBox box={UiText(text),flags,0};
-    UiMarkTranslated(box.text); WNDCLASSA cls; RECT area,rect={0,0,460,120}; HDC dc=GetDC(NULL); HFONT old=SelectObject(dc,UiFont(NULL));
-    UiDrawTextA(dc,box.text,-1,&rect,DT_CALCRECT|DT_WORDBREAK|DT_NOPREFIX); SelectObject(dc,old); ReleaseDC(NULL,dc);
+    UiBox box; WNDCLASSA cls; RECT area={0,0,0,0},frame={0,0,0,0},measure; TEXTMETRICA metrics;
+    DWORD style=WS_POPUP|WS_CAPTION|WS_SYSMENU,extended=WS_EX_DLGMODALFRAME;
+    ZeroMemory(&box,sizeof(box)); box.text=UiText(text); box.flags=flags; BoxButtons(&box);
+    UiMarkTranslated(box.text);
+    area.right=GetSystemMetrics(SM_CXSCREEN); area.bottom=GetSystemMetrics(SM_CYSCREEN);
     SystemParametersInfoA(SPI_GETWORKAREA,0,&area,0);
-    int width=500,height=rect.bottom+100; if(height<160) height=160; if(height>area.bottom-area.top-32) height=area.bottom-area.top-32;
+    AdjustWindowRectEx(&frame,style,FALSE,extended);
+    int frameWidth=frame.right-frame.left,frameHeight=frame.bottom-frame.top;
+    int maxWidth=area.right-area.left-24-frameWidth, maxHeight=area.bottom-area.top-24-frameHeight;
+    if(maxWidth>500-frameWidth) maxWidth=500-frameWidth;
+    int iconWidth=flags&MB_ICONMASK ? 44 : 0;
+    HDC dc=GetDC(NULL); HFONT old=SelectObject(dc,UiFont(NULL));
+    ZeroMemory(&metrics,sizeof(metrics)); GetTextMetricsA(dc,&metrics);
+    box.buttonWidth=75; box.buttonHeight=metrics.tmHeight+10; if(box.buttonHeight<23) box.buttonHeight=23;
+    int i;
+    for(i=0;i<box.count;++i) {
+        RECT label={0,0,0,0}; UiDrawTextA(dc,box.labels[i],-1,&label,DT_CALCRECT|DT_SINGLELINE);
+        if(label.right+20>box.buttonWidth) box.buttonWidth=label.right+20;
+    }
+    SetRect(&measure,0,0,maxWidth-24-iconWidth,0);
+    if(measure.right<1) measure.right=1;
+    UiDrawTextA(dc,box.text,-1,&measure,DT_CALCRECT|DT_WORDBREAK|DT_NOPREFIX);
+    SelectObject(dc,old); ReleaseDC(NULL,dc);
+    int bodyHeight=measure.bottom; if(bodyHeight<metrics.tmHeight) bodyHeight=metrics.tmHeight;
+    int width=measure.right+24+iconWidth,buttons=box.count*box.buttonWidth+(box.count-1)*8+24;
+    if(width<buttons) width=buttons;
+    int available=maxHeight-24-12-box.buttonHeight; if(available<1) available=1;
+    box.scrolling=lstrlenA(box.text)>1200 || bodyHeight>available;
+    if(box.scrolling) { width=maxWidth; bodyHeight=available; }
+    if(width>maxWidth) width=maxWidth;
+    box.contentHeight=bodyHeight; if(iconWidth && box.contentHeight<32) box.contentHeight=32;
+    box.body.left=12+iconWidth; box.body.right=width-12;
+    box.body.top=12+(box.contentHeight-bodyHeight)/2; box.body.bottom=box.body.top+bodyHeight;
+    box.buttonY=12+box.contentHeight+12;
+    int height=box.buttonY+box.buttonHeight+12+frameHeight; width+=frameWidth;
     ZeroMemory(&cls,sizeof(cls)); cls.lpfnWndProc=BoxProc; cls.hInstance=GetModuleHandleA(NULL); cls.lpszClassName="Explorer95.Message";
     cls.hCursor=LoadCursorA(NULL,IDC_ARROW); cls.hbrBackground=(HBRUSH)(COLOR_BTNFACE+1);
     BOOL registered=UiRegisterClassA(&cls)!=0,enabled=owner && IsWindowEnabled(owner);
     if(enabled) EnableWindow(owner,FALSE);
-    HWND window=UiCreateWindowExA(WS_EX_DLGMODALFRAME,cls.lpszClassName,title,WS_POPUP|WS_CAPTION|WS_SYSMENU,
+    HWND window=UiCreateWindowExA(extended,cls.lpszClassName,title,style,
         area.left+(area.right-area.left-width)/2,area.top+(area.bottom-area.top-height)/2,width,height,owner,NULL,cls.hInstance,&box);
     if(!window) { if(enabled) EnableWindow(owner,TRUE); if(registered) UnregisterClassA(cls.lpszClassName,cls.hInstance); return IDCANCEL; }
     ShowWindow(window,SW_SHOW); SetForegroundWindow(window); BOOL quit=FALSE; WPARAM code=0;

@@ -26,5 +26,7 @@ void PaintDesktopLabelShadows(HWND list, HDC dc);
 void PaintDialogBackground(HWND window, HDC dc);
 /* Win95 Marlett arrows with a plain GDI fallback if the face is unavailable. */
 void PaintArrow(HDC dc, const RECT *bounds, UINT direction, COLORREF color, BOOL allowFont);
+/* Native DrawFrameControl menu glyph, with caller palette for selection. */
+void PaintMenuCheck(HDC dc, const RECT *bounds, COLORREF ink, COLORREF background);
 void PaintShutdown(void);
 #endif

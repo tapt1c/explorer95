@@ -84,6 +84,20 @@ void PaintDialogBackground(HWND window, HDC dc)
     GetClientRect(window, &rect); FillRect(dc, &rect, (HBRUSH)(COLOR_BTNFACE + 1));
     if (saved) RestoreDC(dc, saved);
 }
+void PaintMenuCheck(HDC dc,const RECT *bounds,COLORREF ink,COLORREF background)
+{
+    int width=bounds->right-bounds->left,height=bounds->bottom-bounds->top; RECT rect={0,0,width,height};
+    HDC mask=CreateCompatibleDC(dc); HBITMAP bits=CreateBitmap(width,height,1,1,NULL); HGDIOBJ old;
+    if(!mask || !bits) { if(mask) DeleteDC(mask); if(bits) DeleteObject(bits); return; }
+    old=SelectObject(mask,bits); FillRect(mask,&rect,(HBRUSH)GetStockObject(WHITE_BRUSH));
+    /* DFC_MENU returns the system's monochrome glyph. Mono-to-colour copying
+     * maps black to the current text colour and white to the menu background. */
+    DrawFrameControl(mask,&rect,DFC_MENU,DFCS_MENUCHECK);
+    COLORREF text=SetTextColor(dc,ink),back=SetBkColor(dc,background);
+    BitBlt(dc,bounds->left,bounds->top,width,height,mask,0,0,SRCCOPY);
+    SetTextColor(dc,text); SetBkColor(dc,back);
+    SelectObject(mask,old); DeleteObject(bits); DeleteDC(mask);
+}
 void PaintTextShadow(HDC dc, const char *text, const RECT *bounds, UINT flags)
 {
     RECT shadow; int saved = SaveDC(dc), i;

@@ -142,6 +142,9 @@ void BrowserBuildToolbar(Browser *browser)
      * commands and stock bitmaps also work with original Win95 toolbars. */
     browser->toolbar = BrowserControl(browser->window, TOOLBARCLASSNAMEA, "", TBSTYLE_TOOLTIPS | TBSTYLE_WRAPABLE |
         TBSTYLE_FLAT | TBSTYLE_LIST | CCS_TOP | CCS_NODIVIDER | CCS_NOPARENTALIGN | CCS_NORESIZE, ID_TOOLBAR);
+    /* Original Win95 recalculates shared button widths on WM_SETFONT. Set the
+     * final caption font while empty, never while adding translated labels. */
+    SendMessageA(browser->toolbar,WM_SETFONT,(WPARAM)UiFont(browserFont),FALSE);
     BrowserToolbarSubclass(browser);
     SendMessageA(browser->toolbar, TB_BUTTONSTRUCTSIZE, sizeof(TBBUTTON), 0);
     /* Split arrows are optional. Older controls keep ordinary navigation

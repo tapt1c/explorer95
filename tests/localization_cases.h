@@ -61,6 +61,52 @@ static void LanguageFontResourceTests(const char *directory)
     Check(!opened && !lstrcmpA(resource.stage,"font.temp.reserve") && resource.error && !resource.file[0] && !resource.registration[0] && !resource.registered,
         "a real temporary-file failure reports its exact stage and retains no font registration or file ownership");
 }
+static WNDPROC languageToolbarOriginal;
+static int languageToolbarFontResets;
+static LRESULT CALLBACK LanguageToolbarProbe(HWND window,UINT message,WPARAM wp,LPARAM lp)
+{
+    if(message==WM_SETFONT && SendMessageA(window,TB_BUTTONCOUNT,0,0)>0) ++languageToolbarFontResets;
+    return CallWindowProcA(languageToolbarOriginal,window,message,wp,lp);
+}
+static void LanguageToolbarFontTest(HWND parent)
+{
+    HWND toolbar=CreateWindowExA(0,TOOLBARCLASSNAMEA,"",WS_CHILD|TBSTYLE_LIST|TBSTYLE_FLAT,0,0,400,30,parent,(HMENU)7999,GetModuleHandleA(NULL),NULL);
+    Check(toolbar!=NULL,"create a real toolbar for the legacy font-reset regression");
+    SendMessageA(toolbar,TB_BUTTONSTRUCTSIZE,sizeof(TBBUTTON),0);
+    UiSendMessageA(toolbar,WM_SETFONT,(WPARAM)UiFont((HFONT)GetStockObject(DEFAULT_GUI_FONT)),FALSE);
+    languageToolbarFontResets=0; languageToolbarOriginal=(WNDPROC)SetWindowLongPtrA(toolbar,GWLP_WNDPROC,(LONG_PTR)LanguageToolbarProbe);
+    const char *labels[]={"Back","Search","Folders","History"}; int i;
+    for(i=0;i<4;++i) {
+        TBBUTTON button; ZeroMemory(&button,sizeof(button)); button.iBitmap=I_IMAGENONE; button.idCommand=10+i;
+        button.fsStyle=TBSTYLE_BUTTON|TBSTYLE_AUTOSIZE; button.fsState=TBSTATE_ENABLED;
+        button.iString=UiSendMessageA(toolbar,TB_ADDSTRINGA,0,(LPARAM)labels[i]);
+        Check(SendMessageA(toolbar,TB_ADDBUTTONSA,1,(LPARAM)&button),"append a real translated toolbar button");
+    }
+    Check(languageToolbarFontResets==0,"adding translated toolbar strings never resets the font after buttons exist, preserving old Win95 button widths");
+    SetWindowLongPtrA(toolbar,GWLP_WNDPROC,(LONG_PTR)languageToolbarOriginal); DestroyWindow(toolbar);
+}
+static void LanguageMenuCheckTest(HWND window,ULONG_PTR token)
+{
+    int w=GetSystemMetrics(SM_CXMENUCHECK),h=GetSystemMetrics(SM_CYMENUCHECK),i,x,y;
+    HDC screen=GetDC(window),actual=CreateCompatibleDC(screen),native=CreateCompatibleDC(screen);
+    HBITMAP a=CreateCompatibleBitmap(screen,220,30),b=CreateBitmap(w,h,1,1,NULL);
+    HGDIOBJ oldA=SelectObject(actual,a),oldB=SelectObject(native,b); RECT rect={0,0,w,h};
+    FillRect(native,&rect,(HBRUSH)GetStockObject(WHITE_BRUSH)); DrawFrameControl(native,&rect,DFC_MENU,DFCS_MENUCHECK);
+    for(i=0;i<2;++i) {
+        DRAWITEMSTRUCT draw; ZeroMemory(&draw,sizeof(draw)); draw.CtlType=ODT_MENU; draw.itemData=token;
+        draw.itemState=ODS_CHECKED|(i ? ODS_SELECTED : 0); draw.hDC=actual; SetRect(&draw.rcItem,0,0,220,30);
+        SendMessageA(window,WM_DRAWITEM,0,(LPARAM)&draw);
+        COLORREF ink=GetSysColor(i ? COLOR_HIGHLIGHTTEXT : COLOR_MENUTEXT),back=GetSysColor(i ? COLOR_HIGHLIGHT : COLOR_MENU);
+        int different=0,marked=0;
+        for(y=0;y<h;++y) for(x=0;x<w;++x) {
+            BOOL on=GetPixel(native,x,y)==RGB(0,0,0); COLORREF pixel=GetPixel(actual,3+x,(30-h)/2+y);
+            if(on) ++marked;
+            if(pixel!=(on ? ink : back)) ++different;
+        }
+        Check(marked>5 && !different,"translated menu checkmarks match the real system glyph and preserve normal/selected menu colours");
+    }
+    SelectObject(actual,oldA); SelectObject(native,oldB); DeleteObject(a); DeleteObject(b); DeleteDC(actual); DeleteDC(native); ReleaseDC(window,screen);
+}
 static void LanguageTests(const char *directory)
 {
     char profile[MAX_PATH],text[64],face[64]; LOGFONTA font; WNDCLASSA cls; HWND window,button,edit; HMENU menu;
@@ -85,6 +131,7 @@ static void LanguageTests(const char *directory)
     window=UiCreateWindowExA(0,cls.lpszClassName,"Explorer95 Environment Properties",WS_OVERLAPPEDWINDOW|WS_VISIBLE,20,20,500,240,NULL,NULL,cls.hInstance,NULL);
     button=UiCreateWindowExA(0,"BUTTON","All Programs",WS_CHILD|WS_VISIBLE,20,30,220,28,window,(HMENU)1,cls.hInstance,NULL);
     edit=UiCreateWindowExA(0,"EDIT","Copy",WS_CHILD|WS_VISIBLE|WS_BORDER,20,80,220,24,window,(HMENU)2,cls.hInstance,NULL);
+    LanguageToolbarFontTest(window);
     Check(window && button && edit && LanguageWideEqual(button,L"\u0412\u0441\u0435 \u043f\u0440\u043e\u0433\u0440\u0430\u043c\u043c\u044b"),
         "native controls show real Cyrillic on an English NT locale through optional Unicode display calls");
     UiGetWindowTextA(button,text,sizeof(text)); Check(!lstrcmpA(text,UiText("All Programs")),"owner-draw labels retain their CP1251 text instead of lossy ACP question marks");
@@ -94,6 +141,7 @@ static void LanguageTests(const char *directory)
     {
         MENUITEMINFOA info; MEASUREITEMSTRUCT measure; ZeroMemory(&info,sizeof(info)); info.cbSize=sizeof(info); info.fMask=MIIM_DATA|MIIM_TYPE|MIIM_ID;
         Check(GetMenuItemInfoA(menu,0,TRUE,&info) && info.wID==10 && (info.fType&MFT_OWNERDRAW),"Cyrillic menus keep their commands and use their own font without changing Windows menu settings");
+        LanguageMenuCheckTest(window,info.dwItemData);
         ZeroMemory(&measure,sizeof(measure)); measure.CtlType=ODT_MENU; measure.itemID=10; measure.itemData=info.dwItemData;
         SendMessageA(window,WM_MEASUREITEM,0,(LPARAM)&measure);
         Check(measure.itemWidth>40 && measure.itemHeight>=16,"the translated menu owner measures its actual Cyrillic text");
@@ -197,6 +245,19 @@ static void LanguageRestartTests(const char *directory,const char *executable)
     SendDlgItemMessageA(properties,ID_LANGUAGE,CB_SETCURSEL,0,0); SendMessageA(properties,WM_COMMAND,MAKEWPARAM(ID_LANGUAGE,CBN_SELCHANGE),0);
     PostMessageA(properties,WM_COMMAND,0x3021,0); dialog=WaitFor("Explorer95.Message",NULL);
     Check(dialog!=NULL,"Apply displays the translated restart notice without immediately mixing languages");
+    { RECT notice,body,okay; GetWindowRect(dialog,&notice); GetWindowRect(GetDlgItem(dialog,100),&body); GetWindowRect(GetDlgItem(dialog,IDOK),&okay);
+      Check(notice.bottom-notice.top<150 && notice.right-notice.left<500,"the short Russian restart notice sizes itself to its text instead of the old fixed 500 by 160 window");
+      Check(body.bottom<okay.top && okay.bottom<notice.bottom && body.left>=notice.left && body.right<=notice.right,"the measured Russian text and OK button fit without overlap or clipping");
+      SaveScreen("build/language-restart-notice-ru.bmp"); }
+    SendMessageA(dialog,WM_COMMAND,IDOK,0); PumpFor(100);
+    PostMessageA(properties,WM_COMMAND,ID_FONTLICENSE,0); dialog=WaitFor("Explorer95.Message",NULL);
+    Check(dialog!=NULL,"the long font license still opens after compact short messages");
+    { HWND body=GetDlgItem(dialog,100); char kind[32]; RECT client,bounds; POINT bottom;
+      GetClassNameA(body,kind,sizeof(kind)); GetClientRect(dialog,&client); GetWindowRect(GetDlgItem(dialog,IDOK),&bounds);
+      bottom.x=bounds.right; bottom.y=bounds.bottom; ScreenToClient(dialog,&bottom);
+      Check(!lstrcmpiA(kind,"EDIT") && (GetWindowLongA(body,GWL_STYLE)&(WS_VSCROLL|ES_READONLY))==(WS_VSCROLL|ES_READONLY) && bottom.y<client.bottom,
+          "long text retains a readable scrolling edit and an accessible OK button");
+      SaveScreen("build/language-license-ru.bmp"); }
     SendMessageA(dialog,WM_COMMAND,IDOK,0); PumpFor(100); SendMessageA(properties,WM_COMMAND,IDCANCEL,0);
     GetPrivateProfileStringA("Interface","Language","",key,sizeof(key),profile);
     Check(!lstrcmpA(key,"en") && LanguageWideEqual(GetDlgItem(bar,100),L"\u041f\u0443\u0441\u043a"),"Apply persists English while the running Russian shell keeps a consistent language");
