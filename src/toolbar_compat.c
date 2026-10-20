@@ -6,13 +6,18 @@
 #include "paint.h"
 #define TOOLBAR_ITEMS 32
 #define ARROW_WIDTH 12
-#define EDGE_TIMER 0xe950
 static const char edgesProperty[] = "Explorer95.ToolbarEdges";
-static const char hotProperty[] = "Explorer95.ToolbarHot";
+static void FlatEdge(HDC dc, const RECT *bounds)
+{
+    RECT edge = *bounds;
+    edge.bottom = edge.top + 2; FillRect(dc, &edge, (HBRUSH)(COLOR_BTNFACE + 1));
+    edge = *bounds; edge.top = edge.bottom - 2; FillRect(dc, &edge, (HBRUSH)(COLOR_BTNFACE + 1));
+    edge = *bounds; edge.right = edge.left + 2; FillRect(dc, &edge, (HBRUSH)(COLOR_BTNFACE + 1));
+    edge = *bounds; edge.left = edge.right - 2; FillRect(dc, &edge, (HBRUSH)(COLOR_BTNFACE + 1));
+}
 static void PaintEdges(HWND window, HDC dc)
 {
     int i, count = (int)SendMessageA(window, TB_BUTTONCOUNT, 0, 0);
-    int hot = (int)(INT_PTR)GetPropA(window, hotProperty) - 1;
     BOOL legacy = ToolbarCompactLegacy(window);
     for (i = 0; i < count; ++i) {
         TBBUTTON button; RECT rect;
@@ -21,42 +26,34 @@ static void PaintEdges(HWND window, HDC dc)
         if (button.fsStyle & TBSTYLE_SEP) {
             rect.left += (rect.right - rect.left - 2) / 2; rect.right = rect.left + 2;
             rect.top += 2; rect.bottom -= 2; DrawEdge(dc, &rect, EDGE_ETCHED, BF_LEFT);
-        } else if (!legacy && (button.fsState & TBSTATE_ENABLED)) {
-            BOOL down = (button.fsState & (TBSTATE_PRESSED | TBSTATE_CHECKED)) != 0;
-            if (down || hot == i) DrawEdge(dc, &rect, down ? EDGE_SUNKEN : EDGE_RAISED, BF_RECT);
+        } else if (!legacy) {
+            BOOL down = (button.fsState & TBSTATE_ENABLED) && (button.fsState & (TBSTATE_PRESSED | TBSTATE_CHECKED));
+            if (down) DrawEdge(dc, &rect, EDGE_SUNKEN, BF_RECT);
+            else {
+                /* FLAT toolbars may paint their own hot edge, even directly
+                 * during mouse messages. Keep idle/hover borders flat too. */
+                FlatEdge(dc, &rect);
+                if (button.fsStyle & TBSTYLE_DROPDOWN) {
+                    rect.left = rect.right - ARROW_WIDTH; rect.right = rect.left + 2;
+                    FillRect(dc, &rect, (HBRUSH)(COLOR_BTNFACE + 1));
+                }
+            }
         }
     }
 }
 static LRESULT CALLBACK EdgesProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
 {
     WNDPROC original = (WNDPROC)GetPropA(window, edgesProperty); LRESULT result;
-    if (message == WM_MOUSEMOVE) {
-        int i, hot = -1, count = (int)SendMessageA(window, TB_BUTTONCOUNT, 0, 0);
-        POINT point = {(short)LOWORD(lp), (short)HIWORD(lp)};
-        for (i = 0; i < count; ++i) { RECT rect;
-            if (SendMessageA(window, TB_GETITEMRECT, i, (LPARAM)&rect) && PtInRect(&rect, point)) { hot = i; break; }
-        }
-        if ((int)(INT_PTR)GetPropA(window, hotProperty) != hot + 1) {
-            SetPropA(window, hotProperty, (HANDLE)(INT_PTR)(hot + 1)); InvalidateRect(window, NULL, FALSE);
-        }
-        if (hot >= 0) SetTimer(window, EDGE_TIMER, 80, NULL);
-        else KillTimer(window, EDGE_TIMER);
-    }
-    if (message == WM_TIMER && wp == EDGE_TIMER) {
-        POINT point, screen; RECT rect; GetCursorPos(&screen); point = screen;
-        ScreenToClient(window, &point); GetClientRect(window, &rect);
-        if (!PtInRect(&rect, point) || WindowFromPoint(screen) != window) {
-            KillTimer(window, EDGE_TIMER); RemovePropA(window, hotProperty); InvalidateRect(window, NULL, FALSE);
-        }
-        return 0;
-    }
     if (message == WM_NCDESTROY) {
-        KillTimer(window, EDGE_TIMER); RemovePropA(window, hotProperty);
         SetWindowLongPtrA(window, GWLP_WNDPROC, (LONG_PTR)original); RemovePropA(window, edgesProperty);
         return CallWindowProcA(original, window, message, wp, lp);
     }
     result = CallWindowProcA(original, window, message, wp, lp);
-    if (message == WM_PAINT) { HDC dc = GetDC(window);
+    /* A command dispatched by the native handler can rebuild/destroy this
+     * toolbar. Only touch a window that still carries our subclass. */
+    if (GetPropA(window, edgesProperty) == (HANDLE)original &&
+        (message == WM_PAINT || message == WM_MOUSEMOVE || message == WM_LBUTTONDOWN ||
+         message == WM_LBUTTONUP || message == WM_CAPTURECHANGED || message == WM_TIMER)) { HDC dc = GetDC(window);
         if (dc) { PaintEdges(window, dc); ReleaseDC(window, dc); }
     }
     return result;
@@ -113,7 +110,7 @@ static void PaintArrows(HWND window, CompactToolbar *bar, HDC dc)
         RECT rect = ArrowRect(bar, i); TBBUTTON button; BOOL down, enabled;
         SendMessageA(window, TB_GETBUTTON, i, (LPARAM)&button); enabled = (button.fsState & TBSTATE_ENABLED) != 0;
         down = enabled && bar->pressedArrow == i && PtInRect(&rect, point);
-        if (enabled && PtInRect(&rect, point)) DrawEdge(dc, &rect, down ? EDGE_SUNKEN : EDGE_RAISED, BF_RECT);
+        if (down) DrawEdge(dc, &rect, EDGE_SUNKEN, BF_RECT);
         if (down) OffsetRect(&rect, 1, 1);
         PaintArrow(dc, &rect, DFCS_SCROLLDOWN, GetSysColor(enabled ? COLOR_BTNTEXT : COLOR_GRAYTEXT), TRUE);
     }

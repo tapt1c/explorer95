@@ -99,9 +99,9 @@ static void ToolbarCompatTests(HWND parent)
         { HWND body=GetDlgItem(toolbar,10); RECT native,separator,arrow; HDC reference,screen,actual; HBITMAP bitmap; HGDIOBJ old;
           SendMessageA(body,TB_GETITEMRECT,0,(LPARAM)&native); SendMessageA(toolbar,TB_GETITEMRECT,3,(LPARAM)&separator);
           screen=GetDC(owner); reference=CreateCompatibleDC(screen); bitmap=CreateCompatibleBitmap(screen,80,40); old=SelectObject(reference,bitmap);
-          RECT edge={0,0,80,40}; FillRect(reference,&edge,(HBRUSH)(COLOR_BTNFACE+1)); DrawEdge(reference,&edge,EDGE_RAISED,BF_RECT);
+          RECT edge={0,0,80,40}; FillRect(reference,&edge,(HBRUSH)(COLOR_BTNFACE+1));
           SendMessageA(body,WM_MOUSEMOVE,0,MAKELPARAM(12,12)); RedrawWindow(body,NULL,NULL,RDW_INVALIDATE|RDW_UPDATENOW);
-          actual=GetDC(body); Check(GetPixel(actual,native.left,native.top)==GetPixel(reference,0,0),"hover paints the classic raised edge rather than just a dotted outline"); ReleaseDC(body,actual);
+          actual=GetDC(body); Check(GetPixel(actual,native.left,native.top)==GetPixel(reference,0,0),"hover leaves the button border flat without a raised frame"); ReleaseDC(body,actual);
           SendMessageA(body,WM_LBUTTONDOWN,MK_LBUTTON,MAKELPARAM(12,12)); RedrawWindow(body,NULL,NULL,RDW_INVALIDATE|RDW_UPDATENOW);
           FillRect(reference,&edge,(HBRUSH)(COLOR_BTNFACE+1)); DrawEdge(reference,&edge,EDGE_SUNKEN,BF_RECT);
           actual=GetDC(body); Check(GetPixel(actual,native.left,native.top)==GetPixel(reference,0,0),"a held button visibly uses the classic sunken edge"); ReleaseDC(body,actual);
