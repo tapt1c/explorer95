@@ -20,10 +20,33 @@ static LRESULT CALLBACK CompactTestOwner(HWND window, UINT message, WPARAM wp, L
     }
     return CallWindowProcA(compactTestOwner, window, message, wp, lp);
 }
+static void ToolbarIdleMotionTest(HWND toolbar)
+{
+    RECT button,patch; HDC dc; COLORREF pixel; int i;
+    HBRUSH marker=CreateSolidBrush(RGB(251,3,239));
+    SendMessageA(toolbar,TB_GETITEMRECT,0,(LPARAM)&button);
+    RedrawWindow(toolbar,NULL,NULL,RDW_INVALIDATE|RDW_UPDATENOW);
+    Check(!GetUpdateRect(toolbar,NULL,FALSE),"the toolbar starts idle motion with no pending repaint");
+    patch=button; patch.right=patch.left+2; patch.bottom=patch.top+2;
+    dc=GetDC(toolbar); FillRect(dc,&patch,marker); GetPixel(dc,patch.left,patch.top); ReleaseDC(toolbar,dc);
+    /* The border is flat before and after idle motion. A software cursor must
+     * not be hidden/restored by drawing the same border for every mouse event. */
+    for(i=0;i<20;++i) SendMessageA(toolbar,WM_MOUSEMOVE,0,MAKELPARAM(button.left+6+i%4,button.top+6));
+    Check(!GetUpdateRect(toolbar,NULL,FALSE),"idle pointer motion does not queue a deferred toolbar repaint");
+    SendMessageA(toolbar,WM_TIMER,0,0);
+    Check(!GetUpdateRect(toolbar,NULL,FALSE),"idle hover does not queue a deferred toolbar repaint");
+    dc=GetDC(toolbar); pixel=GetPixel(dc,patch.left,patch.top); ReleaseDC(toolbar,dc);
+    Check(pixel==RGB(251,3,239),"idle pointer motion and timers leave already flat toolbar edges untouched");
+    InvalidateRect(toolbar,NULL,FALSE);
+    SendMessageA(toolbar,WM_MOUSEMOVE,0,MAKELPARAM(button.left+8,button.top+6));
+    SendMessageA(toolbar,WM_TIMER,0,0);
+    Check(GetUpdateRect(toolbar,NULL,FALSE),"hover preserves real damage that was already waiting for repaint");
+    DeleteObject(marker); RedrawWindow(toolbar,NULL,NULL,RDW_INVALIDATE|RDW_UPDATENOW);
+}
 static void ToolbarCompatTests(HWND parent)
 {
     int mode;
-    for (mode = 0; mode < 4; ++mode) {
+    for (mode = 0; mode < 6; ++mode) {
         int size = mode & 1 ? 24 : 16, widths[5], i; const char *captions[5];
         const char *names[] = {"Back", "", "", "", "History"};
         HWND owner = CreateWindowExA(0,"STATIC","",WS_CHILD|WS_VISIBLE,0,0,500,100,parent,0,GetModuleHandleA(NULL),NULL);
@@ -51,9 +74,15 @@ static void ToolbarCompatTests(HWND parent)
         SelectObject(dc,old); ReleaseDC(toolbar,dc);
         SendMessageA(toolbar,TB_SETBUTTONSIZE,0,MAKELONG(90,size+8));
         compactTestLie=mode&1;
-        compactTestNative=(WNDPROC)SetWindowLongPtrA(toolbar,GWLP_WNDPROC,(LONG_PTR)CompactTestNative);
-        Check(ToolbarCompact(toolbar,size,5,widths,captions,&images,1) && ToolbarCompactLegacy(toolbar),
-            "missing or ineffective per-button sizing takes the legacy native-button path");
+        if(mode<4) compactTestNative=(WNDPROC)SetWindowLongPtrA(toolbar,GWLP_WNDPROC,(LONG_PTR)CompactTestNative);
+        else SendMessageA(toolbar,TB_SETEXTENDEDSTYLE,0,TBSTYLE_EX_DRAWDDARROWS);
+        Check(ToolbarCompact(toolbar,size,5,widths,captions,&images,1) && (mode>=4 || ToolbarCompactLegacy(toolbar)),
+            mode<4 ? "missing or ineffective per-button sizing takes the legacy native-button path" :
+                     "unmodified Common Controls retain their supported toolbar sizing path");
+        if(!ToolbarCompactLegacy(toolbar)) {
+            ToolbarIdleMotionTest(toolbar);
+            DestroyWindow(owner); continue;
+        }
         for(i=0;i<5;++i) {
             RECT rect,native,client; HWND button=GetDlgItem(toolbar,10+i);
             Check(SendMessageA(toolbar,TB_GETITEMRECT,i,(LPARAM)&rect) && rect.right-rect.left==widths[i],
@@ -67,6 +96,7 @@ static void ToolbarCompatTests(HWND parent)
             Check((HFONT)SendMessageA(button,WM_GETFONT,0,0)==(HFONT)SendMessageA(toolbar,WM_GETFONT,0,0),
                 "legacy buttons retain the selected Cyrillic font");
         }
+        ToolbarIdleMotionTest(GetDlgItem(toolbar,10));
         SendMessageA(toolbar,TB_ENABLEBUTTON,11,MAKELONG(FALSE,0));
         Check(!SendMessageA(GetDlgItem(toolbar,11),TB_ISBUTTONENABLED,11,0),"disabled navigation state reaches the legacy child");
         SendMessageA(toolbar,TB_CHECKBUTTON,14,MAKELONG(TRUE,0));
@@ -105,6 +135,10 @@ static void ToolbarCompatTests(HWND parent)
           SendMessageA(body,WM_LBUTTONDOWN,MK_LBUTTON,MAKELPARAM(12,12)); RedrawWindow(body,NULL,NULL,RDW_INVALIDATE|RDW_UPDATENOW);
           FillRect(reference,&edge,(HBRUSH)(COLOR_BTNFACE+1)); DrawEdge(reference,&edge,EDGE_SUNKEN,BF_RECT);
           actual=GetDC(body); Check(GetPixel(actual,native.left,native.top)==GetPixel(reference,0,0),"a held button visibly uses the classic sunken edge"); ReleaseDC(body,actual);
+          SendMessageA(body,WM_MOUSEMOVE,MK_LBUTTON,MAKELPARAM(native.right+4,native.top+8));
+          actual=GetDC(body); Check(GetPixel(actual,native.left,native.top)==GetSysColor(COLOR_BTNFACE),"dragging a held button outside clears its pressed edge"); ReleaseDC(body,actual);
+          SendMessageA(body,WM_MOUSEMOVE,MK_LBUTTON,MAKELPARAM(12,12));
+          actual=GetDC(body); Check(GetPixel(actual,native.left,native.top)==GetPixel(reference,0,0),"returning with capture restores the sunken edge without an extra repaint request"); ReleaseDC(body,actual);
           SendMessageA(body,WM_LBUTTONUP,0,MAKELPARAM(12,12));
           RedrawWindow(toolbar,NULL,NULL,RDW_INVALIDATE|RDW_ALLCHILDREN|RDW_UPDATENOW);
           FillRect(reference,&edge,(HBRUSH)(COLOR_BTNFACE+1)); DrawEdge(reference,&edge,EDGE_ETCHED,BF_LEFT);

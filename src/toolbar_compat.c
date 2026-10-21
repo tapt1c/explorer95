@@ -30,8 +30,8 @@ static void PaintEdges(HWND window, HDC dc)
             BOOL down = (button.fsState & TBSTATE_ENABLED) && (button.fsState & (TBSTATE_PRESSED | TBSTATE_CHECKED));
             if (down) DrawEdge(dc, &rect, EDGE_SUNKEN, BF_RECT);
             else {
-                /* FLAT toolbars may paint their own hot edge, even directly
-                 * during mouse messages. Keep idle/hover borders flat too. */
+                /* Replace the native classic border with our flat idle edge.
+                 * Native hot tracking is disabled, so hovering needs no paint. */
                 FlatEdge(dc, &rect);
                 if (button.fsStyle & TBSTYLE_DROPDOWN) {
                     rect.left = rect.right - ARROW_WIDTH; rect.right = rect.left + 2;
@@ -44,6 +44,8 @@ static void PaintEdges(HWND window, HDC dc)
 static LRESULT CALLBACK EdgesProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
 {
     WNDPROC original = (WNDPROC)GetPropA(window, edgesProperty); LRESULT result;
+    BOOL idle = (message == WM_TIMER || (message == WM_MOUSEMOVE && !(wp & (MK_LBUTTON | MK_RBUTTON | MK_MBUTTON)))) &&
+        !GetCapture() && !GetUpdateRect(window, NULL, FALSE);
     if (message == WM_NCDESTROY) {
         SetWindowLongPtrA(window, GWLP_WNDPROC, (LONG_PTR)original); RemovePropA(window, edgesProperty);
         return CallWindowProcA(original, window, message, wp, lp);
@@ -51,9 +53,14 @@ static LRESULT CALLBACK EdgesProc(HWND window, UINT message, WPARAM wp, LPARAM l
     result = CallWindowProcA(original, window, message, wp, lp);
     /* A command dispatched by the native handler can rebuild/destroy this
      * toolbar. Only touch a window that still carries our subclass. */
+    /* Some controls invalidate hot items even without TBSTYLE_FLAT. Keep
+     * tooltip relay/hit testing, but discard that idle-only damage on a clean
+     * surface. Preserve pre-existing damage and every captured-button update. */
+    if (idle && !GetCapture() && GetPropA(window, edgesProperty) == (HANDLE)original)
+        ValidateRect(window, NULL);
     if (GetPropA(window, edgesProperty) == (HANDLE)original &&
-        (message == WM_PAINT || message == WM_MOUSEMOVE || message == WM_LBUTTONDOWN ||
-         message == WM_LBUTTONUP || message == WM_CAPTURECHANGED || message == WM_TIMER)) { HDC dc = GetDC(window);
+        (message == WM_PAINT || (message == WM_MOUSEMOVE && GetCapture() == window) ||
+         message == WM_LBUTTONDOWN || message == WM_LBUTTONUP || message == WM_CAPTURECHANGED)) { HDC dc = GetDC(window);
         if (dc) { PaintEdges(window, dc); ReleaseDC(window, dc); }
     }
     return result;
@@ -198,6 +205,10 @@ BOOL ToolbarCompact(HWND toolbar, int size, int count, const int *widths,
     int i, j; BOOL native = TRUE; CompactToolbar *bar;
     BOOL nativeArrows = (SendMessageA(toolbar, TB_GETEXTENDEDSTYLE, 0, 0) & TBSTYLE_EX_DRAWDDARROWS) != 0;
     if (count < 1 || count > TOOLBAR_ITEMS || ToolbarCompactLegacy(toolbar)) return FALSE;
+    /* Flat borders are supplied by PaintEdges. Letting Common Controls draw
+     * hot borders and then erasing them on every mouse move makes Win95's
+     * software cursor blink. Keep native input/tooltips, without hot painting. */
+    SetWindowLongA(toolbar, GWL_STYLE, GetWindowLongA(toolbar, GWL_STYLE) & ~TBSTYLE_FLAT);
     SendMessageA(toolbar, TB_SETBUTTONSIZE, 0, MAKELONG(size + 8, size + 8));
     for (i = 0; i < count; ++i) {
         TBBUTTON button; TBBUTTONINFOA info; RECT rect;
@@ -219,7 +230,7 @@ BOOL ToolbarCompact(HWND toolbar, int size, int count, const int *widths,
         if (button.fsStyle & TBSTYLE_SEP) continue;
         bar->arrows[i] = (button.fsStyle & TBSTYLE_DROPDOWN) != 0;
         child = CreateWindowExA(0, TOOLBARCLASSNAMEA, "", WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS |
-            TBSTYLE_LIST | TBSTYLE_FLAT | TBSTYLE_TOOLTIPS | CCS_NOPARENTALIGN | CCS_NORESIZE | CCS_NODIVIDER,
+            TBSTYLE_LIST | TBSTYLE_TOOLTIPS | CCS_NOPARENTALIGN | CCS_NORESIZE | CCS_NODIVIDER,
             0, 0, widths[i], bar->height, toolbar, (HMENU)(INT_PTR)button.idCommand, GetModuleHandleA(NULL), NULL);
         if (!child) goto fail;
         bar->buttons[i] = child;

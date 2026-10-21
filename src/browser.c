@@ -182,10 +182,10 @@ void BrowserBuildToolbar(Browser *browser)
     TBADDBITMAP images; int stock, history, views, navigation, i, size = browser->options.largeTools ? 24 : 16;
     if (browser->toolbar) DestroyWindow(browser->toolbar);
     if (browser->toolbarImages) { DeleteObject(browser->toolbarImages); browser->toolbarImages = NULL; }
-    /* FLAT/LIST are optional rendering hints on later common controls. All
-     * commands and stock bitmaps also work with original Win95 toolbars. */
+    /* toolbar_compat supplies flat idle borders without native hot painting.
+     * LIST is an optional hint; original Win95 still handles all commands. */
     browser->toolbar = BrowserControl(browser->window, TOOLBARCLASSNAMEA, "", TBSTYLE_TOOLTIPS | TBSTYLE_WRAPABLE |
-        TBSTYLE_FLAT | TBSTYLE_LIST | CCS_TOP | CCS_NODIVIDER | CCS_NOPARENTALIGN | CCS_NORESIZE, ID_TOOLBAR);
+        TBSTYLE_LIST | CCS_TOP | CCS_NODIVIDER | CCS_NOPARENTALIGN | CCS_NORESIZE, ID_TOOLBAR);
     /* Original Win95 recalculates shared button widths on WM_SETFONT. Set the
      * final caption font while empty, never while adding translated labels. */
     SendMessageA(browser->toolbar,WM_SETFONT,(WPARAM)UiFont(browserFont),FALSE);
