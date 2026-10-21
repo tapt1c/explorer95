@@ -21,11 +21,34 @@ struct BrowserControlPanel {
     HICON icons[CONTROL_ITEMS], icon;
     LPITEMIDLIST dialup;
     HFONT underline, heading;
-    BOOL available[CONTROL_ITEMS], layouting;
+    BOOL available[CONTROL_ITEMS], layouting, redrawPaused;
+    int updateDepth;
+    WNDPROC previous[CONTROL_ITEMS+1];
     int scroll, height, infoWidth, introBottom, switchTop, switchHeight;
     PaintBuffer background, row;
 };
 static void Reflow(Browser *browser);
+/* Old USER can defer native button paints inside the scrollbar's tracking
+ * loop. Keep the old frame during geometry changes and finish every row before
+ * returning to that loop. Preserve an outer browser redraw transaction. */
+static void BeginPageUpdate(BrowserControlPanel *c)
+{
+    if(!c->updateDepth++) {
+        c->redrawPaused=IsWindowVisible(c->window);
+        if(c->redrawPaused) SendMessageA(c->window,WM_SETREDRAW,FALSE,0);
+    }
+}
+static void EndPageUpdate(BrowserControlPanel *c)
+{
+    int i;
+    if(--c->updateDepth || !c->redrawPaused) return;
+    c->redrawPaused=FALSE; SendMessageA(c->window,WM_SETREDRAW,TRUE,0);
+    RedrawWindow(c->window,NULL,NULL,RDW_INVALIDATE|RDW_NOERASE|RDW_FRAME|RDW_ALLCHILDREN|RDW_UPDATENOW);
+    if(IsWindowVisible(c->all)) RedrawWindow(c->all,NULL,NULL,RDW_INVALIDATE|RDW_NOERASE|RDW_UPDATENOW);
+    for(i=0;i<CONTROL_ITEMS;++i) if(IsWindowVisible(c->links[i]))
+        RedrawWindow(c->links[i],NULL,NULL,RDW_INVALIDATE|RDW_NOERASE|RDW_UPDATENOW);
+}
+
 static void FocusPage(BrowserControlPanel *c)
 {
     int i;
@@ -143,10 +166,11 @@ static void ScrollTo(Browser *browser,int position)
     if(position>c->height-rect.bottom) position=c->height-rect.bottom;
     if(position<0) position=0;
     if(position==c->scroll) return;
+    BeginPageUpdate(c);
     c->scroll=position; ZeroMemory(&info,sizeof(info)); info.cbSize=sizeof(info); info.fMask=SIF_POS; info.nPos=position;
     SetScrollInfo(c->window,SB_VERT,&info,TRUE); GetClientRect(c->content,&content);
     EnvMoveControl(c->content,0,-position,content.right,c->height);
-    RedrawWindow(c->window,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_ALLCHILDREN|RDW_UPDATENOW);
+    EndPageUpdate(c);
 }
 static void Reflow(Browser *browser)
 {
@@ -154,6 +178,7 @@ static void Reflow(Browser *browser)
     if(!c || !c->window || !c->content || c->layouting) return;
     c->layouting=TRUE; GetWindowRect(c->window,&outer); GetClientRect(c->window,&client);
     width=outer.right-outer.left; height=client.bottom; if(width<40 || height<1) { c->layouting=FALSE; return; }
+    BeginPageUpdate(c);
     c->height=Place(browser,width,FALSE);
     if(c->height>height) width-=GetSystemMetrics(SM_CXVSCROLL);
     c->height=Place(browser,width,TRUE);
@@ -162,7 +187,7 @@ static void Reflow(Browser *browser)
     ZeroMemory(&info,sizeof(info)); info.cbSize=sizeof(info); info.fMask=SIF_RANGE|SIF_PAGE|SIF_POS;
     info.nMax=c->height-1; info.nPage=height; info.nPos=c->scroll; SetScrollInfo(c->window,SB_VERT,&info,TRUE);
     EnvMoveControl(c->content,0,-c->scroll,width,c->height>height ? c->height : height);
-    InvalidateRect(c->content,NULL,TRUE); c->layouting=FALSE;
+    InvalidateRect(c->content,NULL,FALSE); c->layouting=FALSE; EndPageUpdate(c);
 }
 static void DrawLink(Browser *browser,const DRAWITEMSTRUCT *draw)
 {
@@ -183,27 +208,31 @@ static void DrawLink(Browser *browser,const DRAWITEMSTRUCT *draw)
     if(draw->itemState&ODS_FOCUS) { rect.left+=all ? 0 : 48; InflateRect(&rect,-1,-1); DrawFocusRect(dc,&rect); }
     SelectObject(dc,old); PaintBufferEnd(&c->row,draw->hDC,&draw->rcItem);
 }
+/* Retain native BUTTON input, focus, notifications and accessible captions.
+ * Paint its complete client ourselves: Win95's owner-draw button path can erase
+ * it to COLOR_BTNFACE before delivering the later WM_DRAWITEM during tracking. */
+static LRESULT CALLBACK LinkProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
+{
+    Browser *browser=(Browser *)GetWindowLongPtrA(GetParent(window),GWLP_USERDATA);
+    BrowserControlPanel *c=browser ? browser->controlPanel : NULL;
+    int id=GetDlgCtrlID(window),index=id==ID_CONTROL_ALL ? CONTROL_ITEMS : id-ID_CONTROL_ITEM;
+    WNDPROC previous=c && index>=0 && index<=CONTROL_ITEMS ? c->previous[index] : NULL;
+    if(c && message==WM_ERASEBKGND) return TRUE;
+    if(c && message==WM_PAINT) {
+        PAINTSTRUCT paint; DRAWITEMSTRUCT draw;
+        ZeroMemory(&draw,sizeof(draw)); draw.CtlType=ODT_BUTTON; draw.CtlID=id;
+        draw.itemAction=ODA_DRAWENTIRE; draw.hwndItem=window; GetClientRect(window,&draw.rcItem);
+        draw.hDC=BeginPaint(window,&paint);
+        if(GetFocus()==window) draw.itemState|=ODS_FOCUS;
+        if(!IsWindowEnabled(window)) draw.itemState|=ODS_DISABLED;
+        DrawLink(browser,&draw); EndPaint(window,&paint); return 0;
+    }
+    return previous ? CallWindowProcA(previous,window,message,wp,lp) : DefWindowProcA(window,message,wp,lp);
+}
 static void PaintPage(Browser *browser,HDC dc)
 {
     BrowserControlPanel *c=browser->controlPanel; RECT rect,text; HGDIOBJ old;
     GetClientRect(c->content,&rect); FillRect(dc,&rect,(HBRUSH)(COLOR_WINDOW+1)); SetBkMode(dc,TRANSPARENT);
-    if(rect.right>=380 && rect.bottom>=280 && GetSysColor(COLOR_WINDOW)==RGB(255,255,255)) {
-        /* Pale monitor/window motif, drawn locally rather than stretching a
-         * copyrighted bitmap or depending on a newer alpha-blending API. */
-        HPEN pen=CreatePen(PS_SOLID,5,RGB(206,225,246)); HGDIOBJ previous;
-        HBRUSH brush=CreateSolidBrush(RGB(225,237,250)); int x=rect.right-142,y=rect.bottom-142,i;
-        if(pen) {
-            previous=SelectObject(dc,pen);
-            MoveToEx(dc,x,y,NULL); LineTo(dc,x+113,y+6); LineTo(dc,x+121,y+113); LineTo(dc,x+4,y+108); LineTo(dc,x,y);
-            MoveToEx(dc,x+4,y+20,NULL); LineTo(dc,x+114,y+25);
-            MoveToEx(dc,x+48,y+112,NULL); LineTo(dc,x+48,y+126); LineTo(dc,x+91,y+126);
-            SelectObject(dc,previous); DeleteObject(pen);
-        }
-        if(brush) {
-            for(i=0;i<4;++i) { SetRect(&text,x+28+(i%2)*30,y+38+(i/2)*30,x+52+(i%2)*30,y+61+(i/2)*30); FillRect(dc,&text,brush); }
-            DeleteObject(brush);
-        }
-    }
     old=SelectObject(dc,c->heading ? c->heading : browserFont); SetTextColor(dc,GetSysColor(COLOR_WINDOWTEXT));
     if(c->infoWidth) {
         HBRUSH blue=CreateSolidBrush(RGB(199,220,240)),green=CreateSolidBrush(RGB(215,234,201));
@@ -253,11 +282,14 @@ static LRESULT CALLBACK ControlProc(HWND window,UINT message,WPARAM wp,LPARAM lp
         }
         return 0;
     case WM_DRAWITEM: DrawLink(browser,(DRAWITEMSTRUCT *)lp); return TRUE;
-    case WM_ERASEBKGND: { RECT rect; GetClientRect(window,&rect); FillRect((HDC)wp,&rect,(HBRUSH)(COLOR_WINDOW+1)); return TRUE; }
+    case WM_ERASEBKGND: return TRUE;
     case WM_PAINT: {
         PAINTSTRUCT paint; RECT rect; HDC target=BeginPaint(window,&paint),dc;
-        GetClientRect(window,&rect); dc=PaintBufferBegin(&c->background,target,&rect); PaintPage(browser,dc);
-        PaintBufferEnd(&c->background,target,&rect); EndPaint(window,&paint); return 0;
+        if(window==c->content) {
+            GetClientRect(window,&rect); dc=PaintBufferBegin(&c->background,target,&rect); PaintPage(browser,dc);
+            PaintBufferEnd(&c->background,target,&rect);
+        } else FillRect(target,&paint.rcPaint,(HBRUSH)(COLOR_WINDOW+1));
+        EndPaint(window,&paint); return 0;
     }
     case WM_SYSCOLORCHANGE: InvalidateRect(window,NULL,TRUE); return 0;
     case WM_VSCROLL: {
@@ -298,6 +330,11 @@ static BOOL Create(Browser *browser)
     for(i=0;i<CONTROL_ITEMS;++i) c->links[i]=BrowserControl(c->content,"BUTTON",items[i].title,BS_OWNERDRAW|BS_NOTIFY|WS_TABSTOP,ID_CONTROL_ITEM+i);
     if(!c->window || !c->content || !c->all) { BrowserControlPanelDestroy(browser); return FALSE; }
     for(i=0;i<CONTROL_ITEMS;++i) if(!c->links[i]) { BrowserControlPanelDestroy(browser); return FALSE; }
+    for(i=0;i<=CONTROL_ITEMS;++i) {
+        HWND link=i==CONTROL_ITEMS ? c->all : c->links[i];
+        c->previous[i]=(WNDPROC)SetWindowLongPtrA(link,GWLP_WNDPROC,(LONG_PTR)LinkProc);
+        if(!c->previous[i]) { BrowserControlPanelDestroy(browser); return FALSE; }
+    }
     ReadItems(browser); return TRUE;
 }
 void BrowserControlPanelLocationChanged(Browser *browser)

@@ -299,10 +299,8 @@ static void LanguageRestartTests(const char *directory,const char *executable)
         {
             HWND control=OpenControlTestWindow(),page=GetDlgItem(control,ID_CONTROL_PAGE);
             HWND sidebar=GetDlgItem(control,ID_BROWSER_SIDEBAR);
-            char shellAddress[MAX_PATH];
             Check(page && IsWindowVisible(page) && IsWindowVisible(sidebar),"Russian simple Control Panel keeps its common tasks beside the applets");
-            SendMessageA(GetDlgItem(control,ID_ADDRESS),WM_GETTEXT,sizeof(shellAddress),(LPARAM)shellAddress);
-            Check(!lstrcmpA(shellAddress,"Control Panel"),
+            Check(ControlPanelHasNativeAddress(control),
                 "the Russian interface preserves the native Shell address instead of lossy question marks from its translated caption");
             Check(LanguageWideEqual(PaneControl(page,ID_CONTROL_ITEM+1),L"\u0414\u0430\u0442\u0430 \u0438 \u0432\u0440\u0435\u043c\u044f"),
                 "the simple Control Panel translates applet labels on an English system");

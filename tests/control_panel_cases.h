@@ -1,5 +1,16 @@
 /* Real namespace windows and native controls; no replacement shell or CPL
  * execution against the host. Applet dialogs are tested manually in Win95. */
+static BOOL ControlPanelHasNativeAddress(HWND window)
+{
+    LPITEMIDLIST pidl=NULL; SHFILEINFOA info; char address[MAX_PATH]; BOOL same=FALSE;
+    ZeroMemory(&info,sizeof(info));
+    if(SUCCEEDED(SHGetSpecialFolderLocation(NULL,CSIDL_CONTROLS,&pidl)) &&
+       SHGetFileInfoA((LPCSTR)pidl,0,&info,sizeof(info),SHGFI_PIDL|SHGFI_DISPLAYNAME) && info.szDisplayName[0]) {
+        SendMessageA(GetDlgItem(window,ID_ADDRESS),WM_GETTEXT,sizeof(address),(LPARAM)address);
+        same=!lstrcmpA(address,info.szDisplayName);
+    }
+    CoTaskMemFree(pidl); return same;
+}
 static HWND OpenControlTestWindow(void)
 {
     HWND previous[64],window,found=NULL; int n=0,i; DWORD started=GetTickCount(),owner;
@@ -21,10 +32,42 @@ static HWND OpenControlTestWindow(void)
     Check(found!=NULL,"open our own Control Panel window through the Start command");
     return found;
 }
+static void ControlPanelRowPaint(HWND page)
+{
+    RECT viewport,bounds,client,patch; int i,count=0; HDC dc;
+    HBRUSH marker=CreateSolidBrush(RGB(251,3,239)); COLORREF pixel;
+    GetWindowRect(page,&viewport);
+    for(i=0;i<7;++i) {
+        HWND link=PaneControl(page,ID_CONTROL_ITEM+i);
+        if(!IsWindowVisible(link)) continue;
+        GetWindowRect(link,&bounds); GetClientRect(link,&client);
+        if(bounds.top+client.bottom/2<viewport.top || bounds.top+client.bottom/2>=viewport.bottom) continue;
+        Check(!GetUpdateRect(link,NULL,FALSE),"scrolling completes visible Control Panel rows before returning to USER");
+        /* Right padding has no text/icon. An erase-only request must keep the
+         * old pixels or finish the row, never expose the button's gray face. */
+        SetRect(&patch,client.right-4,client.bottom/2,client.right-2,client.bottom/2+2);
+        dc=GetDC(link); FillRect(dc,&patch,marker);
+        /* Flush this process's GDI batch before the other process repaints. */
+        GetPixel(dc,patch.left,patch.top); ReleaseDC(link,dc);
+        RedrawWindow(link,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_ERASENOW);
+        dc=GetDC(link); pixel=GetPixel(dc,patch.left,patch.top); ReleaseDC(link,dc);
+        Check(pixel==RGB(251,3,239) || pixel==GetSysColor(COLOR_WINDOW),
+              "row erasure cannot replace a Control Panel item with a gray rectangle");
+        RedrawWindow(link,NULL,NULL,RDW_INVALIDATE|RDW_UPDATENOW);
+        dc=GetDC(link); pixel=GetPixel(dc,patch.left,patch.top); ReleaseDC(link,dc);
+        if(pixel!=GetSysColor(COLOR_WINDOW)) {
+            char note[192]; wsprintfA(note,"Control row %d: pixel %08lx, screen %d,%d-%d,%d, viewport %d,%d-%d,%d\r\n",
+                i,pixel,bounds.left,bounds.top,bounds.right,bounds.bottom,viewport.left,viewport.top,viewport.right,viewport.bottom); Log(note);
+        }
+        Check(pixel==GetSysColor(COLOR_WINDOW),"a row repaint immediately replaces the canary with the complete plain row");
+        ++count;
+    }
+    DeleteObject(marker); Check(count>0,"exercise real visible Control Panel item painting");
+}
 static void ControlPanelTests(const char *settings,const char *fixture)
 {
     HWND window,page,native,all,classic,again; RECT bounds,client; SCROLLINFO info; int i,count=0;
-    char previousMode[16],previousPane[16],address[MAX_PATH];
+    char previousMode[16],previousPane[16];
     GetPrivateProfileStringA("Explorer","ControlPanelSimple","",previousMode,sizeof(previousMode),settings);
     GetPrivateProfileStringA("Explorer","ExplorerBar","",previousPane,sizeof(previousPane),settings);
     WritePrivateProfileStringA("Explorer","ControlPanelSimple",NULL,settings);
@@ -42,8 +85,18 @@ static void ControlPanelTests(const char *settings,const char *fixture)
         if(IsWindowVisible(link)) { ++count; GetClientRect(link,&bounds); Check(bounds.right>=100 && bounds.bottom>=48,"Control Panel links reserve space for an icon and wrapping description"); }
     }
     Check(count>=3,"installed control applets and Printers appear in the simple page");
-    SendMessageA(GetDlgItem(window,ID_ADDRESS),WM_GETTEXT,MAX_PATH,(LPARAM)address);
-    Check(!lstrcmpA(address,"Control Panel"),"lightweight mode preserves the real Control Panel address");
+    Check(ControlPanelHasNativeAddress(window),"lightweight mode preserves the real Control Panel address");
+    {
+        HWND content=GetWindow(page,GW_CHILD); HDC dc; COLORREF pixel;
+        SendMessageA(page,WM_VSCROLL,SB_BOTTOM,0); PumpFor(60);
+        GetClientRect(content,&bounds); dc=GetDC(content);
+        pixel=GetPixel(dc,bounds.right-77,bounds.bottom-16); ReleaseDC(content,dc);
+        Check(pixel==GetSysColor(COLOR_WINDOW),"the simple Control Panel footer has a plain background without the monitor watermark");
+        SendMessageA(page,WM_VSCROLL,SB_TOP,0); PumpFor(60);
+    }
+    ControlPanelRowPaint(page);
+    SendMessageA(page,WM_VSCROLL,SB_LINEDOWN,0); ControlPanelRowPaint(page);
+    SendMessageA(page,WM_VSCROLL,SB_LINEUP,0); ControlPanelRowPaint(page);
     SaveScreen("build/control-panel-simple.bmp");
     SendMessageA(window,WM_COMMAND,ID_REFRESH,0); PumpFor(100);
     Check(GetDlgItem(window,ID_CONTROL_PAGE)==page && IsWindowVisible(page),"refresh preserves the simple page and its mode");
@@ -66,7 +119,10 @@ static void ControlPanelTests(const char *settings,const char *fixture)
     ZeroMemory(&info,sizeof(info)); info.cbSize=sizeof(info); info.fMask=SIF_RANGE|SIF_PAGE;
     GetScrollInfo(page,SB_VERT,&info);
     Check(info.nMax>=(int)info.nPage && (GetWindowLongA(page,GWL_STYLE)&WS_VSCROLL),"a short viewport scrolls the actual page rather than clipping its links");
-    SendMessageA(page,WM_VSCROLL,SB_BOTTOM,0); PumpFor(60);
+    for(i=0;i<3;++i) {
+        SendMessageA(page,WM_VSCROLL,i==0 ? SB_BOTTOM : i==1 ? SB_PAGEUP : SB_TOP,0);
+        ControlPanelRowPaint(page);
+    }
     MoveWindow(window,0,0,640,850,TRUE); PumpFor(100);
     /* A removed scrollbar need not retain SCROLLINFO on Wine/old USER.
      * Observe the actual content origin as well as the nonclient style. */
