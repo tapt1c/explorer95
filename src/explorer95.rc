@@ -6,6 +6,7 @@
 #else
 201 RCDATA "build/tray_hook.dll"
 205 RCDATA "build/task_switch_hook.dll"
+206 RCDATA "build/native/EX95TS01.VXD"
 #endif
 
 202 RCDATA "resources/Explorer95UI.ttf"

@@ -149,6 +149,13 @@ INI — в файловом backend. `EnvironmentHost` связывает обо
 Пакеты Debian/Ubuntu: `gcc-mingw-w64-i686`, `binutils-mingw-w64-i686`.
 Проверяйте установленные инструменты до установки новых пакетов.
 
+Встроенный Win95 VxD также требует Linux x64 Open Watcom `wasm`, `wcc386`,
+`wlink`. Явная настройка: `python3 tools/install_watcom.py`, затем
+`export WATCOM="$PWD/.tools/watcom"`; можно использовать существующую установку.
+Архив закреплён по версии и SHA256. Make не скачивает инструменты самостоятельно.
+Не подменяйте `wcc386` 16-битным `wcc`. UI64/Wine не загружает VxD и не требует
+этого компилятора. `make native-check` проверяет тот же C core host-компилятором.
+
 ```sh
 make check
 
@@ -504,6 +511,21 @@ Wine хранит Unix-корзину через XDG_DATA_HOME вне prefix п�
 - Сохраняйте работоспособный прямой путь рисования при нехватке памяти на буфер.
 
 ## Переключение задач Alt+Tab
+
+- На Windows 95 используется встроенный RCDATA 206 динамический VxD:
+  `task_switch_native.asm` владеет VKD hook и жизненным циклом, а
+  `task_switch_native_core.c` — очередью, модификаторами и lease. Core собирается
+  Watcom для 386 и тем же исходником в host-тесте. ABI: EAX/EDX/EBX/ECX,
+  unsigned int 32 бита. Вызовы сериализуются cli; внутри нет CRT, выделения
+  памяти, USER, I/O и разыменования клиентских указателей.
+  `task_switch_native.c` владеет TEMP-файлом, hDevice/process и scalar DIOC.
+  Порядок NEXT/PREVIOUS/COMMIT/CANCEL хранится в очереди до 32 команд;
+  переполнение, Ctrl и lease >200 мс отменяют сессию. Модификаторы проходят,
+  поглощённые make/break парные; E1 Pause не должен имитировать Ctrl.
+  Failed unhook запрещает выгрузку. Не устанавливайте драйвер в SYSTEM.INI.
+  NT/Wine сохраняют WH_KEYBOARD; key-state polling не подтверждает native-сессию.
+  `tests/check_vxd.py` и PE gate проверяют встроенный LE, но не заменяют Win95.
+  Подробности, нативные наблюдения и fixture: `docs/alt-tab-win95.md`.
 
 - `src/task_switch.c/.h` владеет окном, фиксированным списком до TASK_LIMIT
   отдельных задач и восемью GDI-миниатюрами 320×240. EnvTaskWindows и

@@ -1,3 +1,4 @@
 /build/
+/.tools/
 *.o
 __pycache__/

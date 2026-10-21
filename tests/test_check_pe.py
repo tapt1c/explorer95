@@ -68,6 +68,25 @@ def embedded_image(payload, switch_payload=None, include_switch=True):
     return data
 
 
+def embedded_native_image(native):
+    payloads = (hook_image(), hook_image(), native)
+    data = image()
+    data.extend(bytes(256) + b"".join(payloads))
+    root = 1024
+    struct.pack_into("<II", data, 0x108, 0x1200, len(data)-root)
+    struct.pack_into("<IIII", data, 0x180, len(data)-512, 0x1000, len(data)-512, 512)
+    struct.pack_into("<HHII", data, root+12, 0, 1, 10, 0x80000018)
+    struct.pack_into("<HH", data, root+36, 0, 3)
+    rva = 0x1300
+    for i, (identifier, payload) in enumerate(zip((201, 205, 206), payloads)):
+        directory, leaf = 80+32*i, 176+16*i
+        struct.pack_into("<II", data, root+40+8*i, identifier, 0x80000000+directory)
+        struct.pack_into("<HHII", data, root+directory+12, 0, 1, 1033, leaf)
+        struct.pack_into("<IIII", data, root+leaf, rva, len(payload), 0, 0)
+        rva += len(payload)
+    return data
+
+
 class LoaderGateTests(unittest.TestCase):
     def run_gate(self, data, **options):
         with tempfile.TemporaryDirectory() as directory:
@@ -135,6 +154,21 @@ class LoaderGateTests(unittest.TestCase):
 
     def test_embedded_hook_is_checked(self):
         self.run_gate(embedded_image(hook_image()), require_hook=True)
+
+    def test_missing_native_driver_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "missing embedded native task switch driver"):
+            self.run_gate(embedded_image(hook_image()), require_hook=True, require_native=True)
+
+    def test_embedded_native_driver_is_checked(self):
+        from test_check_vxd import image as native_fixture
+        self.run_gate(embedded_native_image(native_fixture()), require_hook=True, require_native=True)
+
+    def test_embedded_native_driver_wrong_cpu_is_rejected(self):
+        from test_check_vxd import image as native_fixture
+        native = native_fixture()
+        struct.pack_into("<H", native, 136, 3)
+        with self.assertRaisesRegex(ValueError, "386"):
+            self.run_gate(embedded_native_image(native), require_hook=True, require_native=True)
 
     def test_embedded_hook_loader_regression_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "user32.dll!EndMenu"):

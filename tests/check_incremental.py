@@ -16,7 +16,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="explorer95-build-") as temp:
         work = Path(temp)
         shutil.copyfile(root / "Makefile", work / "Makefile")
-        for name in ("src", "resources", "tools"):
+        for name in ("src", "resources", "tools", "tests"):
             shutil.copytree(root / name, work / name)
         command = ["make", "--no-print-directory", "build/obj32/src/start_layout.o", "build/resources.o",
                    f"CC={args.cc}", f"WINDRES={args.windres}"]
@@ -59,6 +59,10 @@ def main():
         hook_header = work / "src/task_switch.h"
         hook_header.write_text(hook_header.read_text() + "\n/* keyboard hook dependency probe */\n")
         run("keyboard hook header rebuilds its embedded DLL and resources", 0, 1)
+        native_core = work / "src/task_switch_native_core.c"
+        native_core.write_text(native_core.read_text() + "\n/* native dependency probe */\n")
+        run("native keyboard core rebuilds its driver and resources", 0, 1)
+        run("native driver rebuild settles without extra compilation", 0, 0)
         source = work / "src/start_layout.c"
         source.write_text(source.read_text() + "\n/* source probe */\n")
         run("one source change rebuilds only that object", 1, 0)

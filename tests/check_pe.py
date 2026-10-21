@@ -35,6 +35,7 @@ ALLOWED = {
         FindResourceA LoadResource SizeofResource LockResource GetCurrentProcess ReadProcessMemory GetACP Module32First
         GetDiskFreeSpaceA GetVolumeInformationA WideCharToMultiByte WritePrivateProfileSectionA
         CreateMutexA ReleaseMutex CreateToolhelp32Snapshot Process32First Process32Next GetSystemTimeAsFileTime GetTempFileNameA GetTempPathA MoveFileA
+        DeviceIoControl
         CompareFileTime FileTimeToLocalFileTime FileTimeToSystemTime GetDateFormatA
         GetFileSize ReadFile WriteFile GlobalAlloc GlobalFree GlobalLock GlobalSize GlobalUnlock
         CloseHandle CopyFileA CreateDirectoryA CreateFileA ExitProcess ExpandEnvironmentStringsA FindClose FindFirstFileA
@@ -81,11 +82,11 @@ ALLOWED = {
 }
 
 
-def check(path, dll=False, require_hook=False):
-    check_data(Path(path).read_bytes(), dll=dll, require_hook=require_hook)
+def check(path, dll=False, require_hook=False, require_native=False):
+    check_data(Path(path).read_bytes(), dll=dll, require_hook=require_hook, require_native=require_native)
 
 
-def check_data(data, dll=False, require_hook=False):
+def check_data(data, dll=False, require_hook=False, require_native=False):
 
     def unpack(fmt, offset):
         return struct.unpack_from("<" + fmt, data, offset)
@@ -183,12 +184,22 @@ def check_data(data, dll=False, require_hook=False):
             start = offset(payload_rva)
             require(size and start + size <= len(data), f"truncated embedded {description}")
             check_data(data[start:start + size], dll=True)
+        if require_native:
+            from check_vxd import check_data as check_native
+            native = resource_entry(kind & 0x7fffffff, 206, "native task switch driver")
+            require(native & 0x80000000, "invalid native driver resource directory")
+            leaf = resource_entry(native & 0x7fffffff, description="native task switch driver")
+            require(not leaf & 0x80000000 and leaf + 16 <= resource_size, "invalid native driver resource leaf")
+            payload_rva, size = unpack("II", root + leaf)
+            start = offset(payload_rva)
+            require(size and start + size <= len(data), "truncated embedded native driver")
+            check_native(data[start:start+size])
     print(f"PASS: x86 PE32 {'DLL' if dll else 'EXE'}, GUI/OS 4.0, {functions} reviewed imports in {libraries} system DLLs; no CRT")
 
 
 if __name__ == "__main__":
     try:
         dll = len(sys.argv) == 3 and sys.argv[2] == "--dll"
-        check(sys.argv[1], dll=dll, require_hook=not dll)
+        check(sys.argv[1], dll=dll, require_hook=not dll, require_native=not dll)
     except (IndexError, ValueError, struct.error) as error:
         sys.exit(f"FAIL: {error}")

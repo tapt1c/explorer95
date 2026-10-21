@@ -18,6 +18,7 @@ SOURCES = src/font_resource.c src/localization.c src/toolbar_compat.c src/browse
 TEST_SOURCES = src/font_resource.c src/localization.c src/toolbar_compat.c tests/smoke.c src/tray_image.c src/program_history.c src/paint.c src/shell_config.c src/start_layout.c src/desktop_icons.c src/shell_features.c src/folder_open.c src/folder_handler.c src/native_view.c src/shell_new.c src/render_trace.c src/file_drag.c src/file_operations.c
 SOURCES += src/task_groups.c
 SOURCES += src/task_switch.c
+SOURCES += src/task_switch_native.c
 SOURCES += src/shutdown_dos.c
 TEST_SOURCES += src/shutdown_dos.c
 OBJECTS = $(SOURCES:%.c=build/obj32/%.o)
@@ -26,12 +27,12 @@ TEST_OBJECTS = $(TEST_SOURCES:%.c=build/obj32/%.o)
 TEST_OBJECTS64 = $(TEST_SOURCES:%.c=build/obj64/%.o)
 TEST_LIBS = -lcomctl32 -lshell32 -luuid -lole32 -ladvapi32 -lgdi32 -luser32 -lkernel32
 
-.PHONY: all clean check check-build layout smoke ui64-smoke FORCE
+.PHONY: all clean check check-build layout native-check smoke ui64-smoke FORCE
 all: build/explorer95.exe
 
 # Remember command-line flags/compiler choices too, not just source timestamps.
 # cmp preserves the stamp's mtime on an unchanged invocation.
-build/obj32 build/obj64 build/host:
+build/obj32 build/obj64 build/host build/native:
 	@mkdir -p $@
 
 build/obj32/.flags: FORCE | build/obj32
@@ -44,6 +45,10 @@ build/obj64/.flags: FORCE | build/obj64
 
 build/host/.flags: FORCE | build/host
 	@$(file >$@.tmp,$(HOSTCC))
+	@cmp -s $@.tmp $@ && rm $@.tmp || mv $@.tmp $@
+
+build/native/.flags: FORCE | build/native
+	@$(file >$@.tmp,$(WATCOM))
 	@cmp -s $@.tmp $@ && rm $@.tmp || mv $@.tmp $@
 
 build/obj32/%.o: %.c build/obj32/.flags Makefile
@@ -76,7 +81,10 @@ build/ui64/task_switch_hook.dll: build/obj64/src/task_switch_hook.o Makefile
 	@mkdir -p $(@D)
 	$(CC64) $(CFLAGS_COMMON) -shared -nostdlib $(filter %.o,$^) -Wl,--entry,DllMain -Wl,--kill-at -luser32 -lkernel32 -o $@
 
-build/resources.o: src/explorer95.rc resources/Bitmap143.bmp resources/explorer95.ico resources/Explorer95UI.ttf resources/Explorer95UI95.ttf resources/LiberationSans-LICENSE.txt build/tray_hook.dll build/task_switch_hook.dll build/obj32/.flags Makefile
+build/native/EX95TS01.VXD: src/task_switch_native.asm src/task_switch_native_core.c src/task_switch_native_core.h src/task_switch_native_protocol.h tools/task_switch_native.lnk tools/build_task_switch_native.py tools/win95-alt-tab-probe/fixprobe.py tests/check_vxd.py build/native/.flags Makefile
+	python3 tools/build_task_switch_native.py
+
+build/resources.o: src/explorer95.rc resources/Bitmap143.bmp resources/explorer95.ico resources/Explorer95UI.ttf resources/Explorer95UI95.ttf resources/LiberationSans-LICENSE.txt build/tray_hook.dll build/task_switch_hook.dll build/native/EX95TS01.VXD build/obj32/.flags Makefile
 	@mkdir -p $(@D)
 	$(WINDRES) --preprocessor="$(CC)" --preprocessor-arg=-E --preprocessor-arg=-xc -I. -i $< -o $@
 
@@ -85,6 +93,8 @@ build/ui64/resources.o: src/explorer95.rc resources/Bitmap143.bmp resources/expl
 	$(WINDRES64) --preprocessor="$(CC64)" --preprocessor-arg=-E --preprocessor-arg=-xc -I. -i $< -o $@
 
 check: all
+	python3 tests/check_vxd.py build/native/EX95TS01.VXD
+	python3 -m unittest discover -s tests -p test_check_vxd.py
 	python3 -m unittest discover -s tests -p test_check_pe.py
 	python3 -m unittest discover -s tests -p test_localization.py
 	python3 tests/check_pe.py build/tray_hook.dll --dll
@@ -101,6 +111,12 @@ build/layout: tests/layout.c tests/layout_cases.h tests/compat/windows.h src/sta
 
 layout: build/layout
 	./build/layout
+
+build/native-core-test: tests/task_switch_native_core.c src/task_switch_native_core.c src/task_switch_native_core.h src/task_switch_native_protocol.h build/host/.flags Makefile
+	$(HOSTCC) -std=c99 -O2 -Wall -Wextra -Werror tests/task_switch_native_core.c src/task_switch_native_core.c -o $@
+
+native-check: build/native-core-test
+	./build/native-core-test
 
 build/smoke.exe: $(TEST_OBJECTS) build/resources.o Makefile
 	$(CC) $(CFLAGS) $(filter %.o,$^) -nostdlib -Wl,--entry,_start $(TEST_LIBS) -o $@

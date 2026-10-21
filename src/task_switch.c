@@ -3,6 +3,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include "shell_internal.h"
 #include "task_switch.h"
+#include "task_switch_native.h"
 #include "task_groups.h"
 #include "file_drag.h"
 #include "render_trace.h"
@@ -17,6 +18,7 @@ static SwitchTask tasks[TASK_LIMIT];
 static HWND popup, taskList, previous, observed;
 static int count, selected, nextPreview;
 static BOOL active, ending;
+static BOOL native, nativeDispatch;
 static DWORD opened;
 static DWORD previousProcess;
 static DWORD readyProbes, reportedProbes;
@@ -29,6 +31,29 @@ static HFONT bold;
 static PaintBuffer paintBuffer;
 static RECT thumbnail;
 static void Finish(BOOL commit, BOOL restore);
+static BOOL Ready(void)
+{
+    return !env.closing && !ShutdownActive() && !FileDragActive() && IsWindowEnabled(env.bar);
+}
+static void PollNative(void)
+{
+    int i,command; BOOL ready=Ready();
+    if(!TaskSwitchNativeRenew(ready)) {
+        Finish(FALSE,TRUE); KillTimer(popup,2); return;
+    }
+    if(!ready) { Finish(FALSE,FALSE); return; }
+    for(i=0;i<TS95_CAPACITY;++i) {
+        command=TaskSwitchNativeRead();
+        if(command<=0) {
+            if(command<0) { Finish(FALSE,TRUE); KillTimer(popup,2); }
+            return;
+        }
+        nativeDispatch=TRUE;
+        if(!TaskSwitchMessage(cookie,command) && (command==TASK_SWITCH_NEXT || command==TASK_SWITCH_PREVIOUS))
+            TaskSwitchNativeReset();
+        nativeDispatch=FALSE;
+    }
+}
 static void DrawTitle(HDC dc,SwitchTask *task,RECT *rect)
 {
     UINT flags=DT_SINGLELINE|DT_VCENTER|DT_END_ELLIPSIS|DT_NOPREFIX;
@@ -127,7 +152,7 @@ static BOOL Begin(int direction)
     if(!count) return FALSE;
     if(initial<0) initial=direction>0 ? -1 : 0;
     active=TRUE; opened=GetTickCount(); Layout(); Select(initial+direction);
-    if(!SetTimer(popup,1,50,NULL)) { Finish(FALSE,FALSE); return FALSE; }
+    if(!native && !SetTimer(popup,1,50,NULL)) { Finish(FALSE,FALSE); return FALSE; }
     ShowWindow(popup,SW_SHOW); SetForegroundWindow(popup); SetFocus(popup); return TRUE;
 }
 static void Finish(BOOL commit,BOOL restore)
@@ -138,6 +163,7 @@ static void Finish(BOOL commit,BOOL restore)
     if(commit && SameWindow(tasks[selected].window,tasks[selected].process)) target=tasks[selected].window;
     else if((restore || commit) && SameWindow(previous,previousProcess)) target=previous;
     active=FALSE; if(hookReset) hookReset(); KillTimer(popup,1);
+    if(native && !nativeDispatch) TaskSwitchNativeReset();
     /* Transfer foreground while we still own it. Hiding first lets the window
      * manager activate another process, which can reject the modal activation. */
     if(target) EnvActivateWindow(target);
@@ -211,7 +237,8 @@ static LRESULT CALLBACK SwitchProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
     case WM_CTLCOLORLISTBOX:
         SetBkColor((HDC)wp,GetSysColor(COLOR_BTNFACE)); return (LRESULT)(HBRUSH)(COLOR_BTNFACE+1);
     case WM_TIMER:
-        if(active && GetTickCount()-opened>150 && !(GetAsyncKeyState(VK_MENU)&0x8000)) Finish(TRUE,FALSE);
+        if(wp==2) { PollNative(); return 0; }
+        if(!native && active && GetTickCount()-opened>150 && !(GetAsyncKeyState(VK_MENU)&0x8000)) Finish(TRUE,FALSE);
         return 0;
     case WM_ACTIVATE: if(LOWORD(wp)==WA_INACTIVE && active) Finish(FALSE,FALSE); return 0;
     case WM_DISPLAYCHANGE: Finish(FALSE,TRUE); return 0;
@@ -238,12 +265,12 @@ LRESULT TaskSwitchMessage(WPARAM supplied,LPARAM command)
 {
     if(!cookie || supplied!=cookie) return 0;
     if(command==TASK_SWITCH_PING) {
-        BOOL ready=!env.closing && !ShutdownActive() && !FileDragActive();
+        BOOL ready=Ready();
         ++readyProbes; lastReady=ready;
         return ready ? TASK_SWITCH_ACK : 0;
     }
     RenderTraceShell("task-switch-command",S_OK,(DWORD)command,active);
-    if(env.closing || ShutdownActive()) { Finish(FALSE,FALSE); return 0; }
+    if(!Ready()) { Finish(FALSE,FALSE); return 0; }
     if(command==TASK_SWITCH_NEXT || command==TASK_SWITCH_PREVIOUS) return Begin(command==TASK_SWITCH_NEXT ? 1 : -1);
     if(command==TASK_SWITCH_COMMIT) Finish(TRUE,FALSE);
     if(command==TASK_SWITCH_CANCEL) Finish(FALSE,TRUE);
@@ -260,6 +287,14 @@ BOOL TaskSwitchCreate(void)
     if(!taskList) goto fail;
     SendMessageA(taskList,WM_SETFONT,(WPARAM)env.host.font,FALSE);
     ZeroMemory(&font,sizeof(font)); if(GetObjectA(env.host.font,sizeof(font),&font)) { font.lfWeight=FW_BOLD; bold=CreateFontIndirectA(&font); }
+    cookie=((UINT)GetTickCount()^(UINT)(UINT_PTR)popup)|1;
+    if(TaskSwitchNativeSupported()) {
+        stage=7;
+        if(!TaskSwitchNativeStart(env.host.instance)) goto fail;
+        native=TRUE;
+        if(!SetTimer(popup,2,50,NULL)) goto fail;
+        return TRUE;
+    }
     stage=2; resource=FindResourceA(env.host.instance,MAKEINTRESOURCEA(TASK_SWITCH_RESOURCE),RT_RCDATA);
     if(!resource || !(size=SizeofResource(env.host.instance,resource)) || !(loaded=LoadResource(env.host.instance,resource)) || !LockResource(loaded)) goto fail;
     /* Injected modules are runtime files, not profile data. Another process
@@ -277,7 +312,6 @@ BOOL TaskSwitchCreate(void)
     start=(TaskSwitchHookStartProc)(UINT_PTR)GetProcAddress(module,"TaskSwitchHookStart");
     hookStop=(TaskSwitchHookStopProc)(UINT_PTR)GetProcAddress(module,"TaskSwitchHookStop");
     hookReset=(TaskSwitchHookStopProc)(UINT_PTR)GetProcAddress(module,"TaskSwitchHookReset");
-    cookie=((UINT)GetTickCount()^(UINT)(UINT_PTR)popup)|1;
     if(!start || !hookStop || !hookReset) { SetLastError(ERROR_PROC_NOT_FOUND); goto fail; }
     stage=6; if(!start(env.bar,cookie)) goto fail;
     RenderTraceShell("task-switch-hook",S_OK,0,0); return TRUE;
@@ -287,6 +321,8 @@ fail:
 void TaskSwitchDestroy(void)
 {
     int i; cookie=0;
+    if(popup) KillTimer(popup,2);
+    TaskSwitchNativeStop(); native=nativeDispatch=FALSE;
     if(hookStop) hookStop();
     hookStop=hookReset=NULL;
     Finish(FALSE,FALSE);

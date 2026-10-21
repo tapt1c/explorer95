@@ -66,6 +66,8 @@ exit or hang. Do not use aggregate counters as the chooser's event queue.
 The 200 ms lease and normal close path exist but their failure behavior has
 not yet been comprehensively tested on native Win95.
 
-Ordinary keyboard hooks remain in the application. Its published Win95
-Alt+Tab issue is still unresolved until the native path is integrated and
-tested with the actual chooser.
+This historical prototype remains unchanged. The application now has a separate
+native backend with an ordered queue, ownership checks, and client lifecycle
+handling; see [the integration notes](../../docs/alt-tab-win95.md). Do not copy
+this counter protocol into that backend. The published alpha.51 still contains
+the original Win95 interception issue.

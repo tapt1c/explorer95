@@ -1,0 +1,8 @@
+format windows vxd dynamic
+option quiet,nodefaultlibs,map=task_switch_native.map
+name EX95TS01.VXD
+file task_switch_native.obj
+file task_switch_native_core.obj
+segment '_TEXT' preload nondiscardable
+segment '_DATA' preload nondiscardable
+export SwitchDDB.1
