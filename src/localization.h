@@ -16,6 +16,8 @@ BOOL UiIsTranslated(const char *text);
 BOOL UiIsEncodedText(const char *text);
 void UiMarkTranslated(const char *text);
 void UiFontLicense(HWND owner);
+/* Native ShellAboutA; only our credit paragraph receives localisation/font. */
+void UiAbout(HWND owner, HICON icon);
 HWND WINAPI UiCreateWindowExA(DWORD ex, LPCSTR kind, LPCSTR text, DWORD style, int x, int y, int width, int height, HWND parent, HMENU menu, HINSTANCE instance, LPVOID data);
 BOOL WINAPI UiSetWindowTextA(HWND window, LPCSTR text);
 BOOL UiSetLiteralWindowTextA(HWND window, LPCSTR text);

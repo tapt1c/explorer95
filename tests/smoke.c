@@ -1971,6 +1971,7 @@ void start(void)
     BrowserTests(browser, fixture, settingsDir, settings);
     DesktopStackTests(bar, desktop, browser);
     NativeFolderTests(menu);
+    AboutCommandTest(browser);
     if (group == GROUP_BROWSER) goto shutdown;
     SendMessageA(menu, WM_COMMAND, 305, 0);
     run = WaitFor("Explorer95.Run", NULL);

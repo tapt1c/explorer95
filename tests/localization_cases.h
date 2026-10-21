@@ -131,6 +131,54 @@ static void LanguageCaptionStyleTest(const WNDCLASSA *cls)
         DestroyWindow(popup);
     }
 }
+static HWND aboutTestOwner,aboutTestCredit;
+static WCHAR aboutTestExpected[160];
+static DWORD aboutTestStarted;
+static BOOL CALLBACK AboutTestText(HWND child,LPARAM unused)
+{
+    (void)unused;
+    if(LanguageWideEqual(child,aboutTestExpected)) { aboutTestCredit=child; return FALSE; }
+    return TRUE;
+}
+static void CALLBACK AboutTestTimer(HWND unused,UINT message,UINT_PTR timer,DWORD now)
+{
+    HWND dialog=NULL; (void)unused; (void)message;
+    while((dialog=FindWindowExA(NULL,dialog,"#32770",NULL))) if(GetWindow(dialog,GW_OWNER)==aboutTestOwner) {
+        RECT bounds,measure; HDC dc; HGDIOBJ old; char kind[32];
+        aboutTestCredit=NULL; EnumChildWindows(dialog,AboutTestText,0);
+        Check(aboutTestCredit!=NULL,"the native ShellAbout dialog contains both complete author/AI credit lines in the selected language");
+        Check(!IsWindowEnabled(aboutTestOwner),"the real ShellAbout dialog keeps its native owner-modal behaviour");
+        GetClassNameA(dialog,kind,sizeof(kind)); Check(!lstrcmpA(kind,"#32770"),"About uses the system dialog class rather than Explorer95's custom message box");
+        GetClientRect(aboutTestCredit,&bounds); measure=bounds;
+        dc=GetDC(aboutTestCredit); old=SelectObject(dc,(HFONT)SendMessageA(aboutTestCredit,WM_GETFONT,0,0));
+        DrawTextW(dc,aboutTestExpected,-1,&measure,DT_CALCRECT|DT_WORDBREAK|DT_NOPREFIX);
+        SelectObject(dc,old); ReleaseDC(aboutTestCredit,dc);
+        Check(bounds.bottom>=measure.bottom,"the native credit field fits both lines without clipping the second line");
+        SaveScreen(UiLanguage() ? "build/about-native-ru.bmp" : "build/about-native-en.bmp");
+        KillTimer(NULL,timer); PostMessageA(dialog,WM_COMMAND,IDOK,0); return;
+    }
+    Check(now-aboutTestStarted<4000,"native ShellAbout opens within the original timeout");
+}
+static void AboutTests(HWND owner)
+{
+    const char *text=UiText("Program author and mockups - Daniil Myslivets\r\nDeveloped with assistance from AI tools"); UINT_PTR timer;
+    aboutTestOwner=owner; aboutTestCredit=NULL; aboutTestStarted=GetTickCount();
+    MultiByteToWideChar(UiLanguage() ? 1251 : CP_ACP,0,text,-1,aboutTestExpected,160);
+    timer=SetTimer(NULL,0,60,AboutTestTimer); Check(timer!=0,"arm a bounded probe for the real ShellAbout dialog");
+    UiAbout(owner,LoadIconA(NULL,IDI_APPLICATION)); KillTimer(NULL,timer);
+    Check(aboutTestCredit!=NULL && IsWindowEnabled(owner),"dismissing native About restores the owner and returns normally");
+}
+static void AboutCommandTest(HWND browser)
+{
+    UINT_PTR timer; DWORD started=GetTickCount();
+    aboutTestOwner=browser; aboutTestCredit=NULL; aboutTestStarted=started;
+    MultiByteToWideChar(CP_ACP,0,"Program author and mockups - Daniil Myslivets\r\nDeveloped with assistance from AI tools",-1,aboutTestExpected,160);
+    timer=SetTimer(NULL,0,60,AboutTestTimer); Check(timer!=0,"arm the About probe for the real browser Help command");
+    PostMessageA(browser,WM_COMMAND,ID_ABOUT,0);
+    do { PumpFor(20); } while((!aboutTestCredit || !IsWindowEnabled(browser)) && GetTickCount()-started<4500);
+    KillTimer(NULL,timer);
+    Check(aboutTestCredit!=NULL && IsWindowEnabled(browser),"Help / About in the actual browser opens and dismisses the native credited dialog");
+}
 static void LanguageTests(const char *directory)
 {
     char profile[MAX_PATH],text[64],face[64]; LOGFONTA font; WNDCLASSA cls; HWND window,button,edit; HMENU menu;
@@ -226,8 +274,11 @@ static void LanguageTests(const char *directory)
     }
     Check(LanguageWideEqual(window,L"\u041f\u0430\u0440\u0430\u043c\u0435\u0442\u0440\u044b \u043e\u043a\u0440\u0443\u0436\u0435\u043d\u0438\u044f Explorer95"),"the translated window title is retained as Unicode on NT");
     DesktopPump(); SaveScreen("build/language-unit-ru.bmp");
+    AboutTests(window);
     DestroyMenu(menu); DestroyWindow(window); UnregisterClassA(cls.lpszClassName,cls.hInstance); UiShutdown();
     Check(UiLanguage()==0 && !lstrcmpA(UiText("Start"),"Start"),"language teardown restores the English test state");
+    window=CreateWindowA("STATIC","English native About owner",WS_OVERLAPPEDWINDOW|WS_VISIBLE,10,10,300,100,NULL,NULL,GetModuleHandleA(NULL),NULL);
+    Check(window!=NULL,"create only our English About owner fixture"); AboutTests(window); DestroyWindow(window);
     Check(DeleteFileA(profile),"remove only the language unit fixture");
 }
 static void LanguageFontTrace(const char *path)

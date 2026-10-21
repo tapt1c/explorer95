@@ -31,6 +31,7 @@ ALLOWED = {
     # remain optional GetProcAddress paths, never loader dependencies.
     "gdi32.dll": {"CreateScalableFontResourceA", "AddFontResourceA", "RemoveFontResourceA", "GetCurrentObject", "CreatePatternBrush", "PatBlt", "GetDeviceCaps", "GetClipBox", "SaveDC", "RestoreDC", "IntersectClipRect", "ExcludeClipRect", "Arc", "CreatePen", "Ellipse", "CreateSolidBrush", "GetDIBits", "SetDIBits", "LineTo", "MoveToEx", "GetStockObject", "SelectObject", "SetBkMode", "SetTextColor", "BitBlt",
                   "Polygon", "StretchBlt", "SetStretchBltMode", "CreateCompatibleBitmap", "CreateBitmap", "SetBkColor", "SetWindowOrgEx", "CreateFontIndirectA", "GetTextFaceA", "GetTextExtentPoint32A", "GetTextMetricsA", "CreateCompatibleDC", "DeleteDC", "DeleteObject", "GetObjectA"},
+    # GetCurrentThreadId scopes the temporary native About CBT hook to our UI thread.
     "kernel32.dll": set("""
         FindResourceA LoadResource SizeofResource LockResource GetCurrentProcess ReadProcessMemory GetACP Module32First
         GetDiskFreeSpaceA GetVolumeInformationA WideCharToMultiByte WritePrivateProfileSectionA
@@ -41,15 +42,16 @@ ALLOWED = {
         CloseHandle CopyFileA CreateDirectoryA CreateFileA ExitProcess ExpandEnvironmentStringsA FindClose FindFirstFileA
         FindNextFileA FindFirstChangeNotificationA FindNextChangeNotification FindCloseChangeNotification WaitForSingleObject FormatMessageA GetFileAttributesA GetFullPathNameA
         DeleteFileA RemoveDirectoryA GetSystemDirectoryA GetShortPathNameA SetLastError GetTimeFormatA GetLastError GetLocalTime GetLogicalDriveStringsA GetModuleHandleA
-        GetCurrentProcessId GetProcessHeap GetWindowsDirectoryA HeapAlloc HeapFree SetErrorMode
+        GetCurrentProcessId GetCurrentThreadId GetProcessHeap GetWindowsDirectoryA HeapAlloc HeapFree SetErrorMode
         LoadLibraryA FreeLibrary GetProcAddress GetCommandLineA GetEnvironmentVariableA GetModuleFileNameA GetPrivateProfileIntA
         GetPrivateProfileStringA GetPrivateProfileSectionA GetTickCount GetVersion MultiByteToWideChar WritePrivateProfileStringA
         lstrcatA lstrcmpA lstrcmpiA lstrcpyA lstrcpynA lstrlenA
     """.split()),
     # OleGetClipboard is part of base Win95 OLE2, including delayed external file data.
     "ole32.dll": {"DoDragDrop", "RegisterDragDrop", "RevokeDragDrop", "CoTaskMemAlloc", "OleInitialize", "OleUninitialize", "OleGetClipboard", "CoCreateInstance", "CoTaskMemFree", "ReleaseStgMedium"},
+    # ShellAboutA is the original ANSI About dialog API, available in stock Win95.
     "shell32.dll": set("""
-        SHBrowseForFolderA
+        SHBrowseForFolderA ShellAboutA
         SHChangeNotify SHAddToRecentDocs SHFileOperationA ShellExecuteExA ExtractIconExA SHGetFileInfoA SHGetMalloc SHGetPathFromIDListA
         SHGetSpecialFolderLocation ShellExecuteA SHAppBarMessage SHGetDesktopFolder
         DragAcceptFiles DragQueryFileA DragFinish

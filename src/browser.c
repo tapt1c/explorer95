@@ -708,7 +708,7 @@ static void Command(Browser *browser, int command)
         GetPrivateProfileStringA("ExplorerFavorites", key, "", path, MAX_PATH, env.ini); if (path[0]) BrowserNavigate(browser, path, NULL, -1);
     } else if (command == ID_DOCUMENTS || command == ID_DESKTOP || command == ID_COMPUTER) BrowserSpecial(browser, command == ID_DOCUMENTS ? CSIDL_PERSONAL : command == ID_DESKTOP ? CSIDL_DESKTOP : CSIDL_DRIVES);
     else if (command == ID_BROWSER_CLOSE) DestroyWindow(browser->window);
-    else if (command == ID_ABOUT) MessageBoxA(browser->window, "Explorer95\r\nClassic XP-style browsing with native Windows 95 controls and icons.", "About Explorer95", MB_OK | MB_ICONINFORMATION);
+    else if (command == ID_ABOUT) UiAbout(browser->window,LoadIconA(browserInstance,"EXPLORER95"));
     else BrowserFilesCommand(browser, command);
 }
 static void PaintFrame(Browser *browser, HDC dc)

@@ -4,6 +4,7 @@
 #include "localization.h"
 #include "paint.h"
 #include "font_resource.h"
+#include <shellapi.h>
 #include <stdarg.h>
 
 typedef struct UiEntry { const char *english; const WCHAR *russian; char *ansi; } UiEntry;
@@ -623,6 +624,72 @@ static LRESULT CALLBACK BoxProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
     }
     return DefWindowProcA(window,message,wp,lp);
 }
+static const char aboutCredits[]="Program author and mockups - Daniil Myslivets\r\nDeveloped with assistance from AI tools";
+typedef struct UiAboutState { HHOOK hook; HWND window; BOOL found; } UiAboutState;
+static UiAboutState *activeAbout;
+typedef struct UiAboutLayout { HWND credit; int below,extra; } UiAboutLayout;
+static BOOL CALLBACK AboutMove(HWND child,LPARAM data)
+{
+    UiAboutLayout *layout=(UiAboutLayout *)data; RECT rect; POINT point;
+    if(child==layout->credit || GetParent(child)!=activeAbout->window) return TRUE;
+    GetWindowRect(child,&rect); point.x=rect.left; point.y=rect.top; ScreenToClient(activeAbout->window,&point);
+    if(point.y>=layout->below) SetWindowPos(child,NULL,point.x,point.y+layout->extra,0,0,SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE);
+    return TRUE;
+}
+static BOOL CALLBACK AboutCredit(HWND child,LPARAM unused)
+{
+    char text[256],kind[24]; RECT bounds,measure,frame; POINT point; HDC dc; HGDIOBJ old; int height;
+    (void)unused;
+    GetClassNameA(child,kind,sizeof(kind));
+    if(lstrcmpiA(kind,"STATIC") || !GetWindowTextA(child,text,sizeof(text)) || lstrcmpA(text,aboutCredits)) return TRUE;
+    activeAbout->found=TRUE; UiSetWindowTextA(child,aboutCredits);
+    /* Some stock dialogs reserve only one line for pszOtherStuff. Grow this
+     * native field and shift subsequent native controls, retaining the OS
+     * template, fonts, logo, version, licensing text and button behaviour. */
+    GetWindowRect(child,&bounds); point.x=bounds.left; point.y=bounds.top; ScreenToClient(activeAbout->window,&point);
+    SetRect(&measure,0,0,bounds.right-bounds.left,0);
+    dc=GetDC(child); old=SelectObject(dc,(HFONT)SendMessageA(child,WM_GETFONT,0,0));
+    UiDrawTextA(dc,aboutCredits,-1,&measure,DT_CALCRECT|DT_WORDBREAK|DT_NOPREFIX);
+    SelectObject(dc,old); ReleaseDC(child,dc); height=measure.bottom-measure.top+2;
+    { LONG style=GetWindowLongA(child,GWL_STYLE),type=style&SS_TYPEMASK;
+      if(type==SS_SIMPLE || type==SS_LEFTNOWORDWRAP) style=(style&~SS_TYPEMASK)|SS_LEFT;
+      SetWindowLongA(child,GWL_STYLE,style|SS_NOPREFIX); }
+    if(height>bounds.bottom-bounds.top) {
+        UiAboutLayout layout={child,point.y+bounds.bottom-bounds.top,height-(bounds.bottom-bounds.top)};
+        EnumChildWindows(activeAbout->window,AboutMove,(LPARAM)&layout);
+        SetWindowPos(child,NULL,0,0,bounds.right-bounds.left,height,SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE);
+        GetWindowRect(activeAbout->window,&frame);
+        SetWindowPos(activeAbout->window,NULL,0,0,frame.right-frame.left,frame.bottom-frame.top+layout.extra,SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE);
+    }
+    return FALSE;
+}
+static LRESULT CALLBACK AboutActivate(int code,WPARAM wp,LPARAM lp)
+{
+    HHOOK hook=activeAbout ? activeAbout->hook : NULL;
+    LRESULT result=CallNextHookEx(hook,code,wp,lp);
+    if(code==HCBT_ACTIVATE && !result && activeAbout && !activeAbout->window) {
+        char kind[24]; GetClassNameA((HWND)wp,kind,sizeof(kind));
+        if(!lstrcmpA(kind,"#32770")) {
+            activeAbout->window=(HWND)wp; EnumChildWindows((HWND)wp,AboutCredit,0);
+            if(activeAbout->found) { UnhookWindowsHookEx(activeAbout->hook); activeAbout->hook=NULL; }
+            else activeAbout->window=NULL;
+        }
+    }
+    return result;
+}
+void UiAbout(HWND owner,HICON icon)
+{
+    UiAboutState state;
+    if(activeAbout) { if(activeAbout->window) SetForegroundWindow(activeAbout->window); return; }
+    ZeroMemory(&state,sizeof(state)); activeAbout=&state;
+    /* A temporary hook on THIS thread only. No global observation or DLL.
+     * Pass readable English initially, even if hook installation fails. */
+    state.hook=SetWindowsHookExA(WH_CBT,AboutActivate,NULL,GetCurrentThreadId());
+    ShellAboutA(owner,"Explorer95",aboutCredits,icon);
+    if(state.hook) UnhookWindowsHookEx(state.hook);
+    activeAbout=NULL;
+}
+
 int WINAPI UiMessageBoxA(HWND owner,LPCSTR text,LPCSTR title,UINT flags)
 {
     if(!language && lstrlenA(text)<1200) return MessageBoxA(owner,text,title,flags);

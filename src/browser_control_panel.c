@@ -195,8 +195,8 @@ static void DrawLink(Browser *browser,const DRAWITEMSTRUCT *draw)
     HDC dc=PaintBufferBegin(&c->row,draw->hDC,&rect); HGDIOBJ old; BOOL all=draw->CtlID==ID_CONTROL_ALL;
     FillRect(dc,&rect,(HBRUSH)(COLOR_WINDOW+1)); SetBkMode(dc,TRANSPARENT);
     if(!all && (index<0 || index>=CONTROL_ITEMS)) { PaintBufferEnd(&c->row,draw->hDC,&draw->rcItem); return; }
-    text=rect; text.left+=all ? 0 : 52; text.right-=4; text.top+=4;
-    if(!all && index>=0 && index<CONTROL_ITEMS) DrawIconEx(dc,rect.left+4,rect.top+4,c->icons[index],32,32,0,NULL,DI_NORMAL);
+    text=rect; text.left+=all ? 0 : 52; text.right-=4; text.top+=all ? 4 : 3;
+    if(!all && index>=0 && index<CONTROL_ITEMS) DrawIconEx(dc,rect.left+4,rect.top+3,c->icons[index],32,32,0,NULL,DI_NORMAL);
     old=SelectObject(dc,c->underline ? c->underline : browserFont);
     SetTextColor(dc,GetSysColor(COLOR_WINDOW)==RGB(255,255,255) ? RGB(0,0,255) : GetSysColor(COLOR_WINDOWTEXT));
     top=TextHeight(dc,all ? "View all Control Panel options" : items[index].title,text.right-text.left);
