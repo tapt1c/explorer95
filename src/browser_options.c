@@ -2,19 +2,17 @@
  * the saved profile and the browser change only after a successful commit. */
 #define WIN32_LEAN_AND_MEAN
 #include "browser_internal.h"
-#include "shell_commands.h"
 #define EX95_LOCALIZE_UI
 #include "localization.h"
 
 #define OPTIONS_WIDTH 366
 #define OPTIONS_HEIGHT 400
 #define OPTION_CONTROLS 48
-#define ID_OPTION_FILETYPES 567
 #define ID_OPTION_HISTORY_COUNT 7120
 #define ID_OPTION_HISTORY_NOTE 7121
-enum { PAGE_VIEW,PAGE_TOOLBAR,PAGE_HISTORY,PAGE_TYPES,PAGE_COUNT };
+enum { PAGE_VIEW,PAGE_TOOLBAR,PAGE_HISTORY,PAGE_COUNT };
 static const char optionsClass[]="Explorer95.FolderOptions";
-static const char *tabs[]={"Folder View","Toolbar","History","File Types"};
+static const char *tabs[]={"Folder View","Toolbar","History"};
 static const char *views[]={"Icons","Small Icons","List","Details","Tiles","Thumbnails"};
 static const char *panes[]={"None","Common Tasks","Folders","Search","History"};
 static const char *extraNames[]={"Copy","Cut","Paste","Delete","Properties","Folder Options"};
@@ -25,8 +23,6 @@ typedef struct Options {
     BOOL loading,clearHistory;
     BrowserOptions applied;
     BOOL appliedHistory;
-    ShellOptionsEntry fileTypes;
-    BOOL fileTypesWide;
 } Options;
 typedef struct OptionsDraft { BrowserOptions options; BOOL history,clearHistory; } OptionsDraft;
 
@@ -176,12 +172,6 @@ static void CreatePages(HWND window,Options *state)
     Control(window,state,PAGE_HISTORY,"STATIC","",0,ID_OPTION_HISTORY_COUNT,26,166,316,22);
     Control(window,state,PAGE_HISTORY,"BUTTON","Clear history",WS_TABSTOP,ID_OPTION_CLEAR_HISTORY,26,198,152,23);
     Control(window,state,PAGE_HISTORY,"STATIC","",0,ID_OPTION_HISTORY_NOTE,26,240,316,58);
-    Control(window,state,PAGE_TYPES,"STATIC","Windows manages registered file types and the programs used to open them.",0,7108,26,60,316,58);
-    control=Control(window,state,PAGE_TYPES,"BUTTON","Windows folder options...",WS_TABSTOP,ID_OPTION_FILETYPES,26,134,244,23);
-    EnableWindow(control,state->fileTypes!=NULL);
-    Control(window,state,PAGE_TYPES,"STATIC",state->fileTypes ?
-        "Select File Types in the Windows dialog. Changes there apply to all programs and are saved by Windows." :
-        "The installed Windows does not provide the file type editor.",0,7109,26,184,316,76);
     HistoryState(window,state); ToolbarState(window);
 }
 static LRESULT CALLBACK OptionsProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
@@ -199,12 +189,6 @@ static LRESULT CALLBACK OptionsProc(HWND window,UINT message,WPARAM wp,LPARAM lp
         state->browser=(Browser *)((CREATESTRUCTA *)lp)->lpCreateParams; state->loading=TRUE;
         state->applied=state->browser->options; state->appliedHistory=BrowserHistoryEnabled();
         SetWindowLongPtrA(window,GWLP_USERDATA,(LONG_PTR)state);
-        state->fileTypes=(ShellOptionsEntry)(void *)GetProcAddress(GetModuleHandleA("shell32.dll"),"Options_RunDLLA");
-        if(!state->fileTypes) {
-            state->fileTypes=(ShellOptionsEntry)(void *)GetProcAddress(GetModuleHandleA("shell32.dll"),"Options_RunDLLW");
-            state->fileTypesWide=state->fileTypes!=NULL;
-        }
-        if(!state->fileTypes) state->fileTypes=(ShellOptionsEntry)(void *)GetProcAddress(GetModuleHandleA("shell32.dll"),"Options_RunDLL");
         control=BrowserControl(window,WC_TABCONTROLA,"",WS_TABSTOP|WS_CLIPSIBLINGS,ID_OPTION_TABS);
         MoveWindow(control,8,8,350,352,FALSE); ZeroMemory(&item,sizeof(item)); item.mask=TCIF_TEXT;
         for(i=0;i<PAGE_COUNT;++i) { item.pszText=(LPSTR)tabs[i]; SendMessageA(control,TCM_INSERTITEMA,i,(LPARAM)&item); }
@@ -233,10 +217,6 @@ static LRESULT CALLBACK OptionsProc(HWND window,UINT message,WPARAM wp,LPARAM lp
         if(LOWORD(wp)==IDCANCEL) { DestroyWindow(window); return 0; }
         if(LOWORD(wp)==IDOK || LOWORD(wp)==ID_OPTIONS_APPLY) {
             if(Apply(window,state) && LOWORD(wp)==IDOK) DestroyWindow(window);
-            return 0;
-        }
-        if(LOWORD(wp)==ID_OPTION_FILETYPES && state->fileTypes) {
-            ShellFolderOptionsShow(window,GetModuleHandleA("shell32.dll"),state->fileTypes,state->fileTypesWide);
             return 0;
         }
         if(LOWORD(wp)==ID_OPTION_CLEAR_HISTORY) { state->clearHistory=TRUE; HistoryState(window,state); }

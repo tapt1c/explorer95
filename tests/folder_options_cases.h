@@ -24,9 +24,9 @@ static void FolderOptionsPages(HWND window,const char *language)
     GetWindowRect(window,&outer); GetClientRect(window,&client); SystemParametersInfoA(SPI_GETWORKAREA,0,&work,0);
     Check(outer.right-outer.left<=400 && outer.bottom-outer.top<=448 && outer.left>=work.left && outer.top>=work.top && outer.right<=work.right && outer.bottom<=work.bottom,
         "the compact classic Folder Options fits the 640x480 work area");
-    Check(SendMessageA(tab,TCM_GETITEMCOUNT,0,0)==4 && SendMessageA(tab,TCM_GETROWCOUNT,0,0)==1,
-        "Folder Options has four native tabs in a single compact row");
-    for(page=0;page<4;++page) {
+    Check(SendMessageA(tab,TCM_GETITEMCOUNT,0,0)==3 && SendMessageA(tab,TCM_GETROWCOUNT,0,0)==1,
+        "Folder Options has only View, Toolbar and History tabs in a single compact row");
+    for(page=0;page<3;++page) {
         HWND child; BOOL inside=TRUE; char imagePath[MAX_PATH];
         SendMessageA(tab,TCM_SETCURFOCUS,page,0); PumpFor(80);
         for(child=GetWindow(window,GW_CHILD);child;child=GetWindow(child,GW_HWNDNEXT)) if(IsWindowVisible(child)) {
@@ -38,7 +38,6 @@ static void FolderOptionsPages(HWND window,const char *language)
         if(page==0) Check(IsWindowVisible(GetDlgItem(window,ID_OPTION_HIDDEN)) && !IsWindowVisible(GetDlgItem(window,ID_OPTION_TOOLBAR)),"View shows its own draft without leaking Toolbar controls");
         if(page==1) Check(IsWindowVisible(GetDlgItem(window,ID_OPTION_TOOLBAR)) && !IsWindowVisible(GetDlgItem(window,ID_OPTION_HISTORY)),"Toolbar has its own visibility, labels and optional command controls");
         if(page==2) Check(IsWindowVisible(GetDlgItem(window,ID_OPTION_CLEAR_HISTORY)) && !IsWindowVisible(GetDlgItem(window,ID_OPTION_VIEW)),"History has its own staged clear command");
-        if(page==3) Check(IsWindowVisible(GetDlgItem(window,567)) && !IsWindowVisible(GetDlgItem(window,ID_OPTION_LARGE)),"File Types exposes access to Windows settings without launching a system editor during tests");
         wsprintfA(imagePath,"build/folder-options-%s-%d.bmp",language,page); SaveScreen(imagePath);
     }
     SendMessageA(tab,TCM_SETCURFOCUS,0,0); PumpFor(50);

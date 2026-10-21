@@ -458,7 +458,6 @@
   "Installs and removes programs and Windows components.": "Установка и удаление программ и компонентов Windows.",
   "Cannot open this Control Panel item.": "Не удалось открыть этот элемент панели управления.",
   "Folder View": "Просмотр",
-  "File Types": "Типы файлов",
   "Hidden files": "Скрытые файлы",
   "Show all files": "Показывать все файлы",
   "Do not show hidden or system files": "Не показывать скрытые и системные файлы",
@@ -471,9 +470,5 @@
   "Saved visits: %d": "Сохранено посещений: %d",
   "The saved list will be cleared when you apply changes.": "Список посещений будет очищен после применения изменений.",
   "Clearing saved visits does not affect Back and Forward in open windows.": "Очистка журнала не затрагивает переходы «Назад» и «Вперёд» в открытых окнах.",
-  "Saved visits are shared by Explorer95 windows. Disabling this option clears the saved list when you apply changes.": "Окна Explorer95 используют общий журнал посещений. Отключение записи очистит журнал после применения изменений.",
-  "Windows manages registered file types and the programs used to open them.": "Зарегистрированные типы файлов и программы для их открытия настраиваются средствами Windows.",
-  "The installed Windows does not provide the file type editor.": "В установленной Windows системный редактор типов файлов недоступен.",
-  "Windows folder options...": "Параметры папок Windows...",
-  "Select File Types in the Windows dialog. Changes there apply to all programs and are saved by Windows.": "В окне Windows выберите «Типы файлов». Изменения там действуют для всех программ и сохраняются средствами Windows."
+  "Saved visits are shared by Explorer95 windows. Disabling this option clears the saved list when you apply changes.": "Окна Explorer95 используют общий журнал посещений. Отключение записи очистит журнал после применения изменений."
 }

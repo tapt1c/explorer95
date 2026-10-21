@@ -69,21 +69,8 @@ static HRESULT STDMETHODCALLTYPE EditProbeFolder(IShellFolder *self, HWND owner,
 }
 static IContextMenu2Vtbl editProbeMethods={EditProbeQuery,EditProbeAdd,EditProbeRelease,EditProbeMenu,
     EditProbeInvoke,EditProbeName,EditProbeMessage};
-static HWND optionsProbeOwner;
-static HINSTANCE optionsProbeModule;
-static BOOL optionsProbeWide,optionsProbeValid;
-static void WINAPI OptionsProbe(HWND owner,HINSTANCE module,LPVOID command,int show)
-{
-    BOOL folder=optionsProbeWide ? !lstrcmpW((const WCHAR *)command,L"0") : !lstrcmpA((const char *)command,"0");
-    optionsProbeValid=owner==optionsProbeOwner && module==optionsProbeModule && folder && show==SW_SHOWNORMAL;
-}
 static void ShellEditContractTests(HWND parent)
 {
-    optionsProbeOwner=parent; optionsProbeModule=GetModuleHandleA(NULL); optionsProbeValid=FALSE; optionsProbeWide=FALSE;
-    ShellFolderOptionsShow(parent,optionsProbeModule,OptionsProbe,FALSE);
-    Check(optionsProbeValid,"the ANSI system settings command selects folder options (0), never taskbar settings (1)");
-    optionsProbeValid=FALSE; optionsProbeWide=TRUE; ShellFolderOptionsShow(parent,optionsProbeModule,OptionsProbe,TRUE);
-    Check(optionsProbeValid,"the explicit Unicode system entry receives a complete wide folder-options command without opening host settings");
     IShellViewVtbl viewMethods; IShellFolderVtbl folderMethods; IShellView view; IShellFolder folder;
     IContextMenu *context; HMENU menu; HRESULT result; char text[256]; UINT state;
     ZeroMemory(&editProbe,sizeof(editProbe)); editProbe.valid=TRUE; editProbe.result=S_OK;

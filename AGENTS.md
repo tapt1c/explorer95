@@ -50,7 +50,7 @@ Explorer95 — любительская нативная оболочка для
 | `src/explorer95.c` | Точка входа `start`, минимальные реализации памяти без CRT, Run, основной цикл сообщений и подключение оболочки. |
 | `src/browser.h`, `src/browser_internal.h` | Публичные команды и внутреннее состояние Проводника: отдельные настройки, история, PIDL, дерево, файловые данные и уведомление каталога. |
 | `src/browser.c` | Общая рамка файловых и виртуальных папок, навигация, адрес, toolbar, меню, layout, настройки, клавиши и обновление открытого каталога. |
-| `src/browser_options.c`, `tests/folder_options_cases.h` | Компактные Folder View / Toolbar / History / File Types, независимые черновики, атомарный Apply/Cancel и native-переход к настройкам Windows. |
+| `src/browser_options.c`, `tests/folder_options_cases.h` | Компактные Folder View / Toolbar / History, независимые черновики и атомарный Apply/Cancel. |
 | `src/browser_toolbar.c` | Собственная GDI-полоса навигационных значков для штатного Win95 toolbar. |
 | `src/toolbar_compat.c/.h`, `tests/toolbar_compat_cases.h` | Индивидуальные размеры кнопок и запасной путь без TB_SETBUTTONINFO; реальные native-кнопки, состояния, клики, история и геометрия RU/EN. |
 | `src/browser_address.c` | Редактируемый Win95 ComboBox: значок текущей папки, owner-draw иерархия мест и очередь выбора. |
@@ -1027,7 +1027,7 @@ explorer95.exe --settings="C:\EX95TEST\Explorer95.ini"
 ## Проводник и совместимость файловых операций
 
 - Folder Options реализован отдельно в browser_options.c, класс окна прежний
-  Explorer95.FolderOptions. Страницы: 0 View, 1 Toolbar, 2 History, 3 File Types;
+  Explorer95.FolderOptions. Страницы: 0 View, 1 Toolbar, 2 History;
   Customize Toolbar сразу открывает страницу 1. Контролы и черновик принадлежат
   каждому окну, не используйте общие глобальные поля для нескольких Проводников.
   Общие OK/Cancel/Apply читают все страницы, Apply не закрывает окно, Cancel
@@ -1048,13 +1048,6 @@ explorer95.exe --settings="C:\EX95TEST\Explorer95.ini"
   Проверяйте пиксели радио/флажков и смену страниц, не только IsWindowVisible.
   Не добавляйте WS_CLIPCHILDREN самому окну; фон tab/group остаётся прозрачным
   на Win95. Native Tab может иметь другой цвет под Wine themes.
-  File Types открывает Options_RunDLL с параметром 0 (параметр 1 вызывает Taskbar,
-  это НЕ индекс страницы File Types). Пользователь выбирает File Types в штатном
-  окне. Выбирайте явный A, затем W, затем unsuffixed ANSI export; Wide-строка
-  нужна только для явного W, не выводите соглашение unsuffixed из GetVersion.
-  При отсутствии export кнопка отключена с объяснением; Explorer.exe ради неё
-  не запускается. Тест проверяет аргумент/ABI через инертный callback, без
-  запуска редактора типов/CPL хоста. Native Win95 editor проверяется в ВМ.
   Browser/full проверяют компактную геометрию, страницы, Apply/Cancel, отказ записи,
   очистку visits, новый заголовок и сохранность сторонних разделов; language/full
   проверяют те же страницы RU на английской системной кодовой странице.
