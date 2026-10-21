@@ -34,8 +34,15 @@ static void PaintEdges(HWND window, HDC dc)
                  * Native hot tracking is disabled, so hovering needs no paint. */
                 FlatEdge(dc, &rect);
                 if (button.fsStyle & TBSTYLE_DROPDOWN) {
-                    rect.left = rect.right - ARROW_WIDTH; rect.right = rect.left + 2;
-                    FillRect(dc, &rect, (HBRUSH)(COLOR_BTNFACE + 1));
+                    RECT arrow=rect,seam=rect;
+                    arrow.left=arrow.right-ARROW_WIDTH;
+                    /* A classic split has two adjacent raised frames, not
+                     * the flat control's two-pixel divider. Clear both frames
+                     * and its native glyph, then use the same arrow as legacy. */
+                    seam.left=arrow.left-2*GetSystemMetrics(SM_CXEDGE);
+                    if(seam.left<rect.left) seam.left=rect.left;
+                    FillRect(dc,&seam,(HBRUSH)(COLOR_BTNFACE+1));
+                    PaintArrow(dc,&arrow,DFCS_SCROLLDOWN,GetSysColor((button.fsState&TBSTATE_ENABLED) ? COLOR_BTNTEXT : COLOR_GRAYTEXT),TRUE);
                 }
             }
         }

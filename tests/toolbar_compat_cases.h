@@ -1,5 +1,5 @@
 #include "../src/toolbar_compat.h"
-static WNDPROC compactTestNative, compactTestOwner;
+static WNDPROC compactTestNative, compactTestOwner, compactTestFace;
 static int compactTestLie, compactTestCommand, compactTestDropdown, compactTestContext;
 static LRESULT CALLBACK CompactTestNative(HWND window, UINT message, WPARAM wp, LPARAM lp)
 {
@@ -43,6 +43,46 @@ static void ToolbarIdleMotionTest(HWND toolbar)
     Check(GetUpdateRect(toolbar,NULL,FALSE),"hover preserves real damage that was already waiting for repaint");
     DeleteObject(marker); RedrawWindow(toolbar,NULL,NULL,RDW_INVALIDATE|RDW_UPDATENOW);
 }
+static void ToolbarSplitFaceTest(HWND toolbar)
+{
+    RECT rect; HDC dc; int i,x,lines=0,ink=0;
+    RedrawWindow(toolbar,NULL,NULL,RDW_INVALIDATE|RDW_UPDATENOW);
+    dc=GetDC(toolbar);
+    for(i=0;i<3;++i) {
+        int y;
+        SendMessageA(toolbar,TB_GETITEMRECT,i==2 ? 4 : i,(LPARAM)&rect);
+        /* The top of the split seam contains neither caption nor glyph. */
+        for(x=rect.right-16;x<rect.right-2;++x)
+            if(GetPixel(dc,x,rect.top+3)!=GetSysColor(COLOR_BTNFACE)) ++lines;
+        for(y=rect.top+4;y<rect.bottom-4;++y) for(x=rect.right-9;x<rect.right-3;++x) {
+            COLORREF pixel=GetPixel(dc,x,y);
+            if(pixel!=CLR_INVALID && pixel!=GetSysColor(COLOR_BTNFACE)) ++ink;
+        }
+    }
+    ReleaseDC(toolbar,dc);
+    if(lines) SaveScreen("build/toolbar-split-face-failure.bmp");
+    Check(!lines && ink>6,"native dropdown faces have no raised split-seam stripes and retain visible arrows");
+}
+static LRESULT CALLBACK CompactTestClassicFace(HWND toolbar,UINT message,WPARAM wp,LPARAM lp)
+{
+    LRESULT result=CallWindowProcA(compactTestFace,toolbar,message,wp,lp);
+    /* Wine themes can hide the classic Win95 split seam. Model its two real
+     * adjacent DrawEdge frames beneath the production subclass; leave native
+     * input, rectangles, captions and glyphs intact. No theme API is required. */
+    if(message==WM_PAINT) {
+        HDC dc=GetDC(toolbar); int i,count=(int)SendMessageA(toolbar,TB_BUTTONCOUNT,0,0);
+        for(i=0;i<count;++i) {
+            TBBUTTON button; RECT body,arrow;
+            SendMessageA(toolbar,TB_GETBUTTON,i,(LPARAM)&button);
+            if(!(button.fsStyle&TBSTYLE_DROPDOWN) || (button.fsState&(TBSTATE_PRESSED|TBSTATE_CHECKED))) continue;
+            SendMessageA(toolbar,TB_GETITEMRECT,i,(LPARAM)&body); arrow=body;
+            body.right-=13; arrow.left=body.right;
+            DrawEdge(dc,&body,EDGE_RAISED,BF_RECT); DrawEdge(dc,&arrow,EDGE_RAISED,BF_RECT);
+        }
+        ReleaseDC(toolbar,dc);
+    }
+    return result;
+}
 static void ToolbarCompatTests(HWND parent)
 {
     int mode;
@@ -62,7 +102,7 @@ static void ToolbarCompatTests(HWND parent)
         dc=GetDC(toolbar); old=SelectObject(dc,(HFONT)SendMessageA(toolbar,WM_GETFONT,0,0));
         for(i=0;i<5;++i) {
             TBBUTTON button; SIZE text={0,0}; char label[80]; ZeroMemory(&button,sizeof(button)); ZeroMemory(label,sizeof(label));
-            captions[i]=mode>=2 ? "" : UiText(names[i]);
+            captions[i]=mode>=2 && mode<4 ? "" : UiText(names[i]);
             lstrcpynA(label,captions[i],sizeof(label)-1); GetTextExtentPoint32A(dc,label,lstrlenA(label),&text);
             widths[i]=i==3 ? 8 : size+8+(text.cx ? text.cx+4 : 0)+((i==0 || i==1 || i==4) ? 12 : 0);
             button.idCommand=i==3 ? 0 : 10+i; button.fsStyle=i==3 ? TBSTYLE_SEP : i==4 ? TBSTYLE_CHECK : TBSTYLE_BUTTON;
@@ -75,11 +115,15 @@ static void ToolbarCompatTests(HWND parent)
         SendMessageA(toolbar,TB_SETBUTTONSIZE,0,MAKELONG(90,size+8));
         compactTestLie=mode&1;
         if(mode<4) compactTestNative=(WNDPROC)SetWindowLongPtrA(toolbar,GWLP_WNDPROC,(LONG_PTR)CompactTestNative);
-        else SendMessageA(toolbar,TB_SETEXTENDEDSTYLE,0,TBSTYLE_EX_DRAWDDARROWS);
+        else {
+            compactTestFace=(WNDPROC)SetWindowLongPtrA(toolbar,GWLP_WNDPROC,(LONG_PTR)CompactTestClassicFace);
+            SendMessageA(toolbar,TB_SETEXTENDEDSTYLE,0,TBSTYLE_EX_DRAWDDARROWS);
+        }
         Check(ToolbarCompact(toolbar,size,5,widths,captions,&images,1) && (mode>=4 || ToolbarCompactLegacy(toolbar)),
             mode<4 ? "missing or ineffective per-button sizing takes the legacy native-button path" :
                      "unmodified Common Controls retain their supported toolbar sizing path");
         if(!ToolbarCompactLegacy(toolbar)) {
+            ToolbarSplitFaceTest(toolbar);
             ToolbarIdleMotionTest(toolbar);
             DestroyWindow(owner); continue;
         }
@@ -167,7 +211,7 @@ static void ToolbarCompatTests(HWND parent)
 static void BrowserToolbarGeometry(HWND browser,HANDLE target,int size)
 {
     HWND toolbar=GetDlgItem(browser,470); RECT rect,client; const int commands[]={ID_FORWARD,ID_UP,ID_REFRESH,ID_SEARCH,ID_FOLDERS,ID_HISTORY};
-    void *remote=VirtualAllocEx(target,NULL,sizeof(RECT),MEM_COMMIT|MEM_RESERVE,PAGE_READWRITE); int i, right=0;
+    void *remote=VirtualAllocEx(target,NULL,sizeof(RECT),MEM_COMMIT|MEM_RESERVE,PAGE_READWRITE); int i,right=0,extent=0;
     Check(toolbar && remote,"inspect the actual application's toolbar geometry in its own address space");
     GetClientRect(toolbar,&client);
     for(i=0;i<6;++i) {
@@ -180,5 +224,11 @@ static void BrowserToolbarGeometry(HWND browser,HANDLE target,int size)
         if(rect.right>right) right=rect.right;
     }
     Check(right<500,"the default navigation tools fit a compact single toolbar row at 640 pixels");
+    for(i=0;i<(int)SendMessageA(toolbar,TB_BUTTONCOUNT,0,0);++i) {
+        Check(SendMessageA(toolbar,TB_GETITEMRECT,i,(LPARAM)remote) && ReadProcessMemory(target,remote,&rect,sizeof(rect),NULL),
+              "read the complete toolbar row extent");
+        if(rect.bottom>extent) extent=rect.bottom;
+    }
+    Check(client.bottom-extent==1,"the toolbar leaves only one pixel below its actual buttons");
     VirtualFreeEx(target,remote,0,MEM_RELEASE);
 }

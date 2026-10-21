@@ -283,7 +283,8 @@ void BrowserLayout(Browser *browser)
         /* Wrapped separators can make TB_AUTOSIZE reserve empty trailing rows.
          * Fit the actual Win95 button rectangles instead. */
         for (i = 0; i < count; ++i) if (SendMessageA(browser->toolbar, TB_GETITEMRECT, i, (LPARAM)&tool) && tool.bottom > extent) extent = tool.bottom;
-        EnvMoveControl(browser->toolbar, 0, 0, width, extent + 3); top = extent + 7;
+        /* One pixel below the real button row, then the frame's divider. */
+        EnvMoveControl(browser->toolbar, 0, 0, width, extent + 1); top = extent + 5;
         SetRect(&browser->toolbarLine, 0, top - 3, width, top - 1);
     }
     EnvShowControl(browser->address, browser->options.address);
