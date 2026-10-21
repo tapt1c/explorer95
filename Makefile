@@ -19,6 +19,7 @@ TEST_SOURCES = src/font_resource.c src/localization.c src/toolbar_compat.c tests
 SOURCES += src/task_groups.c
 SOURCES += src/task_switch.c
 SOURCES += src/task_switch_native.c
+SOURCES += src/browser_control_panel.c
 SOURCES += src/shutdown_dos.c
 TEST_SOURCES += src/shutdown_dos.c
 OBJECTS = $(SOURCES:%.c=build/obj32/%.o)

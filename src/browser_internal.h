@@ -45,10 +45,11 @@ typedef struct BrowserVisit { char target[MAX_PATH], label[MAX_PATH]; } BrowserV
 typedef struct BrowserSidebar BrowserSidebar;
 typedef struct BrowserSearch BrowserSearch;
 typedef struct BrowserAddress BrowserAddress;
+typedef struct BrowserControlPanel BrowserControlPanel;
 typedef struct BrowserOptions {
     int view, treeWidth, pane;
     UINT extraTools;
-    BOOL toolbar, address, status, labels, largeTools, hidden, extensions;
+    BOOL toolbar, address, status, labels, largeTools, hidden, extensions, controlSimple;
 } BrowserOptions;
 typedef struct TreeNode {
     struct TreeNode *next;
@@ -71,6 +72,7 @@ typedef struct Browser {
     BrowserSidebar *sidebar;
     BrowserSearch *search;
     BrowserAddress *location;
+    BrowserControlPanel *controlPanel;
     IContextMenu2 *context;
     ShellNew *newMenu;
     FileDrop *fileDrop;
@@ -88,7 +90,7 @@ typedef struct Browser {
     HBITMAP toolbarImages;
     TreeNode *nodes;
     HTREEITEM computer;
-    BOOL treeSync, dragging, closing, layouting, busy, changingColors, recycleBin, computerFolder, concealed;
+    BOOL treeSync, dragging, closing, layouting, busy, changingColors, recycleBin, computerFolder, controlFolder, concealed;
     HWND concealedText, reveal;
     HANDLE watch;
     int sort; BOOL descending;
@@ -140,6 +142,16 @@ void BrowserSidebarLocationChanged(Browser *browser);
 void BrowserSidebarDestroy(Browser *browser);
 HWND BrowserSidebarWindow(Browser *browser);
 BOOL BrowserSearchCommand(Browser *browser, int command, int notification);
+BOOL BrowserControlPanelRegister(void);
+void BrowserControlPanelLocationChanged(Browser *browser);
+void BrowserControlPanelDestroy(Browser *browser);
+BOOL BrowserControlPanelVisible(Browser *browser);
+HWND BrowserControlPanelWindow(Browser *browser);
+void BrowserControlPanelLayout(Browser *browser, const RECT *rect);
+BOOL BrowserControlPanelCommand(Browser *browser, int command);
+BOOL BrowserControlPanelTranslate(Browser *browser, MSG *message);
+void BrowserControlPanelRefresh(Browser *browser);
+BOOL BrowserOpenApplet(Browser *browser, const char *file);
 BOOL BrowserSearchCreate(Browser *browser, HWND parent);
 BOOL BrowserSearchRegister(void);
 BOOL BrowserSearchTranslate(MSG *message);

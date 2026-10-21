@@ -135,7 +135,7 @@ static void BuildTasks(Browser *browser)
         }
     }
     folder = !!(selected.capabilities & SFGAO_FOLDER);
-    if (browser->concealed) ZeroMemory(&selected, sizeof(selected));
+    if (browser->concealed || BrowserControlPanelVisible(browser)) ZeroMemory(&selected, sizeof(selected));
     wsprintfA(key, "%s|%d|%s", selected.count ? selected.path : browser->path, selected.count, folder ? "D" : "F");
     if (lstrcmpiA(s->actionKey, key)) {
         lstrcpyA(s->actionKey, key);
@@ -154,6 +154,10 @@ static void BuildTasks(Browser *browser)
         Link(browser, 0, TASK_PROGRAMS, 2, "Add or remove programs");
         if (root) Link(browser, 0, ID_SEARCH, 3, "Search for files or folders");
         else Link(browser, 0, TASK_CONTROL, 2, "Change a setting");
+    } else if (browser->controlFolder) {
+        Header(browser, 0, "Control Panel");
+        Link(browser, 0, BrowserControlPanelVisible(browser) ? ID_CONTROL_ALL : ID_CONTROL_SIMPLE, 2,
+            BrowserControlPanelVisible(browser) ? "View all Control Panel options" : "Simple Control Panel");
     } else if (browser->recycleBin) {
         Header(browser, 0, "Recycle Bin Tasks");
         if (ListView_GetItemCount(NativeViewList(browser->native))) Link(browser, 0, ID_EMPTY_RECYCLE, 7, "Empty the Recycle Bin");
@@ -344,13 +348,7 @@ void BrowserSidebarLayout(Browser *browser, int x, int y, int width, int height)
 static void TaskCommand(Browser *browser, int command)
 {
     if (command == TASK_SYSTEM || command == TASK_PROGRAMS) {
-        char directory[MAX_PATH], executable[MAX_PATH];
-        GetSystemDirectoryA(directory, MAX_PATH);
-        if (!EnvJoin(executable, directory, "control.exe")) return;
-        if (GetFileAttributesA(executable) == INVALID_FILE_ATTRIBUTES) {
-            GetWindowsDirectoryA(directory, MAX_PATH); if (!EnvJoin(executable, directory, "control.exe")) return;
-        }
-        EnvironmentLaunch(browser->window, executable, command == TASK_SYSTEM ? "sysdm.cpl" : "appwiz.cpl", NULL);
+        BrowserOpenApplet(browser, command == TASK_SYSTEM ? "sysdm.cpl" : "appwiz.cpl");
     } else if (command == TASK_CONTROL || command == TASK_NETWORK || command == TASK_SHARED)
         BrowserSpecial(browser, command == TASK_CONTROL ? CSIDL_CONTROLS : command == TASK_NETWORK ? CSIDL_NETWORK : CSIDL_COMMON_DOCUMENTS);
     else if (command == TASK_SHARE || command == TASK_PUBLISH || command == TASK_MAIL) {

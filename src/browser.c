@@ -56,6 +56,7 @@ static void LoadOptions(BrowserOptions *options)
     options->address = !!Option(optionKeys[2], TRUE); options->status = !!Option(optionKeys[3], TRUE);
     options->labels = !!Option(optionKeys[4], TRUE); options->largeTools = !!Option(optionKeys[5], FALSE);
     options->hidden = !!Option(optionKeys[6], FALSE); options->extensions = !!Option(optionKeys[7], TRUE);
+    options->controlSimple = !!Option("ControlPanelSimple", TRUE);
 }
 static void SaveNumber(const char *name, int number)
 {
@@ -69,6 +70,7 @@ void BrowserSaveOptions(const BrowserOptions *options)
     SaveNumber(optionKeys[2], options->address); SaveNumber(optionKeys[3], options->status);
     SaveNumber(optionKeys[4], options->labels); SaveNumber(optionKeys[5], options->largeTools);
     SaveNumber(optionKeys[6], options->hidden); SaveNumber(optionKeys[7], options->extensions);
+    SaveNumber("ControlPanelSimple", options->controlSimple);
 }
 static BOOL CanUp(Browser *browser) { return browser->path[0] || (browser->pidl && browser->pidl->mkid.cb); }
 void BrowserUpdate(Browser *browser)
@@ -76,7 +78,7 @@ void BrowserUpdate(Browser *browser)
     int i, selected;
     if (browser->closing) return;
     selected = browser->native ? ListView_GetSelectedCount(NativeViewList(browser->native)) : ListView_GetSelectedCount(browser->files);
-    if (browser->concealed) selected = 0;
+    if (browser->concealed || BrowserControlPanelVisible(browser)) selected = 0;
     HMENU menu = GetMenu(browser->window);
     const int commands[] = {ID_BACK, ID_FORWARD, ID_UP, ID_COPY, ID_CUT, ID_PASTE, ID_DELETE, ID_RENAME, ID_FILE_PROPERTIES};
     BOOL states[9];
@@ -84,6 +86,8 @@ void BrowserUpdate(Browser *browser)
     states[2] = CanUp(browser); states[3] = states[4] = states[6] = states[7] = selected > 0;
     states[5] = IsClipboardFormatAvailable(CF_HDROP);
     states[8] = !browser->native || selected > 0;
+    if (BrowserControlPanelVisible(browser)) states[5] = FALSE;
+    EnableMenuItem(menu, ID_SELECTALL, MF_BYCOMMAND | (BrowserControlPanelVisible(browser) ? MF_GRAYED : MF_ENABLED));
     if (browser->recycleBin) {
         states[3] = states[4] = states[5] = states[7] = FALSE;
         states[6] = selected > 0 && !browser->busy;
@@ -105,6 +109,10 @@ void BrowserUpdate(Browser *browser)
     CheckMenuItem(menu, ID_SHOW_ADDRESS, MF_BYCOMMAND | (browser->options.address ? MF_CHECKED : MF_UNCHECKED));
     CheckMenuItem(menu, ID_SHOW_STATUS, MF_BYCOMMAND | (browser->options.status ? MF_CHECKED : MF_UNCHECKED));
     CheckMenuItem(menu, ID_SHOW_HIDDEN, MF_BYCOMMAND | (browser->options.hidden ? MF_CHECKED : MF_UNCHECKED));
+    EnableMenuItem(menu, ID_CONTROL_SIMPLE, MF_BYCOMMAND | (browser->controlFolder ? MF_ENABLED : MF_GRAYED));
+    EnableMenuItem(menu, ID_CONTROL_ALL, MF_BYCOMMAND | (browser->controlFolder ? MF_ENABLED : MF_GRAYED));
+    CheckMenuItem(menu, ID_CONTROL_SIMPLE, MF_BYCOMMAND | (BrowserControlPanelVisible(browser) ? MF_CHECKED : MF_UNCHECKED));
+    CheckMenuItem(menu, ID_CONTROL_ALL, MF_BYCOMMAND | (browser->controlFolder && !BrowserControlPanelVisible(browser) ? MF_CHECKED : MF_UNCHECKED));
     for (i = 0; i < 6; ++i) CheckMenuItem(menu, ID_VIEW_ICONS + i, MF_BYCOMMAND | ((browser->native && browser->options.view > 3 ? 0 : browser->options.view) == i ? MF_CHECKED : MF_UNCHECKED));
     for (i = ID_SORT_NAME; i <= ID_SORT_REVERSE; ++i) EnableMenuItem(menu, i, MF_BYCOMMAND | (browser->native ? MF_GRAYED : MF_ENABLED));
     EnableMenuItem(menu, ID_VIEW_TILES, MF_BYCOMMAND | (browser->native ? MF_GRAYED : MF_ENABLED));
@@ -215,7 +223,7 @@ static BOOL SameLayoutOptions(const BrowserOptions *a, const BrowserOptions *b)
     return a->view == b->view && a->treeWidth == b->treeWidth && a->pane == b->pane &&
         a->toolbar == b->toolbar && a->address == b->address && a->status == b->status &&
         a->labels == b->labels && a->largeTools == b->largeTools && a->extraTools == b->extraTools &&
-        a->hidden == b->hidden && a->extensions == b->extensions;
+        a->hidden == b->hidden && a->extensions == b->extensions && a->controlSimple == b->controlSimple;
 }
 /* Navigation, pane changes and layout nest. Keep the last complete image
  * visible until the outer operation has placed and populated every child.
@@ -249,6 +257,7 @@ static void CaptionMetrics(Browser *browser)
 void BrowserLayout(Browser *browser)
 {
     RECT rect, tool, previous; BOOL toolbarSized = FALSE; int top = 0, bottom, width, sidebar = 0, height;
+    BOOL simple = BrowserControlPanelVisible(browser);
     if (browser->closing || browser->layouting) return;
     GetClientRect(browser->window, &rect); width = rect.right; bottom = rect.bottom;
     if (browser->layoutValid && browser->layoutClient.right == rect.right && browser->layoutClient.bottom == rect.bottom &&
@@ -320,7 +329,8 @@ void BrowserLayout(Browser *browser)
     else { EnvMoveControl(browser->files, sidebar, top, width > sidebar ? width - sidebar : 1, height);
         if (browser->options.view == 4) ListView_SetColumnWidth(browser->files, 0, width - sidebar - 6);
         BrowserFilesArrange(browser); }
-    if (browser->native) EnvShowControl(NativeViewWindow(browser->native), !browser->concealed);
+    { RECT content; SetRect(&content, sidebar, top, width, top + height); BrowserControlPanelLayout(browser, &content); }
+    if (browser->native) EnvShowControl(NativeViewWindow(browser->native), !browser->concealed && !simple);
     else EnvShowControl(browser->files, !browser->concealed);
     EnvShowControl(browser->concealedText, browser->concealed); EnvShowControl(browser->reveal, browser->concealed);
     if (browser->concealed) {
@@ -406,12 +416,15 @@ BOOL BrowserNavigate(Browser *browser, const char *requested, LPCITEMIDLIST pidl
     else SendMessageA(browser->files, WM_SETREDRAW, FALSE, 0);
     ListView_DeleteAllItems(browser->files); BrowserFilesFree(browser->entries); browser->entries = entries;
     EnvFree(browser->pidl); browser->pidl = absolute; lstrcpyA(browser->path, path);
-    browser->recycleBin = browser->computerFolder = browser->concealed = FALSE;
+    browser->recycleBin = browser->computerFolder = browser->controlFolder = browser->concealed = FALSE;
     if (absolute) {
         LPITEMIDLIST bin = NULL;
         browser->recycleBin = NativeViewIsRecycleBin(native);
         if (SUCCEEDED(SHGetSpecialFolderLocation(browser->window, CSIDL_DRIVES, &bin))) {
             browser->computerFolder = BrowserSamePidl(absolute, bin); CoTaskMemFree(bin);
+        }
+        if (SUCCEEDED(SHGetSpecialFolderLocation(browser->window, CSIDL_CONTROLS, &bin))) {
+            browser->controlFolder = BrowserSamePidl(absolute, bin); CoTaskMemFree(bin);
         }
     }
     if (native) {
@@ -421,17 +434,18 @@ BOOL BrowserNavigate(Browser *browser, const char *requested, LPCITEMIDLIST pidl
         SetWindowTextA(browser->status, "System folder");
     } else { BrowserFilesShow(browser); wsprintfA(title, "%s - Explorer95", path); }
     SetWindowTextA(browser->window, title); BrowserAddressUpdate(browser);
+    BrowserControlPanelLocationChanged(browser);
     if (!same) BrowserHistoryRecord(browser);
     BrowserSidebarLocationChanged(browser);
     if (wasBin != browser->recycleBin) BrowserBuildToolbar(browser);
     BrowserTreeSync(browser); BrowserLayout(browser); BrowserUpdate(browser);
     BrowserEndUpdate(browser);
-    if (restoreFocus) SetFocus(browser->native ? NativeViewList(browser->native) : browser->files);
+    if (restoreFocus) SetFocus(BrowserControlPanelVisible(browser) ? BrowserControlPanelWindow(browser) : browser->native ? NativeViewList(browser->native) : browser->files);
     return TRUE;
 }
 void BrowserRefresh(Browser *browser)
 {
-    if (browser->native) { NativeViewRefresh(browser->native); BrowserUpdate(browser); }
+    if (browser->native) { NativeViewRefresh(browser->native); BrowserControlPanelRefresh(browser); BrowserUpdate(browser); }
     else if (browser->path[0]) {
         typedef struct SavedSelection { char name[MAX_PATH]; BOOL focused, folder; } SavedSelection;
         int count = ListView_GetSelectedCount(browser->files), used = 0, index = -1, i;
@@ -528,6 +542,11 @@ static HMENU ViewChoices(void)
 void BrowserViewsPopup(Browser *browser)
 {
     HMENU menu = ViewChoices(); RECT rect; int command, i, index;
+    if (browser->controlFolder) {
+        AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
+        AppendMenuA(menu, MF_STRING | (BrowserControlPanelVisible(browser) ? MF_CHECKED : 0), ID_CONTROL_SIMPLE, "Simple Control Panel");
+        AppendMenuA(menu, MF_STRING | (!BrowserControlPanelVisible(browser) ? MF_CHECKED : 0), ID_CONTROL_ALL, "All Control Panel options");
+    }
     for (i = 0; i < 6; ++i) CheckMenuItem(menu, ID_VIEW_ICONS + i, MF_BYCOMMAND | (i == (browser->native && browser->options.view > 3 ? 0 : browser->options.view) ? MF_CHECKED : MF_UNCHECKED));
     if (browser->native) { EnableMenuItem(menu, ID_VIEW_TILES, MF_BYCOMMAND | MF_GRAYED); EnableMenuItem(menu, ID_VIEW_THUMBNAILS, MF_BYCOMMAND | MF_GRAYED); }
     index = (int)SendMessageA(browser->toolbar, TB_COMMANDTOINDEX, ID_VIEWS, 0);
@@ -572,6 +591,9 @@ static void BuildMenu(Browser *browser)
     AppendMenuA(edit, MF_STRING, ID_PASTE, "&Paste\tCtrl+V"); AppendMenuA(edit, MF_STRING, ID_DELETE, "&Delete\tDel");
     AppendMenuA(edit, MF_STRING, ID_RENAME, "&Rename\tF2"); AppendMenuA(edit, MF_SEPARATOR, 0, NULL); AppendMenuA(edit, MF_STRING, ID_SELECTALL, "Select &All\tCtrl+A");
     browser->viewMenu = ViewChoices(); AppendMenuA(view, MF_POPUP, (UINT_PTR)browser->viewMenu, "&Views");
+    AppendMenuA(view, MF_SEPARATOR, 0, NULL);
+    AppendMenuA(view, MF_STRING, ID_CONTROL_SIMPLE, "Simple Control Panel");
+    AppendMenuA(view, MF_STRING, ID_CONTROL_ALL, "All Control Panel options");
     AppendMenuA(view, MF_STRING, ID_TASKS, "Common &Tasks");
     AppendMenuA(view, MF_STRING, ID_FOLDERS, "&Folders");
     AppendMenuA(view, MF_STRING, ID_SEARCH, "&Search\tCtrl+E");
@@ -605,6 +627,7 @@ void BrowserSetPane(Browser *browser, int pane)
 }
 static void Command(Browser *browser, int command)
 {
+    if (BrowserControlPanelCommand(browser, command)) return;
     if (command == ID_GO) AddressGo(browser);
     else if (command == ID_UP) Up(browser);
     else if (command == ID_BACK || command == ID_FORWARD) {
@@ -658,9 +681,11 @@ static void Command(Browser *browser, int command)
     } else if (command == ID_VIEWS) BrowserViewsPopup(browser);
     else if (command >= ID_VIEW_ICONS && command <= ID_VIEW_THUMBNAILS) {
         int previous = browser->options.view;
+        BOOL previousSimple = browser->options.controlSimple;
         if (browser->native && command > ID_VIEW_DETAILS) return;
         browser->options.view = command - ID_VIEW_ICONS;
-        if (browser->native) { if (!BrowserNavigate(browser, NULL, browser->pidl, browser->historyIndex)) browser->options.view = previous; }
+        if (browser->controlFolder) browser->options.controlSimple = FALSE;
+        if (browser->native) { if (!BrowserNavigate(browser, NULL, browser->pidl, browser->historyIndex)) { browser->options.view = previous; browser->options.controlSimple = previousSimple; } }
         else if (previous == 5 || browser->options.view == 5) BrowserFilesShow(browser); else BrowserFilesMode(browser);
         BrowserSaveOptions(&browser->options); BrowserUpdate(browser);
     } else if (command == ID_SHOW_TOOLBAR || command == ID_SHOW_ADDRESS || command == ID_SHOW_STATUS) {
@@ -749,7 +774,7 @@ static LRESULT CALLBACK BrowserProc(HWND window, UINT message, WPARAM wp, LPARAM
         }
         break;
     case WM_GETMINMAXINFO: ((MINMAXINFO *)lp)->ptMinTrackSize.x = 400; ((MINMAXINFO *)lp)->ptMinTrackSize.y = 280; return 0;
-    case WM_SETFOCUS: if (browser) SetFocus(browser->native ? NativeViewList(browser->native) : browser->files); return 0;
+    case WM_SETFOCUS: if (browser) SetFocus(BrowserControlPanelVisible(browser) ? BrowserControlPanelWindow(browser) : browser->native ? NativeViewList(browser->native) : browser->files); return 0;
     case WM_INITMENUPOPUP: if (browser) { BrowserUpdate(browser); if ((HMENU)wp == browser->favoritesMenu) FavoritesMenu(browser); } return 0;
     case WM_COMMAND:
         if (!browser) break;
@@ -887,7 +912,7 @@ static LRESULT CALLBACK BrowserProc(HWND window, UINT message, WPARAM wp, LPARAM
         if (browser) {
             int i; browser->closing = TRUE; KillTimer(window, 10);
             FileDropRevoke(browser->fileDrop); browser->fileDrop=NULL;
-            BrowserAddressDestroy(browser); BrowserSearchDestroy(browser); BrowserSidebarDestroy(browser);
+            BrowserAddressDestroy(browser); BrowserSearchDestroy(browser); BrowserSidebarDestroy(browser); BrowserControlPanelDestroy(browser);
             if (browser->toolbar) DestroyWindow(browser->toolbar);
             if (browser->toolbarImages) DeleteObject(browser->toolbarImages);
             if (browser->watch) FindCloseChangeNotification(browser->watch);
@@ -1069,7 +1094,7 @@ BOOL BrowserRegister(HINSTANCE instance, HFONT font)
     cls.lpszClassName = BROWSER_CLASS; if (!RegisterClassA(&cls)) return FALSE;
     cls.lpszClassName = BROWSER_NAMESPACE_CLASS; if (!RegisterClassA(&cls)) return FALSE;
     cls.lpszClassName = optionsClass; cls.lpfnWndProc = OptionsProc;
-    return RegisterClassA(&cls) != 0 && BrowserSidebarRegister() && BrowserSearchRegister();
+    return RegisterClassA(&cls) != 0 && BrowserSidebarRegister() && BrowserSearchRegister() && BrowserControlPanelRegister();
 }
 BOOL BrowserTranslate(MSG *message)
 {
@@ -1083,6 +1108,7 @@ BOOL BrowserTranslate(MSG *message)
       } }
     if (!BrowserIsWindow(root)) return FALSE;
     browser = (Browser *)GetWindowLongPtrA(root, GWLP_USERDATA); if (!browser) return FALSE;
+    if (BrowserControlPanelTranslate(browser, message)) return TRUE;
     address = message->hwnd == browser->address || IsChild(browser->address, message->hwnd);
     if ((message->message == WM_SYSKEYDOWN && message->wParam == 'D') ||
         (message->message == WM_KEYDOWN && ((message->wParam == 'L' && (GetKeyState(VK_CONTROL) & 0x8000)) || message->wParam == VK_F4))) {
@@ -1106,6 +1132,10 @@ BOOL BrowserTranslate(MSG *message)
         }
         if (inSidebar && !command) {
             if (message->wParam == VK_ESCAPE && browser->options.pane == BROWSER_PANE_SEARCH) { BrowserSearchStop(browser, FALSE); return TRUE; }
+            if (message->wParam == VK_RETURN) {
+                char kind[16]; GetClassNameA(message->hwnd, kind, sizeof(kind));
+                if (!lstrcmpiA(kind, "BUTTON")) { SendMessageA(message->hwnd, BM_CLICK, 0, 0); return TRUE; }
+            }
             if (message->wParam == VK_RETURN && (GetDlgCtrlID(message->hwnd) == ID_SEARCH_NAME || GetDlgCtrlID(message->hwnd) == ID_SEARCH_SCOPE)) {
                 BrowserSearchCommand(browser, ID_SEARCH_START, BN_CLICKED); return TRUE;
             }

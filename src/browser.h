@@ -65,6 +65,10 @@
 #define BROWSER_SEARCH_CLASS "Explorer95.SearchResults"
 #define ID_HISTORY_LIST 570
 #define ID_HISTORY_CLEAR 571
+#define ID_CONTROL_SIMPLE 575
+#define ID_CONTROL_ALL 576
+#define ID_CONTROL_PAGE 577
+#define ID_CONTROL_ITEM 5780
 
 BOOL BrowserRegister(HINSTANCE instance, HFONT font);
 HWND BrowserOpen(const char *path);

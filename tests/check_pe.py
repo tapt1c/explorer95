@@ -57,7 +57,7 @@ ALLOWED = {
     "user32.dll": set("""
         CreateIconIndirect
         SetWindowsHookExA CallNextHookEx UnhookWindowsHookEx
-        CharUpperBuffA SetScrollInfo IsRectEmpty SetRectEmpty OffsetRect
+        CharUpperBuffA SetScrollInfo GetScrollInfo IsRectEmpty SetRectEmpty OffsetRect
         AdjustWindowRectEx EnableWindow CheckMenuItem ClientToScreen CloseClipboard DeleteMenu EmptyClipboard EnableMenuItem
         GetClipboardData GetMenu SetMenuDefaultItem GetMenuDefaultItem GetMenuItemID IsClipboardFormatAvailable OpenClipboard RegisterClipboardFormatA SetClipboardData
         AppendMenuA CreateMenu CreatePopupMenu CreateWindowExA DefWindowProcA

@@ -296,6 +296,18 @@ static void LanguageRestartTests(const char *directory,const char *executable)
         Check(options!=NULL,"open Russian Explorer options independently of environment settings"); PumpFor(200); SaveScreen("build/language-browser-options-ru.bmp");
         SendDlgItemMessageA(options,491,BM_SETCHECK,BST_CHECKED,0); SendMessageA(options,WM_COMMAND,IDOK,0); PumpFor(150);
         BrowserToolbarGeometry(browser,process.hProcess,24); SaveScreen("build/language-toolbar-large-ru.bmp");
+        {
+            HWND control=OpenControlTestWindow(),page=GetDlgItem(control,ID_CONTROL_PAGE);
+            HWND sidebar=GetDlgItem(control,ID_BROWSER_SIDEBAR);
+            Check(page && IsWindowVisible(page) && IsWindowVisible(sidebar),"Russian simple Control Panel keeps its common tasks beside the applets");
+            Check(LanguageWideEqual(PaneControl(page,ID_CONTROL_ITEM+1),L"\u0414\u0430\u0442\u0430 \u0438 \u0432\u0440\u0435\u043c\u044f"),
+                "the simple Control Panel translates applet labels on an English system");
+            Check(LanguageWideEqual(PaneControl(sidebar,6101),L"\u041f\u043e\u043a\u0430\u0437\u0430\u0442\u044c \u0432\u0441\u0435 \u044d\u043b\u0435\u043c\u0435\u043d\u0442\u044b \u043f\u0430\u043d\u0435\u043b\u0438 \u0443\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u044f"),
+                "the normal task sidebar provides the translated all-options link");
+            ShowWindow(control,SW_RESTORE); MoveWindow(control,0,0,640,480,TRUE); PumpFor(100);
+            SaveScreen("build/control-panel-simple-ru.bmp");
+            SendMessageA(control,WM_CLOSE,0,0); PumpFor(80);
+        }
         SendMessageA(browser,WM_COMMAND,ID_BROWSER_OPTIONS,0); options=WaitFor("Explorer95.FolderOptions",NULL);
         SendDlgItemMessageA(options,491,BM_SETCHECK,BST_UNCHECKED,0); SendMessageA(options,WM_COMMAND,IDOK,0);
         SendMessageA(browser,WM_CLOSE,0,0); PumpFor(200);

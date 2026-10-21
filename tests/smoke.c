@@ -803,10 +803,12 @@ static void NativeFolderTests(HWND menu)
 {
     HWND frame, view, list; int pass;
     for (pass = 0; pass < 2; ++pass) {
-        DWORD started; int samples = 0;
+        DWORD started; int samples = 0; BOOL simple;
         SendMessageA(menu, WM_COMMAND, 304, 0);
         frame = WaitFor("Explorer95.Namespace", NULL);
         Check(frame != NULL, "Start opens the native Control Panel window");
+        simple = IsWindowVisible(GetDlgItem(frame, ID_CONTROL_PAGE));
+        SendMessageA(frame, WM_COMMAND, ID_CONTROL_ALL, 0);
         view = FindWindowExA(frame, NULL, "SHELLDLL_DefView", NULL);
         list = FindWindowExA(view, NULL, WC_LISTVIEWA, NULL);
         Check(view && list, "native folder contains the actual Shell32 list view");
@@ -835,6 +837,7 @@ static void NativeFolderTests(HWND menu)
           Check(cover != NULL && PaintedSamples(list) >= 8, "native icons recover after an overlapping window is removed"); }
         MoveWindow(frame, 30, 30, 420, 300, TRUE); Sleep(150);
         Check(PaintedSamples(list) >= 8, "native icons remain painted after resizing");
+        if (simple) SendMessageA(frame, WM_COMMAND, ID_CONTROL_SIMPLE, 0);
         SendMessageA(frame, WM_CLOSE, 0, 0);
         Check(!IsWindow(frame), "native folder closes cleanly before reopening");
     }
@@ -1014,6 +1017,7 @@ static void PumpFor(DWORD duration)
 #include "task_groups_cases.h"
 #include "task_switch_cases.h"
 #include "browser_panes_cases.h"
+#include "control_panel_cases.h"
 #include "desktop_delete_cases.h"
 #include "file_drag_cases.h"
 static void WinKeyEvent(UINT key, BOOL up)
@@ -1914,6 +1918,7 @@ void start(void)
     BrowserNewContextTests(browser, fixture);
     BrowserColorTests(browser);
     BrowserPaneTests(browser, fixture, settings);
+    ControlPanelTests(settings, fixture);
     BrowserTests(browser, fixture, settingsDir, settings);
     DesktopStackTests(bar, desktop, browser);
     NativeFolderTests(menu);
