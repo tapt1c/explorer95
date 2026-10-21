@@ -117,6 +117,7 @@ BOOL EnvJoin(char *out, const char *base, const char *name);
 HWND EnvControl(HWND parent, const char *kind, const char *text, DWORD style, int id);
 void EnvError(HWND owner, const char *message, DWORD error);
 void EnvSaveOptions(void);
+BOOL EnvCommitProfile(HWND window,BOOL (*writer)(const char *,const void *),const void *data);
 void EnvApplyOptions(void);
 void EnvPositionBar(void);
 int EnvBarThickness(const ShellOptions *options);

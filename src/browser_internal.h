@@ -22,6 +22,14 @@
 #define ID_OPTION_FOLDERS 495
 #define ID_OPTION_STATUS 496
 #define ID_OPTION_HISTORY 497
+#define ID_OPTION_TABS 498
+#define ID_OPTION_TOOLBAR 560
+#define ID_OPTION_ADDRESS 561
+#define ID_OPTION_PANE 562
+#define ID_OPTION_CONTROL 563
+#define ID_OPTION_FULLPATH 564
+#define ID_OPTION_HIDE 565
+#define ID_OPTION_CLEAR_HISTORY 566
 #define ID_FAVORITE_ADD 510
 #define ID_FAVORITE_REMOVE 511
 #define ID_FAVORITE 520
@@ -49,7 +57,7 @@ typedef struct BrowserControlPanel BrowserControlPanel;
 typedef struct BrowserOptions {
     int view, treeWidth, pane;
     UINT extraTools;
-    BOOL toolbar, address, status, labels, largeTools, hidden, extensions, controlSimple;
+    BOOL toolbar, address, status, labels, largeTools, hidden, extensions, controlSimple, fullPathTitle;
 } BrowserOptions;
 typedef struct TreeNode {
     struct TreeNode *next;
@@ -110,10 +118,14 @@ BOOL BrowserNavigate(Browser *browser, const char *path, LPCITEMIDLIST pidl, int
 void BrowserLayout(Browser *browser);
 void BrowserUpdate(Browser *browser);
 void BrowserSaveOptions(const BrowserOptions *options);
+BOOL BrowserWriteOptions(const char *ini,const BrowserOptions *options);
+void BrowserUpdateTitle(Browser *browser);
 void BrowserBuildToolbar(Browser *browser);
 int BrowserToolbarAddImages(Browser *browser, int size);
 void BrowserToolbarSubclass(Browser *browser);
-void BrowserOpenOptions(Browser *browser);
+void BrowserOpenOptions(Browser *browser,int page);
+BOOL BrowserOptionsRegister(void);
+BOOL BrowserOptionsTranslate(MSG *message);
 void BrowserViewsPopup(Browser *browser);
 BOOL BrowserIsWindow(HWND window);
 void BrowserRefresh(Browser *browser);
@@ -131,6 +143,8 @@ void BrowserSpecial(Browser *browser, int folder);
 BOOL BrowserHistoryEnabled(void);
 BOOL BrowserHistorySetEnabled(BOOL enabled);
 BOOL BrowserHistoryClear(void);
+void BrowserHistoryPreferencesChanged(void);
+int BrowserHistoryCount(void);
 void BrowserHistoryRecord(Browser *browser);
 int BrowserHistoryRead(BrowserVisit *visits);
 DWORD BrowserHistoryGeneration(void);

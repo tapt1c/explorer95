@@ -278,7 +278,7 @@ static void Preview(const DRAWITEMSTRUCT *item)
     }
     PaintBufferEnd(&previewBuffer, item->hDC, &item->rcItem);
 }
-static BOOL CommitFile(HWND window, const ShellOptions *options)
+BOOL EnvCommitProfile(HWND window,BOOL (*writer)(const char *,const void *),const void *data)
 {
     char staged[MAX_PATH], backup[MAX_PATH]; BOOL exists = GetFileAttributesA(env.ini) != INVALID_FILE_ATTRIBUTES;
     DWORD error;
@@ -287,8 +287,7 @@ static BOOL CommitFile(HWND window, const ShellOptions *options)
     }
     if (!GetTempFileNameA(env.dataDir, "E95", 0, staged)) { EnvError(window, "Cannot create settings file.", GetLastError()); return FALSE; }
     WritePrivateProfileStringA(NULL, NULL, NULL, env.ini);
-    if ((exists && !CopyFileA(env.ini, staged, FALSE)) || !WriteOptions(staged, options) ||
-        !StartSettingsWrite(staged) || !TraySettingsWrite(staged)) {
+    if ((exists && !CopyFileA(env.ini, staged, FALSE)) || !writer(staged,data)) {
         error = GetLastError(); DeleteFileA(staged); EnvError(window, "Cannot save settings. Your previous settings are unchanged.", error ? error : ERROR_WRITE_FAULT); return FALSE;
     }
     WritePrivateProfileStringA(NULL, NULL, NULL, staged);
@@ -309,6 +308,10 @@ static BOOL CommitFile(HWND window, const ShellOptions *options)
     if (exists) DeleteFileA(backup);
     WritePrivateProfileStringA(NULL, NULL, NULL, env.ini); return TRUE;
 }
+static BOOL WriteEnvironmentProfile(const char *ini,const void *data)
+{ return WriteOptions(ini,(const ShellOptions *)data) && StartSettingsWrite(ini) && TraySettingsWrite(ini); }
+static BOOL CommitFile(HWND window,const ShellOptions *options)
+{ return EnvCommitProfile(window,WriteEnvironmentProfile,options); }
 static BOOL Apply(HWND window)
 {
     ShellOptions options = env.options; BOOL languageChanged=FALSE; BOOL valid; UINT width = GetDlgItemInt(window, ID_WIDTH, &valid, FALSE), seconds;

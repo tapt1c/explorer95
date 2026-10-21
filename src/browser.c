@@ -8,7 +8,6 @@
 HINSTANCE browserInstance;
 HFONT browserFont;
 HFONT browserSymbols;
-static const char optionsClass[] = "Explorer95.FolderOptions";
 static const char *viewNames[] = {"Icons", "Small Icons", "List", "Details", "Tiles", "Thumbnails"};
 static const int extraCommands[] = {ID_COPY, ID_CUT, ID_PASTE, ID_DELETE, ID_FILE_PROPERTIES, ID_BROWSER_OPTIONS};
 static const char *extraNames[] = {"Copy", "Cut", "Paste", "Delete", "Properties", "Folder Options"};
@@ -57,20 +56,33 @@ static void LoadOptions(BrowserOptions *options)
     options->labels = !!Option(optionKeys[4], TRUE); options->largeTools = !!Option(optionKeys[5], FALSE);
     options->hidden = !!Option(optionKeys[6], FALSE); options->extensions = !!Option(optionKeys[7], TRUE);
     options->controlSimple = !!Option("ControlPanelSimple", TRUE);
+    options->fullPathTitle = !!Option("FullPathTitle", TRUE);
 }
-static void SaveNumber(const char *name, int number)
+static BOOL SaveNumber(const char *ini,const char *name,int number)
 {
-    char value[32]; wsprintfA(value, "%d", number); WritePrivateProfileStringA("Explorer", name, value, env.ini);
+    char value[32]; wsprintfA(value,"%d",number); return WritePrivateProfileStringA("Explorer",name,value,ini);
 }
-void BrowserSaveOptions(const BrowserOptions *options)
+BOOL BrowserWriteOptions(const char *ini,const BrowserOptions *options)
 {
-    SaveNumber("View", options->view); SaveNumber("FolderWidth", options->treeWidth); SaveNumber("ToolbarButtons", options->extraTools);
-    SaveNumber("ExplorerBar", options->pane);
-    SaveNumber(optionKeys[0], options->pane == BROWSER_PANE_FOLDERS); SaveNumber(optionKeys[1], options->toolbar);
-    SaveNumber(optionKeys[2], options->address); SaveNumber(optionKeys[3], options->status);
-    SaveNumber(optionKeys[4], options->labels); SaveNumber(optionKeys[5], options->largeTools);
-    SaveNumber(optionKeys[6], options->hidden); SaveNumber(optionKeys[7], options->extensions);
-    SaveNumber("ControlPanelSimple", options->controlSimple);
+    BOOL okay=TRUE;
+#define SAVE(key,member) okay &= SaveNumber(ini,key,options->member)
+    SAVE("View",view); SAVE("FolderWidth",treeWidth); SAVE("ToolbarButtons",extraTools);
+    SAVE("ExplorerBar",pane);
+    okay &= SaveNumber(ini,optionKeys[0],options->pane==BROWSER_PANE_FOLDERS);
+    SAVE(optionKeys[1],toolbar); SAVE(optionKeys[2],address); SAVE(optionKeys[3],status);
+    SAVE(optionKeys[4],labels); SAVE(optionKeys[5],largeTools); SAVE(optionKeys[6],hidden); SAVE(optionKeys[7],extensions);
+    SAVE("ControlPanelSimple",controlSimple); SAVE("FullPathTitle",fullPathTitle);
+#undef SAVE
+    return okay;
+}
+void BrowserSaveOptions(const BrowserOptions *options) { BrowserWriteOptions(env.ini,options); }
+void BrowserUpdateTitle(Browser *browser)
+{
+    char title[MAX_PATH+32]; const char *name=browser->path,*scan;
+    if(!browser->path[0]) return;
+    if(!browser->options.fullPathTitle) for(scan=browser->path;*scan;++scan) if(*scan=='\\' && scan[1]) name=scan+1;
+    wsprintfA(title,"%s - Explorer95",name);
+    UiSetLiteralWindowTextA(browser->window,title);
 }
 static BOOL CanUp(Browser *browser) { return browser->path[0] || (browser->pidl && browser->pidl->mkid.cb); }
 void BrowserUpdate(Browser *browser)
@@ -433,8 +445,9 @@ BOOL BrowserNavigate(Browser *browser, const char *requested, LPCITEMIDLIST pidl
         SHGetFileInfoA((LPCSTR)absolute, 0, &info, sizeof(info), SHGFI_PIDL | SHGFI_DISPLAYNAME);
         lstrcpynA(title, info.szDisplayName[0] ? info.szDisplayName : "Desktop", sizeof(title));
         SetWindowTextA(browser->status, "System folder");
-    } else { BrowserFilesShow(browser); wsprintfA(title, "%s - Explorer95", path); }
-    SetWindowTextA(browser->window, title); BrowserAddressUpdate(browser);
+    } else BrowserFilesShow(browser);
+    if(browser->path[0]) BrowserUpdateTitle(browser); else SetWindowTextA(browser->window,title);
+    BrowserAddressUpdate(browser);
     BrowserControlPanelLocationChanged(browser);
     if (!same) BrowserHistoryRecord(browser);
     BrowserSidebarLocationChanged(browser);
@@ -702,7 +715,7 @@ static void Command(Browser *browser, int command)
         else { browser->descending = browser->sort == command - ID_SORT_NAME ? !browser->descending : FALSE; browser->sort = command - ID_SORT_NAME; }
         if (browser->native) NativeViewSort(browser->native,browser->sort,browser->descending);
         else BrowserFilesShow(browser);
-    } else if (command == ID_BROWSER_OPTIONS || command == ID_CUSTOMIZE_TOOLBAR) BrowserOpenOptions(browser);
+    } else if (command == ID_BROWSER_OPTIONS || command == ID_CUSTOMIZE_TOOLBAR) BrowserOpenOptions(browser,command==ID_CUSTOMIZE_TOOLBAR ? 1 : 0);
     else if (command == ID_FAVORITE_ADD || command == ID_FAVORITE_REMOVE) AddFavorite(browser, command == ID_FAVORITE_REMOVE);
     else if (command >= ID_FAVORITE && command < ID_FAVORITE + 8) {
         char key[32], path[MAX_PATH]; wsprintfA(key, "Folder%d", command - ID_FAVORITE);
@@ -1009,79 +1022,6 @@ static BOOL CALLBACK RefreshRecycleBin(HWND window, LPARAM unused)
 void BrowserRecycleBinsChanged(void) { EnumWindows(RefreshRecycleBin, 0); }
 void BrowserShutdown(void) { EnumWindows(CloseBrowser, 0); if (browserSymbols) { DeleteObject(browserSymbols); browserSymbols = NULL; } }
 
-static void CheckControl(HWND window, const char *label, int id, BOOL checked, int x, int y, int width)
-{
-    HWND control = BrowserControl(window, "BUTTON", label, WS_TABSTOP | BS_AUTOCHECKBOX, id);
-    MoveWindow(control, x, y, width, 22, TRUE); SendMessageA(control, BM_SETCHECK, checked ? BST_CHECKED : BST_UNCHECKED, 0);
-}
-static BOOL Checked(HWND window, int id) { return SendDlgItemMessageA(window, id, BM_GETCHECK, 0, 0) == BST_CHECKED; }
-static LRESULT CALLBACK OptionsProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
-{
-    Browser *browser = (Browser *)GetWindowLongPtrA(window, GWLP_USERDATA);
-    switch (message) {
-    case WM_ERASEBKGND: PaintDialogBackground(window, (HDC)wp); return TRUE;
-    case WM_CREATE: {
-        int i; HWND control; browser = (Browser *)((CREATESTRUCTA *)lp)->lpCreateParams; SetWindowLongPtrA(window, GWLP_USERDATA, (LONG_PTR)browser);
-        MoveWindow(BrowserControl(window, "BUTTON", "Appearance", BS_GROUPBOX | WS_CLIPSIBLINGS, 7000), 10, 8, 490, 194, TRUE);
-        CheckControl(window, "Folders pane", ID_OPTION_FOLDERS, browser->options.pane == BROWSER_PANE_FOLDERS, 22, 30, 214);
-        CheckControl(window, "Status bar", ID_OPTION_STATUS, browser->options.status, 22, 56, 214);
-        CheckControl(window, "Text labels on toolbar", ID_OPTION_LABELS, browser->options.labels, 22, 82, 214);
-        CheckControl(window, "Large toolbar icons", ID_OPTION_LARGE, browser->options.largeTools, 22, 108, 214);
-        CheckControl(window, "Show hidden / system files", ID_OPTION_HIDDEN, browser->options.hidden, 252, 30, 236);
-        CheckControl(window, "Show file extensions", ID_OPTION_EXTENSIONS, browser->options.extensions, 252, 56, 236);
-        MoveWindow(BrowserControl(window, "STATIC", "View:", 0, 7001), 252, 90, 42, 22, TRUE);
-        control = BrowserControl(window, "COMBOBOX", "", WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL, ID_OPTION_VIEW);
-        MoveWindow(control, 302, 86, 180, 180, TRUE);
-        for (i = 0; i < (browser->native ? 4 : 6); ++i) SendMessageA(control, CB_ADDSTRING, 0, (LPARAM)viewNames[i]);
-        SendMessageA(control, CB_SETCURSEL, browser->native && browser->options.view > 3 ? 0 : browser->options.view, 0);
-        CheckControl(window, "Remember visited folders (clear when disabled)", ID_OPTION_HISTORY, BrowserHistoryEnabled(), 22, 143, 458);
-        MoveWindow(BrowserControl(window, "STATIC", "Thumbnails preview BMP files; other files use Windows icons.", 0, 7002), 22, 174, 458, 22, TRUE);
-        MoveWindow(BrowserControl(window, "BUTTON", "Additional toolbar buttons", BS_GROUPBOX | WS_CLIPSIBLINGS, 7003), 10, 212, 490, 112, TRUE);
-        for (i = 0; i < BROWSER_EXTRA_TOOLS; ++i) CheckControl(window, extraNames[i], ID_OPTION_TOOL + i,
-            (browser->options.extraTools & (1U << i)) != 0, 22 + (i / 3) * 230, 234 + (i % 3) * 26, 218);
-        MoveWindow(BrowserControl(window, "BUTTON", "OK", WS_TABSTOP | BS_DEFPUSHBUTTON, IDOK), 320, 342, 80, 27, TRUE);
-        MoveWindow(BrowserControl(window, "BUTTON", "Cancel", WS_TABSTOP, IDCANCEL), 410, 342, 80, 27, TRUE);
-        SetWindowPos(GetDlgItem(window, 7000), HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-        SetWindowPos(GetDlgItem(window, 7003), HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE); return 0;
-    }
-    case WM_COMMAND:
-        if (LOWORD(wp) == IDCANCEL) { DestroyWindow(window); return 0; }
-        if (LOWORD(wp) == IDOK && browser) {
-            int i, view = (int)SendDlgItemMessageA(window, ID_OPTION_VIEW, CB_GETCURSEL, 0, 0); BOOL reload;
-            BrowserOptions previous = browser->options;
-            if (!BrowserHistorySetEnabled(Checked(window, ID_OPTION_HISTORY))) {
-                BrowserError(window, "Cannot save the history preference or clear saved visits.", ERROR_WRITE_FAULT); return 0;
-            }
-            if (Checked(window, ID_OPTION_FOLDERS)) browser->options.pane = BROWSER_PANE_FOLDERS;
-            else if (browser->options.pane == BROWSER_PANE_FOLDERS) browser->options.pane = BROWSER_PANE_TASKS;
-            browser->options.status = Checked(window, ID_OPTION_STATUS);
-            browser->options.labels = Checked(window, ID_OPTION_LABELS); browser->options.largeTools = Checked(window, ID_OPTION_LARGE);
-            browser->options.hidden = Checked(window, ID_OPTION_HIDDEN); browser->options.extensions = Checked(window, ID_OPTION_EXTENSIONS);
-            if (view >= 0 && view < 6) browser->options.view = view;
-            browser->options.extraTools = 0; for (i = 0; i < BROWSER_EXTRA_TOOLS; ++i) if (Checked(window, ID_OPTION_TOOL + i)) browser->options.extraTools |= 1U << i;
-            reload = previous.hidden != browser->options.hidden;
-            if (reload) BrowserTreeDestroy(browser);
-            BrowserSaveOptions(&browser->options); BrowserBuildToolbar(browser);
-            if (reload) BrowserRefresh(browser);
-            else if (browser->native) BrowserNavigate(browser, NULL, browser->pidl, browser->historyIndex);
-            else BrowserFilesShow(browser);
-            BrowserLayout(browser); BrowserUpdate(browser); DestroyWindow(window); return 0;
-        } return 0;
-    case WM_CLOSE: DestroyWindow(window); return 0;
-    case WM_DESTROY: if (browser) browser->optionsWindow = NULL; return 0;
-    }
-    return DefWindowProcA(window, message, wp, lp);
-}
-void BrowserOpenOptions(Browser *browser)
-{
-    if (!browser->optionsWindow) {
-        RECT area; SystemParametersInfoA(SPI_GETWORKAREA, 0, &area, 0);
-        /* Groupbox interiors need the dialog's background on native Win95. */
-        browser->optionsWindow = CreateWindowExA(WS_EX_DLGMODALFRAME, optionsClass, "Folder Options", WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
-            area.left + (area.right - area.left - 516) / 2, area.top + 6, 516, 412, browser->window, NULL, browserInstance, browser);
-    }
-    ShowWindow(browser->optionsWindow, SW_SHOWNORMAL); SetForegroundWindow(browser->optionsWindow);
-}
 BOOL BrowserRegister(HINSTANCE instance, HFONT font)
 {
     WNDCLASSA cls; LOGFONTA symbols; browserInstance = instance; browserFont = font;
@@ -1096,8 +1036,7 @@ BOOL BrowserRegister(HINSTANCE instance, HFONT font)
     cls.hIcon = LoadIconA(instance, "EXPLORER95"); cls.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1); cls.lpfnWndProc = BrowserProc;
     cls.lpszClassName = BROWSER_CLASS; if (!RegisterClassA(&cls)) return FALSE;
     cls.lpszClassName = BROWSER_NAMESPACE_CLASS; if (!RegisterClassA(&cls)) return FALSE;
-    cls.lpszClassName = optionsClass; cls.lpfnWndProc = OptionsProc;
-    return RegisterClassA(&cls) != 0 && BrowserSidebarRegister() && BrowserSearchRegister() && BrowserControlPanelRegister();
+    return BrowserOptionsRegister() && BrowserSidebarRegister() && BrowserSearchRegister() && BrowserControlPanelRegister();
 }
 BOOL BrowserTranslate(MSG *message)
 {
@@ -1105,10 +1044,7 @@ BOOL BrowserTranslate(MSG *message)
     while (root && (GetWindowLongA(root, GWL_STYLE) & WS_CHILD)) root = GetParent(root);
     { char kind[64]; GetClassNameA(root, kind, sizeof(kind));
       if (!lstrcmpA(kind, BROWSER_SEARCH_CLASS)) return BrowserSearchTranslate(message);
-      if (!lstrcmpA(kind, optionsClass)) {
-          if (message->message == WM_KEYDOWN && (message->wParam == VK_ESCAPE || message->wParam == VK_RETURN)) { SendMessageA(root, WM_COMMAND, message->wParam == VK_ESCAPE ? IDCANCEL : IDOK, 0); return TRUE; }
-          return IsDialogMessageA(root, message);
-      } }
+      if (!lstrcmpA(kind,"Explorer95.FolderOptions")) return BrowserOptionsTranslate(message); }
     if (!BrowserIsWindow(root)) return FALSE;
     browser = (Browser *)GetWindowLongPtrA(root, GWLP_USERDATA); if (!browser) return FALSE;
     if (BrowserControlPanelTranslate(browser, message)) return TRUE;

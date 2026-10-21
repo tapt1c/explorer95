@@ -789,7 +789,8 @@ static void BrowserTests(HWND browser, const char *fixture, const char *settings
       Check(SendMessageA(list, LVM_GETITEMCOUNT, 0, 0) == 3, "hidden files are excluded by default"); }
     SendMessageA(browser, WM_COMMAND, ID_BROWSER_OPTIONS, 0); options = WaitFor("Explorer95.FolderOptions", NULL);
     Check(options != NULL, "Folder Options exposes appearance and preset toolbar controls");
-    Check(DialogBackground(options, 120, 136, FALSE), "Folder Options erases behind transparent Win95 groupboxes");
+    Check(DialogBackground(options, 4, 136, FALSE), "Folder Options keeps its dialog-face parent erasure outside the native tab");
+    Check(DialogBackground(options, 120, 136, TRUE), "Folder Options restores its native tab page after erasing, with classic or themed child colours");
     for (i = 0; i < 6; ++i) SendDlgItemMessageA(options, 480 + i, BM_SETCHECK, BST_CHECKED, 0);
     SendDlgItemMessageA(options, 490, BM_SETCHECK, BST_UNCHECKED, 0);
     SendDlgItemMessageA(options, 491, BM_SETCHECK, BST_UNCHECKED, 0);
@@ -1767,6 +1768,7 @@ static void EnvironmentTests(HWND bar, HWND browser, HWND childWindow, HWND menu
     Check(GetFileAttributesA(quickPath) == INVALID_FILE_ATTRIBUTES, "Quick Launch test executable removed");
 }
 
+#include "folder_options_cases.h"
 #include "localization_cases.h"
 #include "shell_run_cases.h"
 
@@ -1971,6 +1973,7 @@ void start(void)
     BrowserPaneTests(browser, fixture, settings);
     ControlPanelTests(settings, fixture);
     BrowserTests(browser, fixture, settingsDir, settings);
+    FolderOptionsUiTests(browser,settings);
     DesktopStackTests(bar, desktop, browser);
     NativeFolderTests(menu);
     AboutCommandTest(browser);

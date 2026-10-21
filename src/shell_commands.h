@@ -1,6 +1,9 @@
 #ifndef EX95_SHELL_COMMANDS_H
 #define EX95_SHELL_COMMANDS_H
 #include <windows.h>
+typedef void (WINAPI *ShellOptionsEntry)(HWND,HINSTANCE,LPVOID,int);
+/* Options_RunDLL 0 opens Windows folder options; 1 is taskbar settings. */
+void ShellFolderOptionsShow(HWND owner,HINSTANCE shell,ShellOptionsEntry entry,BOOL wide);
 #include <shlobj.h>
 /* Win95 may expose the background through IShellFolder rather than SVGIO_BACKGROUND. */
 HRESULT ShellBackgroundContext(IShellView *view, IShellFolder *folder, HWND owner, IContextMenu **context);

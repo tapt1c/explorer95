@@ -3,6 +3,11 @@
 #define WIN32_LEAN_AND_MEAN
 #define COBJMACROS
 #include "shell_commands.h"
+void ShellFolderOptionsShow(HWND owner,HINSTANCE shell,ShellOptionsEntry entry,BOOL wide)
+{
+    char ansi[]="0"; WCHAR unicode[]={'0',0};
+    if(entry) entry(owner,shell,wide ? (LPVOID)unicode : (LPVOID)ansi,SW_SHOWNORMAL);
+}
 #include "file_drag.h"
 #include "file_operations.h"
 #define EX95_LOCALIZE_UI

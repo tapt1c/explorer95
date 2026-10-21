@@ -20,6 +20,7 @@ SOURCES += src/task_groups.c
 SOURCES += src/task_switch.c
 SOURCES += src/task_switch_native.c
 SOURCES += src/browser_control_panel.c
+SOURCES += src/browser_options.c
 SOURCES += src/shutdown_dos.c
 SOURCES += src/shell_commands.c src/shell_sounds.c
 SOURCES += src/shell_run.c

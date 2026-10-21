@@ -345,6 +345,7 @@ static void LanguageRestartTests(const char *directory,const char *executable)
         SaveScreen("build/language-browser-ru.bmp");
         SendMessageA(browser,WM_COMMAND,ID_BROWSER_OPTIONS,0); HWND options=WaitFor("Explorer95.FolderOptions",NULL);
         Check(options!=NULL,"open Russian Explorer options independently of environment settings"); PumpFor(200); SaveScreen("build/language-browser-options-ru.bmp");
+        FolderOptionsPages(options,"ru");
         SendDlgItemMessageA(options,491,BM_SETCHECK,BST_CHECKED,0); SendMessageA(options,WM_COMMAND,IDOK,0); PumpFor(150);
         BrowserToolbarGeometry(browser,process.hProcess,24); SaveScreen("build/language-toolbar-large-ru.bmp");
         {

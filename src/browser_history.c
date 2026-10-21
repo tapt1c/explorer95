@@ -59,6 +59,10 @@ static BOOL SaveVisits(void)
     wsprintfA(next, "Count=%d", visitCount);
     saved = WritePrivateProfileSectionA("ExplorerHistory", section, env.ini); EnvFree(section); return saved;
 }
+void BrowserHistoryPreferencesChanged(void)
+{ ZeroMemory(visits,sizeof(visits)); visitCount=0; loaded=FALSE; saveWarning=FALSE; Changed(); }
+int BrowserHistoryCount(void)
+{ LoadVisits(); return BrowserHistoryEnabled() ? visitCount : 0; }
 BOOL BrowserHistoryClear(void)
 {
     if (!WritePrivateProfileStringA("ExplorerHistory", NULL, NULL, env.ini)) return FALSE;
