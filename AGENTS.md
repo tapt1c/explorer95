@@ -71,6 +71,8 @@ Explorer95 — любительская нативная оболочка для
 | `src/settings.c`, `src/settings_internal.h` | Единое окно с вкладками, общий Apply/Cancel, запись профиля через временный файл, preview и действия системной оболочки. |
 | `src/shell_config.c` | Подготовка копии EXE, изменение `[boot] shell=`, резервирование и восстановление. |
 | `src/file_operations.c`, `src/file_operations.h` | Общие SHFileOperationA для clipboard и Drag and Drop, пары путей MOVE и штатные подтверждения конфликтов. |
+| `src/shell_commands.c/.h`, `tests/shell_commands_cases.h` | Native background IContextMenu с Win95 fallback, состояние Paste/Paste Shortcut/Undo, числовые offsets и сочетания рабочего стола. |
+| `src/shell_sounds.c/.h` | MenuPopup/MenuCommand собственных меню через необязательный WinMM и текущую звуковую схему. |
 | `src/file_drag.c`, `src/file_drag.h` | Общий Win95 OLE source/target, подтверждаемые файловые операции, native fallback виртуальных целей, отмена и отложенное закрытие источника. |
 | `src/folder_open.c`, `src/folder_open.h` | ANSI-команды открытия, проверяемый протокол WM_COPYDATA и чтение Shell IDList Array с проверкой границ. |
 | `src/folder_handler.c`, `src/folder_handler.h` | Обратимые команды open/explore для Directory, Drive, My Computer и Recycle Bin; полные снимки команд и DDE в реестре. |
@@ -1390,6 +1392,36 @@ Rename со скрытым расширением, системные Properties
   сохранённое предпочтение. Новые настройки не должны теряться при общем Apply.
   Скрытые значки доступны через >> с owner-draw меню 16×16; не удаляйте команды
   и не расширяйте участок автоматически после ручного изменения размера.
+- Clipboard/Undo рабочего стола используют `shell_commands`: `SVGIO_BACKGROUND`,
+  а при отсутствии интерфейса — `IShellFolder::CreateViewObject(IID_IContextMenu)`.
+  Не подменяйте native undo догадками об обратном перемещении/удалении файлов.
+  `QueryContextMenu` и необязательный `IContextMenu2::HandleMenuMsg(WM_INITMENUPOPUP)`
+  определяют доступность; canonical verb преобразуется в числовой offset.
+  Отключённая/отсутствующая команда не вызывается, после ошибки или Cancel нет retry.
+  Подпись Undo с видом операции сохраняется из Windows; меню добавляет подсказки
+  Ctrl+V / Ctrl+Shift+V / Ctrl+Z. Ctrl+C/X и Ctrl+Insert обслуживают выделение,
+  Ctrl+V/Z, Ctrl+Shift+V, Shift+Insert — фон. `NativeViewTranslate` вызывается
+  до TranslateMessage, чтобы не создавать лишний WM_CHAR; subclass оставляет
+  запасной путь для посланных WM_KEYDOWN. Label editor, AltGr и автоповтор защищены.
+  Изменение списка/Refresh проходит через существующий Begin/EndDesktopCall;
+  native callback не должен уничтожать PIDL посреди операции.
+  Core/full проверяет внешнее CF_HDROP и настоящий Ctrl+V на временной папке;
+  Undo/Paste Shortcut дополнены инертным native COM-контрактом, поскольку Wine
+  не воспроизводит историю undo Win95 и не реализует все эти verbs.
+- Звуки своего двухколоночного Пуска — `MenuPopup` и `MenuCommand` через
+  динамический PlaySoundA (SND_ALIAS/ASYNC/NODEFAULT/NOWAIT), без обязательного
+  импорта WinMM и без стандартного beep вместо незаданного события.
+  Не дублируйте события настоящего TrackPopupMenu/меню окна/SC_MINIMIZE,
+  SC_MAXIMIZE, SC_RESTORE. Taskbar/Show Desktop отправляют WM_SYSCOMMAND вместо
+  прямого ShowWindowAsync: штатный оконный путь обслуживает звуковую схему.
+  При выходе остановите свой async звук до выгрузки DLL. Звук на настоящей
+  Win95 подтверждается в пользовательской ВМ, Wine не доказывает его слышимость.
+- Canary-проверка строки Control Panel после синхронного WM_PAINT допускает
+  до 250 мс только на вывод GDI-поверхности между процессами Wine. В ожидании
+  нельзя делать дополнительный Invalidate/Redraw/WM_PAINT: отсутствующая
+  отрисовка должна провалить тест. Строгая проверка GetUpdateRect сразу после
+  Scroll предшествует ожиданию и остаётся неизменной. Наблюдался ложный отказ:
+  чтение ещё возвращало marker, а следующий failure screenshot уже был белым.
 - Delete на desktop ListView не перехватывает текстовый редактор подписи.
   Для полного файлового выделения используйте IDataObject/CF_HDROP и SHFileOperationA
   FO_DELETE с FOF_ALLOWUNDO (Shift отключает корзину). Пути ограничены MAX_PATH,

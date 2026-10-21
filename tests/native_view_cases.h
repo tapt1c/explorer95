@@ -2,6 +2,7 @@
  * observes synchronous queries; Wine's own recursion limit can otherwise hide
  * the Win95 stack overflow. No live Explorer95 instance or associations needed. */
 #include "../src/native_view.h"
+#include "shell_commands_cases.h"
 
 /* NativeView links to shell actions, but these message probes must never run
  * them. Unexpected calls fail instead of changing the test machine. */
@@ -412,6 +413,61 @@ static void NativeDesktopIconSizeTests(void)
     lstrcpyA(sidecar,profile); lstrcatA(sidecar,".DIP"); DeleteFileA(sidecar); DeleteFileA(profile);
     OleUninitialize();
 }
+/* Populate the standard clipboard outside Explorer95's browser commands, as
+ * another file manager would. All paths are confined to our temporary folder. */
+static void NativeDesktopPasteTests(HWND parent)
+{
+    char temporary[MAX_PATH],root[MAX_PATH],source[MAX_PATH],target[MAX_PATH],copied[MAX_PATH]; WCHAR wide[MAX_PATH];
+    LPITEMIDLIST pidl=NULL; IShellFolder *desktop=NULL; NativeView *view; HWND list; RECT rect={0,0,320,200};
+    HGLOBAL files,preferred; DROPFILES *drop; DWORD *effect,written; HANDLE file; BYTE keys[256],savedKeys[256]; UINT format; int length; MSG key;
+    GetTempPathA(MAX_PATH,temporary); Check(GetTempFileNameA(temporary,"ECP",0,root),"reserve an isolated desktop clipboard fixture");
+    Check(DeleteFileA(root) && CreateDirectoryA(root,NULL),"create only our clipboard fixture directory");
+    wsprintfA(source,"%s\\source.txt",root); wsprintfA(target,"%s\\target",root); wsprintfA(copied,"%s\\source.txt",target);
+    Check(CreateDirectoryA(target,NULL),"create the isolated desktop paste destination");
+    file=CreateFileA(source,GENERIC_WRITE,0,NULL,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL);
+    Check(file!=INVALID_HANDLE_VALUE && WriteFile(file,"test",4,&written,NULL) && written==4,"write only our paste source file"); CloseHandle(file);
+    MultiByteToWideChar(CP_ACP,0,target,-1,wide,MAX_PATH);
+    Check(SUCCEEDED(SHGetDesktopFolder(&desktop)) && SUCCEEDED(IShellFolder_ParseDisplayName(desktop,parent,NULL,wide,NULL,&pidl,NULL)),
+        "resolve the private filesystem folder through the real Win95 shell interfaces");
+    IShellFolder_Release(desktop);
+    view=NativeViewCreateEx(parent,pidl,TRUE,0,&rect); CoTaskMemFree(pidl);
+    Check(view && NativeViewList(view),"host a desktop view over the private paste destination"); list=NativeViewList(view);
+    length=MultiByteToWideChar(CP_ACP,0,source,-1,wide,MAX_PATH);
+    files=GlobalAlloc(GMEM_MOVEABLE|GMEM_ZEROINIT,sizeof(DROPFILES)+(length+1)*sizeof(WCHAR));
+    preferred=GlobalAlloc(GMEM_MOVEABLE|GMEM_ZEROINIT,sizeof(DWORD));
+    Check(files && preferred,"allocate a standard file clipboard independently of Explorer95");
+    drop=GlobalLock(files); Check(drop!=NULL,"lock external-style CF_HDROP");
+    drop->pFiles=sizeof(*drop); drop->fWide=TRUE; CopyMemory((BYTE *)drop+sizeof(*drop),wide,length*sizeof(WCHAR)); GlobalUnlock(files);
+    effect=GlobalLock(preferred); Check(effect!=NULL,"lock native preferred copy effect"); *effect=DROPEFFECT_COPY; GlobalUnlock(preferred);
+    format=RegisterClipboardFormatA("Preferred DropEffect");
+    Check(format && OpenClipboard(parent),"open the isolated test clipboard");
+    Check(EmptyClipboard() && SetClipboardData(CF_HDROP,files) && SetClipboardData(format,preferred),"publish files without using Explorer95 Copy"); CloseClipboard();
+    GetKeyboardState(savedKeys); CopyMemory(keys,savedKeys,sizeof(keys)); keys[VK_CONTROL]=0x80; keys[VK_SHIFT]=keys[VK_MENU]=0;
+    ZeroMemory(&key,sizeof(key)); key.hwnd=list; key.message=WM_KEYDOWN; key.wParam='V'; key.lParam=1;
+    SetKeyboardState(keys);
+    Check(NativeViewTranslate(view,&key),"desktop Ctrl+V is consumed before TranslateMessage can generate a stray WM_CHAR");
+    key.lParam=1UL<<30;
+    Check(NativeViewTranslate(view,&key),"held clipboard keys are consumed without repeating file operations");
+    SetKeyboardState(savedKeys); PumpFor(250);
+    Check(GetFileAttributesA(copied)!=INVALID_FILE_ATTRIBUTES && GetFileAttributesA(source)!=INVALID_FILE_ATTRIBUTES,
+        "desktop Ctrl+V copies the file published externally and preserves its source");
+    Check(ListView_GetItemCount(list)==1,"desktop paste refreshes the native item list after completing the operation");
+    Check(ListView_EditLabel(list,0)!=NULL,"start renaming only the copied fixture item");
+    key.lParam=1; SetKeyboardState(keys);
+    Check(!NativeViewTranslate(view,&key),"desktop clipboard accelerator leaves a native label editor's text commands alone");
+    SetKeyboardState(savedKeys); SendMessageA(ListView_GetEditControl(list),WM_KEYDOWN,VK_ESCAPE,1); PumpFor(60);
+    { IDataObject *data=NULL; char *paths;
+      ListView_SetItemState(list,0,LVIS_SELECTED|LVIS_FOCUSED,LVIS_SELECTED|LVIS_FOCUSED);
+      SetKeyboardState(keys); SendMessageA(list,WM_KEYDOWN,'C',1); SetKeyboardState(savedKeys);
+      Check(SUCCEEDED(OleGetClipboard(&data)),"desktop Ctrl+C publishes a standard OLE clipboard");
+      paths=FileDragPaths(data); IDataObject_Release(data);
+      Check(paths && !lstrcmpiA(paths,copied),"sent desktop Ctrl+C uses the selected native item rather than the previous external source");
+      if(paths) HeapFree(GetProcessHeap(),0,paths); }
+    Check(OpenClipboard(parent),"reopen only our clipboard fixture"); EmptyClipboard(); CloseClipboard();
+    NativeViewDestroy(view);
+    Check(DeleteFileA(copied) && DeleteFileA(source) && RemoveDirectoryA(target) && RemoveDirectoryA(root),"remove only the clipboard fixture paths");
+}
+
 static void NativeViewMessageTests(void)
 {
     HRESULT ole = OleInitialize(NULL); HWND parent, list; NativeView *view; RECT rect = {0, 0, 320, 200};
@@ -421,6 +477,8 @@ static void NativeViewMessageTests(void)
         0, 0, 320, 200, NULL, NULL, GetModuleHandleA(NULL), NULL);
     Check(parent != NULL, "create hidden parent for native message probe");
     NativeShellCommandTests(parent);
+    ShellEditContractTests(parent);
+    NativeDesktopPasteTests(parent);
     view = NativeViewCreateEx(parent, NULL, FALSE, 0, &rect);
     Check(view != NULL && NativeViewList(view) != NULL, "host the actual Shell32 ListView in the test process");
     Check(!NativeViewIsRecycleBin(view) && NativeEmptyRecycleBin(view) == E_INVALIDARG,

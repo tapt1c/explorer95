@@ -21,7 +21,9 @@ SOURCES += src/task_switch.c
 SOURCES += src/task_switch_native.c
 SOURCES += src/browser_control_panel.c
 SOURCES += src/shutdown_dos.c
+SOURCES += src/shell_commands.c src/shell_sounds.c
 TEST_SOURCES += src/shutdown_dos.c
+TEST_SOURCES += src/shell_commands.c
 OBJECTS = $(SOURCES:%.c=build/obj32/%.o)
 OBJECTS64 = $(SOURCES:%.c=build/obj64/%.o)
 TEST_OBJECTS = $(TEST_SOURCES:%.c=build/obj32/%.o)

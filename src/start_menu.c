@@ -1,6 +1,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include "shell_internal.h"
 #include "program_history.h"
+#include "shell_sounds.h"
 #define EX95_LOCALIZE_UI
 #include "localization.h"
 #undef GetTextExtentPoint32A
@@ -471,6 +472,7 @@ void StartToggle(void)
     if (env.options.classicStart) { if (classicActive) StartHide(); else ClassicPopup(); return; }
     if (IsWindowVisible(env.start)) StartHide();
     else {
+        ShellSoundMenuPopup();
         UpdateRecent(); StartPosition();
         /* Finish showing/reordering before activation callbacks can hide
          * Start. An activating show can complete after a nested hide. */
@@ -808,6 +810,7 @@ static LRESULT CALLBACK StartProc(HWND window, UINT message, WPARAM wp, LPARAM l
         if (id == ID_PROGRAMS) { ProgramsPopup(FALSE); return 0; }
         if (FolderPopup(id)) return 0;
         if (id == ID_MOREPINS || id == ID_MORECOMMANDS) { MorePopup(id == ID_MOREPINS); return 0; }
+        ShellSoundMenuCommand();
         StartHide();
         if (id >= ID_RECENT && id < ID_RECENT + RECENT_LIMIT) {
             RecentProgram *copy = EnvAlloc(sizeof(*copy));

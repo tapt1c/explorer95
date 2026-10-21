@@ -54,15 +54,23 @@ static void ControlPanelRowPaint(HWND page)
         Check(pixel==RGB(251,3,239) || pixel==GetSysColor(COLOR_WINDOW),
               "row erasure cannot replace a Control Panel item with a gray rectangle");
         /* RedrawWindow on another GUI thread is not a paint-completion
-         * barrier. Exercise the real WM_PAINT synchronously before sampling.
-         * The scroll-completion assertion above deliberately precedes this. */
+         * barrier. Exercise the real WM_PAINT, then allow its GDI surface to
+         * reach the observing process. Wine can acknowledge WM_PAINT before
+         * presenting it: a failure screenshot already contains the white row.
+         * Never request another paint while waiting; missing rendering must
+         * still fail. The strict scroll-completion assertion precedes this. */
         InvalidateRect(link,NULL,FALSE); SendMessageA(link,WM_PAINT,0,0);
-        dc=GetDC(link); pixel=GetPixel(dc,patch.left,patch.top); ReleaseDC(link,dc);
+        { DWORD started=GetTickCount();
+          do {
+              dc=GetDC(link); pixel=GetPixel(dc,patch.left,patch.top); ReleaseDC(link,dc);
+              if(pixel==GetSysColor(COLOR_WINDOW)) break;
+              PumpFor(5);
+          } while(GetTickCount()-started<250); }
         if(pixel!=GetSysColor(COLOR_WINDOW)) {
             char note[192]; wsprintfA(note,"Control row %d: pixel %08lx, screen %d,%d-%d,%d, viewport %d,%d-%d,%d\r\n",
                 i,pixel,bounds.left,bounds.top,bounds.right,bounds.bottom,viewport.left,viewport.top,viewport.right,viewport.bottom); Log(note);
         }
-        Check(pixel==GetSysColor(COLOR_WINDOW),"a synchronous row repaint replaces the canary with the complete plain row");
+        Check(pixel==GetSysColor(COLOR_WINDOW),"the completed row repaint reaches the screen and replaces the canary with the complete plain row");
         ++count;
     }
     DeleteObject(marker); Check(count>0,"exercise real visible Control Panel item painting");

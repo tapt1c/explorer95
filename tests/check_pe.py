@@ -54,6 +54,7 @@ ALLOWED = {
         DragAcceptFiles DragQueryFileA DragFinish
     """.split()),
     # GetMenuItemInfoA is stock Win95; callers use its original cbSize.
+    # GetSubMenu / ModifyMenuA are base Win95 menu APIs for native edit commands.
     "user32.dll": set("""
         CreateIconIndirect
         SetWindowsHookExA CallNextHookEx UnhookWindowsHookEx
@@ -66,7 +67,7 @@ ALLOWED = {
         BeginPaint EndPaint GetUpdateRect ValidateRect EnumWindows EnumChildWindows FillRect FindWindowA
         UnionRect GetDC ReleaseDC GetClassLongA GetCapture GetClassNameA GetClientRect GetCursorPos GetDlgItem
         GetDlgItemTextA GetFocus GetForegroundWindow GetKeyState GetAsyncKeyState GetMessageA GetParent
-        GetMenuItemInfoA GetDlgCtrlID GetDlgItemInt GetMenuItemCount GetMenuState GetMenuStringA GetPropA GetSystemMenu InsertMenuA
+        GetMenuItemInfoA GetDlgCtrlID GetDlgItemInt GetMenuItemCount GetMenuState GetMenuStringA GetSubMenu ModifyMenuA GetPropA GetSystemMenu InsertMenuA
         GetSystemMetrics GetWindowThreadProcessId IsChild LoadImageA PtInRect
         GetSysColor GetWindow GetWindowLongA GetWindowRect GetWindowTextA InflateRect InvalidateRect
         IsDialogMessageA IsIconic IsWindow IsWindowVisible IsWindowEnabled GetLastActivePopup KillTimer

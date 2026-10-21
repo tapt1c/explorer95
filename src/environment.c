@@ -5,6 +5,7 @@
 #include "tray_mirror.h"
 #include "task_groups.h"
 #include "task_switch.h"
+#include "shell_sounds.h"
 #define EX95_LOCALIZE_UI
 #include "localization.h"
 
@@ -240,7 +241,9 @@ int EnvTaskWindows(HWND windows[TASK_LIMIT])
 void EnvActivateWindow(HWND target)
 {
     if (!IsWindow(target)) return;
-    if (IsIconic(target)) ShowWindowAsync(target, SW_RESTORE);
+    /* Use the normal system-command path, including the user's minimize /
+     * maximize / restore event sounds. Queue it for hung foreign processes. */
+    if (IsIconic(target)) PostMessageA(target, WM_SYSCOMMAND, SC_RESTORE, 0);
     { HWND modal=GetLastActivePopup(target); if(modal && IsWindowVisible(modal)) target=modal; }
     SetForegroundWindow(target); lastActive = target;
 }
@@ -256,7 +259,7 @@ static void TaskAction(int index)
         GetCursorPos(&point); selected = TrackPopupMenu(menu, TPM_RETURNCMD, point.x, point.y, 0, env.bar, NULL);
         PostMessageA(env.bar,WM_NULL,0,0);
         DestroyMenu(menu); if (selected > 0 && selected <= task->count) EnvActivateWindow(task->windows[selected - 1]);
-    } else if (task->windows[0] == lastActive && !IsIconic(task->windows[0])) ShowWindowAsync(task->windows[0], SW_MINIMIZE);
+    } else if (task->windows[0] == lastActive && !IsIconic(task->windows[0])) PostMessageA(task->windows[0], WM_SYSCOMMAND, SC_MINIMIZE, 0);
     else EnvActivateWindow(task->windows[0]);
 }
 HICON EnvWindowIcon(HWND target, BOOL large)
@@ -327,12 +330,12 @@ void EnvShowDesktop(void)
 {
     int i;
     if (savedCount) {
-        for (i = 0; i < savedCount; ++i) if (IsWindow(savedWindows[i]) && IsIconic(savedWindows[i])) ShowWindowAsync(savedWindows[i], SW_RESTORE);
+        for (i = 0; i < savedCount; ++i) if (IsWindow(savedWindows[i]) && IsIconic(savedWindows[i])) PostMessageA(savedWindows[i], WM_SYSCOMMAND, SC_RESTORE, 0);
         savedCount = 0; return;
     }
     ZeroMemory(savedWindows, sizeof(savedWindows)); EnumWindows(CollectWindows, (LPARAM)savedWindows);
     for (i = 0; i < TASK_LIMIT && savedWindows[i]; ++i) if (!IsIconic(savedWindows[i])) {
-        HWND target = savedWindows[i]; savedWindows[savedCount++] = target; ShowWindowAsync(target, SW_MINIMIZE);
+        HWND target = savedWindows[i]; savedWindows[savedCount++] = target; PostMessageA(target, WM_SYSCOMMAND, SC_MINIMIZE, 0);
     }
 }
 
@@ -1158,7 +1161,7 @@ BOOL EnvironmentTranslate(MSG *message)
     if ((message->message == WM_LBUTTONDOWN || message->message == WM_RBUTTONDOWN || message->message == WM_MBUTTONDOWN) &&
         IsWindowVisible(env.start) && message->hwnd != env.start && message->hwnd != env.startButton &&
         !IsChild(env.start, message->hwnd)) StartHide();
-    return StartTranslate(message) || PropertiesTranslate(message);
+    return NativeViewTranslate(env.desktopView,message) || StartTranslate(message) || PropertiesTranslate(message);
 }
 void EnvironmentShutdown(void)
 {
@@ -1211,6 +1214,7 @@ void EnvironmentShutdown(void)
     env.bar = NULL;
     RenderTraceShutdown("exit.paint",S_OK,0);
     PaintBufferFree(&barBuffer); PaintBufferFree(&barButtonBuffer); PaintBufferFree(&gripBuffer); PaintShutdown();
+    ShellSoundsShutdown();
     RenderTraceShutdown("exit.environment.done",S_OK,0);
 }
 

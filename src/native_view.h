@@ -17,6 +17,7 @@ HWND OpenNativeFolder(LPCITEMIDLIST absolute);
 HWND NativeViewList(NativeView *view);
 void NativeViewSetNavigator(NativeView *view, BOOL (*navigate)(HWND, LPCITEMIDLIST));
 BOOL NativeViewInvoke(NativeView *view, const char *verb, BOOL background);
+BOOL NativeViewTranslate(NativeView *view, MSG *message);
 typedef struct NativeSelection {
     int count;
     SFGAOF capabilities;

@@ -14,6 +14,7 @@
 #include "folder_open.h"
 #include "shell_new.h"
 #include "file_drag.h"
+#include "shell_commands.h"
 #define EX95_LOCALIZE_UI
 #include "localization.h"
 
@@ -618,6 +619,10 @@ static LRESULT CALLBACK Subclass(HWND window, UINT message, WPARAM wp, LPARAM lp
             }
         }
         if (message == WM_KEYDOWN && wp == VK_F5) { NativeViewRefresh(view); return 0; }
+        if (message == WM_KEYDOWN) {
+            MSG key; ZeroMemory(&key,sizeof(key)); key.hwnd=window; key.message=message; key.wParam=wp; key.lParam=lp;
+            if(NativeViewTranslate(view,&key)) return 0;
+        }
         if (message == WM_KEYDOWN && wp == VK_DELETE && !ListView_GetEditControl(window)) {
             if (!view->deleting && !(lp & (1UL << 30)) && ListView_GetSelectedCount(window)) {
                 SendMessageA(window, WM_CANCELMODE, 0, 0);
@@ -721,10 +726,11 @@ void DesktopBackgroundMenu(NativeView *view, POINT point, HWND owner)
     IContextMenu *context = NULL;
     HMENU menu = CreatePopupMenu(), extra = CreatePopupMenu();
     HMENU arrange = EnvironmentDesktopLayoutMenu();
-    int command, newPosition = -1;
+    int command, newPosition = -1; BOOL shellAction=FALSE;
     if (!view || view->newMenu || view->context) { DestroyMenu(menu); DestroyMenu(extra); DestroyMenu(arrange); return; }
-    if (view && SUCCEEDED(IShellView_GetItemObject(view->view, SVGIO_BACKGROUND, &IID_IContextMenu, (void **)&context))) {
-        IContextMenu_QueryContextMenu(context, menu, 0, 1, 0x6fff, CMF_NORMAL);
+    if (SUCCEEDED(ShellBackgroundContext(view->view, view->folder, owner, &context))) {
+        ShellCommandMenu(context,menu);
+        ShellCommandShortcuts(context,menu);
         IContextMenu_QueryInterface(context, &IID_IContextMenu2, (void **)&view->context);
     } else {
         AppendMenuA(menu, MF_STRING, 0x8003, "Refresh");
@@ -755,14 +761,19 @@ void DesktopBackgroundMenu(NativeView *view, POINT point, HWND owner)
      * tracking so a second background-menu invocation dismisses normally. */
     PostMessageA(owner, WM_NULL, 0, 0);
     if (command > 0 && command < 0x7000 && context) {
-        CMINVOKECOMMANDINFO invoke;
+        CMINVOKECOMMANDINFO invoke; char verb[80]; BOOL editing;
+        verb[0]=0; verb[sizeof(verb)-1]=0;
+        IContextMenu_GetCommandString(context,command-1,GCS_VERBA,NULL,verb,sizeof(verb));
+        editing=ShellCommandIsEdit(verb);
         ZeroMemory(&invoke, sizeof(invoke));
         invoke.cbSize = sizeof(invoke); invoke.hwnd = owner;
         invoke.lpVerb = MAKEINTRESOURCEA(command - 1); invoke.nShow = SW_SHOWNORMAL;
+        BeginDesktopCall(view); ++view->operationDepth; shellAction=TRUE;
         IContextMenu_InvokeCommand(context, &invoke);
         if (view->list && !!(GetWindowLongA(view->list,GWL_STYLE) & LVS_AUTOARRANGE) != EnvironmentDesktopAutoArrange())
             EnvironmentArrangeDesktop(!!(GetWindowLongA(view->list,GWL_STYLE) & LVS_AUTOARRANGE));
         DesktopIconsAfterShellAction(view->icons);
+        if(editing) NativeViewRefresh(view);
     }
     if (command == 0x8001) EnvironmentShowProperties();
     if (command == 0x8002) { char path[MAX_PATH]; if (host.specialPath(CSIDL_DESKTOPDIRECTORY, path)) host.openFolder(path); }
@@ -776,6 +787,7 @@ void DesktopBackgroundMenu(NativeView *view, POINT point, HWND owner)
     if (newPosition >= 0) RemoveMenu(menu, newPosition, MF_BYPOSITION);
     ShellNewDestroy(view->newMenu); view->newMenu = NULL;
     DestroyMenu(menu);
+    if(shellAction) { --view->operationDepth; EndDesktopCall(view); }
 }
 
 NativeView *NativeViewCreateEx(HWND parent, LPCITEMIDLIST absolute, BOOL desktop, int mode, const RECT *initial)
@@ -1145,20 +1157,48 @@ static HRESULT DeleteRecycleSelection(NativeView *view)
     BrowserRecycleBinsChanged();
     return result;
 }
+BOOL NativeViewTranslate(NativeView *view, MSG *message)
+{
+    const char *verb;
+    if(!view || !view->desktop || message->hwnd!=view->list || message->message!=WM_KEYDOWN) return FALSE;
+    verb=ShellDesktopEditKey((UINT)message->wParam,!!(GetKeyState(VK_CONTROL)&0x8000),
+        !!(GetKeyState(VK_SHIFT)&0x8000),!!(GetKeyState(VK_MENU)&0x8000));
+    if(!verb || ListView_GetEditControl(view->list)) return FALSE;
+    if(!(message->lParam&(1UL<<30))) {
+        SendMessageA(view->list,WM_CANCELMODE,0,0);
+        NativeViewInvoke(view,verb,lstrcmpA(verb,"copy") && lstrcmpA(verb,"cut"));
+    }
+    return TRUE;
+}
 BOOL NativeViewInvoke(NativeView *view, const char *verb, BOOL background)
 {
     IContextMenu *context; CMINVOKECOMMANDINFO action; HRESULT result; HMENU menu;
-    if (!view) return FALSE;
+    if (!view || view->operationDepth) return FALSE;
     if (view->recycleBin && !background && !lstrcmpiA(verb, "delete")) {
         if (!ListView_GetSelectedCount(view->list)) return FALSE;
         return SUCCEEDED(DeleteRecycleSelection(view));
     }
-    result = IShellView_GetItemObject(view->view, background ? SVGIO_BACKGROUND : SVGIO_SELECTION, &IID_IContextMenu, (void **)&context);
-    if (FAILED(result)) return FALSE;
-    menu = CreatePopupMenu(); IContextMenu_QueryContextMenu(context, menu, 0, 1, 0x6fff, CMF_NORMAL);
-    ZeroMemory(&action, sizeof(action)); action.cbSize = sizeof(action); action.hwnd = view->parent;
-    action.lpVerb = verb; action.nShow = SW_SHOWNORMAL; result = IContextMenu_InvokeCommand(context, &action);
-    DestroyMenu(menu); IContextMenu_Release(context); return SUCCEEDED(result);
+    BeginDesktopCall(view); ++view->operationDepth;
+    result = background ? ShellBackgroundContext(view->view,view->folder,view->parent,&context) :
+        IShellView_GetItemObject(view->view,SVGIO_SELECTION,&IID_IContextMenu,(void **)&context);
+    if (SUCCEEDED(result)) {
+        menu = CreatePopupMenu(); result=ShellCommandMenu(context,menu);
+        if(SUCCEEDED(result)) {
+            UINT id=ShellCommandFind(context,menu,verb,FALSE);
+            if(id || ShellCommandIsEdit(verb)) result=ShellCommandInvoke(context,menu,view->parent,verb);
+            else {
+                ZeroMemory(&action, sizeof(action)); action.cbSize = sizeof(action); action.hwnd = view->parent;
+                action.lpVerb = verb; action.nShow = SW_SHOWNORMAL; result = IContextMenu_InvokeCommand(context, &action);
+            }
+        }
+        DestroyMenu(menu); IContextMenu_Release(context);
+    }
+    if(view->desktop && result!=S_FALSE && SUCCEEDED(result)) {
+        DesktopIconsAfterShellAction(view->icons);
+        if(background) NativeViewRefresh(view);
+    }
+    --view->operationDepth; EndDesktopCall(view);
+    return result!=S_FALSE && SUCCEEDED(result);
 }
 HRESULT NativeEmptyRecycleBin(NativeView *view)
 {
