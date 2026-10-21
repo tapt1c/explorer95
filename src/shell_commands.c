@@ -3,6 +3,10 @@
 #define WIN32_LEAN_AND_MEAN
 #define COBJMACROS
 #include "shell_commands.h"
+#include "file_drag.h"
+#include "file_operations.h"
+#define EX95_LOCALIZE_UI
+#include "localization.h"
 
 HRESULT ShellBackgroundContext(IShellView *view, IShellFolder *folder, HWND owner, IContextMenu **context)
 {
@@ -91,4 +95,75 @@ BOOL ShellCommandIsEdit(const char *verb)
 {
     return !lstrcmpiA(verb,"paste") || !lstrcmpiA(verb,"pastelink") || !lstrcmpiA(verb,"undo") ||
         !lstrcmpiA(verb,"copy") || !lstrcmpiA(verb,"cut");
+}
+
+static char *ClipboardPaths(DWORD *effect)
+{
+    IDataObject *data=NULL; char *paths; FORMATETC format; STGMEDIUM medium;
+    *effect=DROPEFFECT_COPY;
+    if(FAILED(OleGetClipboard(&data))) return NULL;
+    paths=FileDragPaths(data);
+    ZeroMemory(&format,sizeof(format)); format.cfFormat=RegisterClipboardFormatA("Preferred DropEffect");
+    format.dwAspect=DVASPECT_CONTENT; format.lindex=-1; format.tymed=TYMED_HGLOBAL;
+    if(paths && format.cfFormat && SUCCEEDED(IDataObject_GetData(data,&format,&medium))) {
+        if(medium.tymed==TYMED_HGLOBAL && GlobalSize(medium.hGlobal)>=sizeof(DWORD)) {
+            DWORD *value=GlobalLock(medium.hGlobal);
+            if(value) { *effect=*value; GlobalUnlock(medium.hGlobal); }
+        }
+        ReleaseStgMedium(&medium);
+    }
+    IDataObject_Release(data); return paths;
+}
+
+void ShellClipboardMenu(IContextMenu *context, HMENU menu)
+{
+    BOOL paste=!ShellCommandFind(context,menu,"paste",FALSE),link=!ShellCommandFind(context,menu,"pastelink",FALSE);
+    DWORD effect; char *paths; UINT flags;
+    if(!paste && !link) return;
+    paths=ClipboardPaths(&effect); flags=MF_STRING|(paths ? 0 : MF_GRAYED);
+    if(paths) HeapFree(GetProcessHeap(),0,paths);
+    if(GetMenuItemCount(menu)>0) AppendMenuA(menu,MF_SEPARATOR,0,NULL);
+    if(paste) AppendMenuA(menu,flags,SHELL_CLIPBOARD_PASTE,"Paste\tCtrl+V");
+    if(link) AppendMenuA(menu,flags,SHELL_CLIPBOARD_LINK,"Paste Shortcut\tCtrl+Shift+V");
+}
+
+static void ClearMovedClipboard(HWND owner, const char *paths)
+{
+    HDROP drop; const char *source; UINT index=0,count; char current[MAX_PATH]; BOOL same=TRUE,move=FALSE; HGLOBAL preferred;
+    /* A confirmation can pump messages while another program replaces the
+     * clipboard. Never clear that new selection after finishing our move. */
+    if(!OpenClipboard(owner)) return;
+    preferred=GetClipboardData(RegisterClipboardFormatA("Preferred DropEffect"));
+    if(preferred && GlobalSize(preferred)>=sizeof(DWORD)) {
+        DWORD *value=GlobalLock(preferred);
+        if(value) { move=!!(*value&DROPEFFECT_MOVE); GlobalUnlock(preferred); }
+    }
+    if(!move) { CloseClipboard(); return; }
+    drop=GetClipboardData(CF_HDROP); count=drop ? DragQueryFileA(drop,0xffffffff,NULL,0) : 0;
+    for(source=paths;*source;source+=lstrlenA(source)+1,++index) {
+        if(index>=count || DragQueryFileA(drop,index,NULL,0)!=(UINT)lstrlenA(source) ||
+           !DragQueryFileA(drop,index,current,MAX_PATH) || lstrcmpiA(source,current)) { same=FALSE; break; }
+    }
+    if(same && index==count) EmptyClipboard();
+    CloseClipboard();
+}
+
+HRESULT ShellClipboardPaste(HWND owner, const char *folder, BOOL shortcut)
+{
+    DWORD effect,error=0,attributes; char *paths; BOOL aborted=FALSE; HRESULT result;
+    if(!folder || !*folder) return E_INVALIDARG;
+    attributes=GetFileAttributesA(folder);
+    if(attributes==INVALID_FILE_ATTRIBUTES || !(attributes&FILE_ATTRIBUTE_DIRECTORY)) return HRESULT_FROM_WIN32(ERROR_PATH_NOT_FOUND);
+    paths=ClipboardPaths(&effect); if(!paths) return S_FALSE;
+    if(shortcut) result=FileDragCreateLinks(owner,paths,folder);
+    else {
+        BOOL move=!!(effect&DROPEFFECT_MOVE);
+        error=ShellFilesPerform(owner,move ? FO_MOVE : FO_COPY,paths,folder,FALSE,&aborted);
+        result=aborted ? E_ABORT : error ? HRESULT_FROM_WIN32(error) : S_OK;
+        if(result==S_OK && move) ClearMovedClipboard(owner,paths);
+    }
+    HeapFree(GetProcessHeap(),0,paths);
+    if(FAILED(result) && result!=E_ABORT)
+        MessageBoxA(owner,"Windows could not complete the file operation.","Explorer95",MB_OK|MB_ICONEXCLAMATION);
+    return result;
 }

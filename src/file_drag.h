@@ -5,6 +5,8 @@
 typedef struct FileDrop FileDrop;
 /* Validated double-NUL CF_HDROP snapshot; caller uses HeapFree. */
 char *FileDragPaths(IDataObject *data);
+/* Shared by file drops and the desktop's legacy Paste Shortcut fallback. */
+HRESULT FileDragCreateLinks(HWND owner, const char *paths, const char *folder);
 typedef BOOL (*FileDropResolve)(void *context, POINT screen, char *path);
 typedef void (*FileDropNotify)(void *context);
 /* Feedback follows the accepted effect, including the native virtual target. */

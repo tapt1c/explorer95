@@ -16,6 +16,17 @@ DWORD ShellFilesPerform(HWND owner, UINT operation, const char *sources, const c
     ZeroMemory(&action, sizeof(action)); action.hwnd = owner; action.wFunc = operation; action.pFrom = sources;
     ZeroMemory(target, sizeof(target)); if (destination) lstrcpynA(target, destination, MAX_PATH);
     action.pTo = destination ? target : NULL; action.fFlags = permanent ? 0 : FOF_ALLOWUNDO;
+    if(operation==FO_COPY && destination && *sources) {
+        BOOL sameFolder=TRUE;
+        for(source=sources;*source;source+=lstrlenA(source)+1) {
+            const char *name=source,*p; char duplicate[MAX_PATH];
+            for(p=source;*p;++p) if(*p=='\\') name=p+1;
+            if(!Join(duplicate,destination,name) || lstrcmpiA(source,duplicate)) { sameFolder=FALSE; break; }
+        }
+        /* Ctrl+C / Ctrl+V in the same folder creates another copy. Keep the
+         * normal replace confirmations when copying from a different folder. */
+        if(sameFolder) action.fFlags|=FOF_RENAMEONCOLLISION;
+    }
     if (operation == FO_MOVE && destination) {
         char *next;
         for (source = sources; *source; source += lstrlenA(source) + 1) ++count;

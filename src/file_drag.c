@@ -218,7 +218,7 @@ static DWORD RightChoice(HWND owner, DWORD allowed, DWORD selected, POINTL point
     choice=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_RIGHTBUTTON,point.x,point.y,0,owner,NULL); DestroyMenu(menu);
     return choice==8 ? 0 : choice;
 }
-static HRESULT CreateLinks(HWND owner, const char *paths, const char *folder)
+HRESULT FileDragCreateLinks(HWND owner, const char *paths, const char *folder)
 {
     const char *source;
     (void)owner;
@@ -265,7 +265,7 @@ static HRESULT STDMETHODCALLTYPE TargetDrop(IDropTarget *self, IDataObject *data
             lstrcpyA(destination,target->destination); target->paths=NULL;
             if(target->right) selected=RightChoice(owner,target->allowed,selected,point);
             if(selected && target->context) {
-                if(selected==DROPEFFECT_LINK) result=CreateLinks(owner,paths,destination);
+                if(selected==DROPEFFECT_LINK) result=FileDragCreateLinks(owner,paths,destination);
                 else { DWORD error=ShellFilesPerform(owner,selected==DROPEFFECT_MOVE ? FO_MOVE : FO_COPY,paths,destination,FALSE,&aborted); result=error ? HRESULT_FROM_WIN32(error) : S_OK; }
                 if(FAILED(result) && !aborted) MessageBoxA(owner,"Windows could not complete the drag and drop operation.","Explorer95",MB_OK|MB_ICONEXCLAMATION);
             } else selected=0;

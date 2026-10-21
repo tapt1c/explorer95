@@ -1397,7 +1397,19 @@ Rename со скрытым расширением, системные Properties
   Не подменяйте native undo догадками об обратном перемещении/удалении файлов.
   `QueryContextMenu` и необязательный `IContextMenu2::HandleMenuMsg(WM_INITMENUPOPUP)`
   определяют доступность; canonical verb преобразуется в числовой offset.
-  Отключённая/отсутствующая команда не вызывается, после ошибки или Cancel нет retry.
+  Отключённая команда не вызывается, после ошибки или Cancel нет retry.
+  Начиная с исправления alpha.60 отсутствие native paste/pastelink до Invoke
+  разрешает файловый fallback. У Win95 QueryContextMenu может вернуть S_OK,
+  не добавив ни одного пункта: одного CreateViewObject недостаточно.
+  `ShellClipboardMenu` добавляет собственные 0x8020/0x8021 без дублирования
+  native verbs; `ShellClipboardPaste` читает внешний CF_HDROP/Preferred DropEffect
+  через OleGetClipboard и валидатор FileDragPaths, отпускает provider до операции.
+  Используются общие ShellFilesPerform / FileDragCreateLinks. Успешный Cut
+  очищает буфер лишь при совпадении текущих путей и предпочтения Move; Shortcut
+  не потребляет cut-буфер. Общая операция Copy в ту же папку задаёт штатный
+  FOF_RENAMEONCOLLISION (Wine 10 его не реализует; проверка нужна в Win95).
+  Fallback никогда не запускается после найденной/отключённой native команды,
+  её InvokeCommand, ошибки либо отмены. Отмена остаётся native history.
   Подпись Undo с видом операции сохраняется из Windows; меню добавляет подсказки
   Ctrl+V / Ctrl+Shift+V / Ctrl+Z. Ctrl+C/X и Ctrl+Insert обслуживают выделение,
   Ctrl+V/Z, Ctrl+Shift+V, Shift+Insert — фон. `NativeViewTranslate` вызывается
@@ -1407,7 +1419,9 @@ Rename со скрытым расширением, системные Properties
   native callback не должен уничтожать PIDL посреди операции.
   Core/full проверяет внешнее CF_HDROP и настоящий Ctrl+V на временной папке;
   Undo/Paste Shortcut дополнены инертным native COM-контрактом, поскольку Wine
-  не воспроизводит историю undo Win95 и не реализует все эти verbs.
+  не воспроизводит историю undo Win95 и не реализует все эти verbs. Отдельно
+  воспроизводится S_OK + пустое меню: реальные ANSI Copy/Cut, создание .lnk с
+  проверкой цели, disabled после очистки и сохранение cut-буфера при Shortcut.
 - Звуки своего двухколоночного Пуска — `MenuPopup` и `MenuCommand` через
   динамический PlaySoundA (SND_ALIAS/ASYNC/NODEFAULT/NOWAIT), без обязательного
   импорта WinMM и без стандартного beep вместо незаданного события.

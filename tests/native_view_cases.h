@@ -464,6 +464,7 @@ static void NativeDesktopPasteTests(HWND parent)
       Check(paths && !lstrcmpiA(paths,copied),"sent desktop Ctrl+C uses the selected native item rather than the previous external source");
       if(paths) HeapFree(GetProcessHeap(),0,paths); }
     Check(OpenClipboard(parent),"reopen only our clipboard fixture"); EmptyClipboard(); CloseClipboard();
+    ShellClipboardFallbackTests(parent,root,source);
     NativeViewDestroy(view);
     Check(DeleteFileA(copied) && DeleteFileA(source) && RemoveDirectoryA(target) && RemoveDirectoryA(root),"remove only the clipboard fixture paths");
 }

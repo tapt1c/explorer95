@@ -46,7 +46,8 @@ ALLOWED = {
         GetPrivateProfileStringA GetPrivateProfileSectionA GetTickCount GetVersion MultiByteToWideChar WritePrivateProfileStringA
         lstrcatA lstrcmpA lstrcmpiA lstrcpyA lstrcpynA lstrlenA
     """.split()),
-    "ole32.dll": {"DoDragDrop", "RegisterDragDrop", "RevokeDragDrop", "CoTaskMemAlloc", "OleInitialize", "OleUninitialize", "CoCreateInstance", "CoTaskMemFree", "ReleaseStgMedium"},
+    # OleGetClipboard is part of base Win95 OLE2, including delayed external file data.
+    "ole32.dll": {"DoDragDrop", "RegisterDragDrop", "RevokeDragDrop", "CoTaskMemAlloc", "OleInitialize", "OleUninitialize", "OleGetClipboard", "CoCreateInstance", "CoTaskMemFree", "ReleaseStgMedium"},
     "shell32.dll": set("""
         SHBrowseForFolderA
         SHChangeNotify SHAddToRecentDocs SHFileOperationA ShellExecuteExA ExtractIconExA SHGetFileInfoA SHGetMalloc SHGetPathFromIDListA

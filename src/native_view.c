@@ -726,7 +726,7 @@ void DesktopBackgroundMenu(NativeView *view, POINT point, HWND owner)
     IContextMenu *context = NULL;
     HMENU menu = CreatePopupMenu(), extra = CreatePopupMenu();
     HMENU arrange = EnvironmentDesktopLayoutMenu();
-    int command, newPosition = -1; BOOL shellAction=FALSE;
+    int command, newPosition = -1; BOOL shellAction=FALSE, clipboardAction=FALSE;
     if (!view || view->newMenu || view->context) { DestroyMenu(menu); DestroyMenu(extra); DestroyMenu(arrange); return; }
     if (SUCCEEDED(ShellBackgroundContext(view->view, view->folder, owner, &context))) {
         ShellCommandMenu(context,menu);
@@ -736,6 +736,7 @@ void DesktopBackgroundMenu(NativeView *view, POINT point, HWND owner)
         AppendMenuA(menu, MF_STRING, 0x8003, "Refresh");
 
     }
+    ShellClipboardMenu(context,menu);
     AppendMenuA(menu, MF_STRING | (EnvironmentDesktopIconsVisible() ? MF_CHECKED : 0), 0x8009, "Show Desktop Icons");
     InsertMenuA(menu, 0, MF_BYPOSITION | MF_POPUP, (UINT_PTR)arrange, "Icon Layout");
     if (!HasNewMenu(menu, context)) {
@@ -752,7 +753,7 @@ void DesktopBackgroundMenu(NativeView *view, POINT point, HWND owner)
     AppendMenuA(extra, MF_STRING, 0x8003, "Refresh Desktop");
     AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
     AppendMenuA(menu, MF_POPUP, (UINT_PTR)extra, "Explorer95");
-    AppendMenuA(menu, MF_STRING, 0x8004, "Desktop Background / Display Properties...");
+    AppendMenuA(menu, MF_STRING, 0x8004, "Properties...");
     /* A full-screen desktop must never be promoted just to own a menu. */
     SetForegroundWindow(owner);
     command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, 0,
@@ -778,6 +779,10 @@ void DesktopBackgroundMenu(NativeView *view, POINT point, HWND owner)
     if (command == 0x8001) EnvironmentShowProperties();
     if (command == 0x8002) { char path[MAX_PATH]; if (host.specialPath(CSIDL_DESKTOPDIRECTORY, path)) host.openFolder(path); }
     if (command == 0x8003) NativeViewRefresh(view);
+    if (command == SHELL_CLIPBOARD_PASTE || command == SHELL_CLIPBOARD_LINK) {
+        BeginDesktopCall(view); clipboardAction=TRUE;
+        NativeViewInvoke(view,command==SHELL_CLIPBOARD_LINK ? "pastelink" : "paste",TRUE);
+    }
     if (command == 0x8004) EnvironmentLaunch(view->parent, "control.exe", "desk.cpl", NULL);
     EnvironmentDesktopLayoutCommand(command);
     if (command == 0x8009) EnvironmentToggleDesktopIcons();
@@ -788,6 +793,7 @@ void DesktopBackgroundMenu(NativeView *view, POINT point, HWND owner)
     ShellNewDestroy(view->newMenu); view->newMenu = NULL;
     DestroyMenu(menu);
     if(shellAction) { --view->operationDepth; EndDesktopCall(view); }
+    if(clipboardAction) EndDesktopCall(view);
 }
 
 NativeView *NativeViewCreateEx(HWND parent, LPCITEMIDLIST absolute, BOOL desktop, int mode, const RECT *initial)
@@ -1173,18 +1179,22 @@ BOOL NativeViewTranslate(NativeView *view, MSG *message)
 BOOL NativeViewInvoke(NativeView *view, const char *verb, BOOL background)
 {
     IContextMenu *context; CMINVOKECOMMANDINFO action; HRESULT result; HMENU menu;
+    BOOL clipboardFallback,clipboardCommand;
     if (!view || view->operationDepth) return FALSE;
     if (view->recycleBin && !background && !lstrcmpiA(verb, "delete")) {
         if (!ListView_GetSelectedCount(view->list)) return FALSE;
         return SUCCEEDED(DeleteRecycleSelection(view));
     }
     BeginDesktopCall(view); ++view->operationDepth;
+    clipboardCommand=view->desktop && background && (!lstrcmpiA(verb,"paste") || !lstrcmpiA(verb,"pastelink"));
+    clipboardFallback=clipboardCommand;
     result = background ? ShellBackgroundContext(view->view,view->folder,view->parent,&context) :
         IShellView_GetItemObject(view->view,SVGIO_SELECTION,&IID_IContextMenu,(void **)&context);
     if (SUCCEEDED(result)) {
         menu = CreatePopupMenu(); result=ShellCommandMenu(context,menu);
         if(SUCCEEDED(result)) {
             UINT id=ShellCommandFind(context,menu,verb,FALSE);
+            if(id) clipboardFallback=FALSE;
             if(id || ShellCommandIsEdit(verb)) result=ShellCommandInvoke(context,menu,view->parent,verb);
             else {
                 ZeroMemory(&action, sizeof(action)); action.cbSize = sizeof(action); action.hwnd = view->parent;
@@ -1193,7 +1203,13 @@ BOOL NativeViewInvoke(NativeView *view, const char *verb, BOOL background)
         }
         DestroyMenu(menu); IContextMenu_Release(context);
     }
-    if(view->desktop && result!=S_FALSE && SUCCEEDED(result)) {
+    if(clipboardFallback) {
+        char folder[MAX_PATH]; BOOL found=SHGetPathFromIDListA(view->absolute,folder);
+        if(!found && host.specialPath) found=host.specialPath(CSIDL_DESKTOPDIRECTORY,folder);
+        result=found ? ShellClipboardPaste(view->parent,folder,!lstrcmpiA(verb,"pastelink")) : E_FAIL;
+    }
+    /* A cancelled multi-file paste may already have completed some entries. */
+    if(view->desktop && result!=S_FALSE && (SUCCEEDED(result) || clipboardCommand)) {
         DesktopIconsAfterShellAction(view->icons);
         if(background) NativeViewRefresh(view);
     }
