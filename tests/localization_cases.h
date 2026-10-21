@@ -161,7 +161,7 @@ static void CALLBACK AboutTestTimer(HWND unused,UINT message,UINT_PTR timer,DWOR
 }
 static void AboutTests(HWND owner)
 {
-    const char *text=UiText("Program author and mockups - Daniil Myslivets\r\nDeveloped with assistance from AI tools"); UINT_PTR timer;
+    const char *text=UiText("Idea and mockups - Daniel Myslivets\r\nCreated with assistance from AI tools"); UINT_PTR timer;
     aboutTestOwner=owner; aboutTestCredit=NULL; aboutTestStarted=GetTickCount();
     MultiByteToWideChar(UiLanguage() ? 1251 : CP_ACP,0,text,-1,aboutTestExpected,160);
     timer=SetTimer(NULL,0,60,AboutTestTimer); Check(timer!=0,"arm a bounded probe for the real ShellAbout dialog");
@@ -172,7 +172,7 @@ static void AboutCommandTest(HWND browser)
 {
     UINT_PTR timer; DWORD started=GetTickCount();
     aboutTestOwner=browser; aboutTestCredit=NULL; aboutTestStarted=started;
-    MultiByteToWideChar(CP_ACP,0,"Program author and mockups - Daniil Myslivets\r\nDeveloped with assistance from AI tools",-1,aboutTestExpected,160);
+    MultiByteToWideChar(CP_ACP,0,"Idea and mockups - Daniel Myslivets\r\nCreated with assistance from AI tools",-1,aboutTestExpected,160);
     timer=SetTimer(NULL,0,60,AboutTestTimer); Check(timer!=0,"arm the About probe for the real browser Help command");
     PostMessageA(browser,WM_COMMAND,ID_ABOUT,0);
     do { PumpFor(20); } while((!aboutTestCredit || !IsWindowEnabled(browser)) && GetTickCount()-started<4500);

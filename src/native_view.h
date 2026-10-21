@@ -2,6 +2,10 @@
 #define EXPLORER95_NATIVE_VIEW_H
 #include "environment.h"
 typedef struct NativeView NativeView;
+/* Original shell context menus obtain their borrowed host through this message. */
+#define NATIVE_GETSHELLBROWSER (WM_USER+7)
+IShellBrowser *NativeViewShellBrowser(NativeView *view);
+BOOL NativeViewSort(NativeView *view,int column,BOOL descending);
 NativeView *NativeViewCreate(HWND parent, LPCITEMIDLIST absolute, BOOL desktop);
 NativeView *NativeViewCreateEx(HWND parent, LPCITEMIDLIST absolute, BOOL desktop, int mode, const RECT *initial);
 void NativeViewResize(NativeView *view, const RECT *rect);

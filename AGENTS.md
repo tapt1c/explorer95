@@ -72,6 +72,7 @@ Explorer95 — любительская нативная оболочка для
 | `src/shell_config.c` | Подготовка копии EXE, изменение `[boot] shell=`, резервирование и восстановление. |
 | `src/file_operations.c`, `src/file_operations.h` | Общие SHFileOperationA для clipboard и Drag and Drop, пары путей MOVE и штатные подтверждения конфликтов. |
 | `src/shell_commands.c/.h`, `tests/shell_commands_cases.h` | Native background IContextMenu с Win95 fallback, состояние Paste/Paste Shortcut/Undo, числовые offsets и сочетания рабочего стола. |
+| `src/shell_run.c/.h`, `tests/shell_run_cases.h` | Штатный RunFileDlg (Shell32 ordinal 61), сохранение успешного запуска в истории Пуска и проверки отмены/ошибки. |
 | `src/shell_sounds.c/.h` | MenuPopup/MenuCommand собственных меню через необязательный WinMM и текущую звуковую схему. |
 | `src/file_drag.c`, `src/file_drag.h` | Общий Win95 OLE source/target, подтверждаемые файловые операции, native fallback виртуальных целей, отмена и отложенное закрытие источника. |
 | `src/folder_open.c`, `src/folder_open.h` | ANSI-команды открытия, проверяемый протокол WM_COPYDATA и чтение Shell IDList Array с проверкой границ. |
@@ -1024,6 +1025,20 @@ explorer95.exe --settings="C:\EX95TEST\Explorer95.ini"
 
 ## Проводник и совместимость файловых операций
 
+- Native контекстным меню нужен CWM_GETISHELLBROWSER (WM_USER+7): BrowserProc,
+  desktop/taskbar owner и native view возвращают заимствованный IShellBrowser
+  своего активного NativeView. Не добавляйте AddRef на возврате сообщения.
+  Без этого native Arrange/View/Refresh могут молча ничего не делать.
+  Верхнее View/Arrange вызывает NativeViewSort: исходный Win95 IShellFolderView
+  Rearrange, затем при необходимости обратный порядок с папками в начале.
+  MinGW C declaration пропускает IUnknown slots; LegacyFolderViewVtbl сохраняет
+  исходный порядок QueryInterface/AddRef/Release перед Rearrange и GetObject.
+  ListView lParam остаётся непрозрачным ключом, PIDL получается через GetObject.
+  Если Rearrange не реализован (Wine), fallback читает реальные файловые размеры,
+  даты и shell type; CompareIDs используется для имени/локали, а не произвольных
+  колонок: Wine игнорирует номер колонки в этом методе. Native desktop с .DIP
+  не сортируется этим helper. Регрессия native_sort_cases проверяет свой каталог,
+  все четыре критерия, reverse и старый запрос активного IShellBrowser.
 - Файловый Drag and Drop находится в `file_drag`, `browser_files` и `native_view`.
   Используйте штатные IDataObject / IDropTarget / DoDragDrop (Win95 OLE).
   Файловые цели используют ShellFilesPerform / SHFileOperationA совместно
@@ -1387,6 +1402,22 @@ Rename со скрытым расширением, системные Properties
 
 ## Основная оболочка, системные команды и трей
 
+- Run вызывает ShellRun → Shell32 ordinal 61 через GetProcAddress. Все строковые
+  аргументы NULL: Win9x принимает ANSI, NT — Unicode; собственные строки сюда
+  не подставляются. Штатные layout, язык, ComboBox/RunMRU, Browse, валидация и
+  запуск остаются в Shell32. Не возвращайте отдельный класс Explorer95.Run
+  или второй ShellExecute. Только для истории Пуска временный WH_CBT текущего
+  потока находит свой native dialog; subclass наблюдает IDOK/Cancel и снимается
+  при WM_NCDESTROY. Маркер после native IDOK очищается, если диалог продолжил
+  цикл из-за ошибки; EndDialog завершает его до следующего сообщения. Отмена и
+  ошибка не записываются. SearchPathA — базовый Win95 API только для разбора
+  успешно выполненной команды в истории; параметры и кавычки сохраняются.
+  Smoke использует PostMessage для Run: вызов теперь содержит системный modal
+  loop и синхронный SendMessage заблокирует управляющий тест до закрытия окна.
+  Wine 10 Run передаёт всю строку в ShellExecuteEx.lpFile, без разбора аргументов.
+  Интеграция запускает свой настоящий .lnk с аргументом в кавычках; observer
+  сохраняет его цель/аргументы без Resolve UI. Прямой ввод команды с аргументами
+  проверяется в Win95 ВМ; не подменяйте исполнение Shell32 ради обхода Wine.
 - WM_SIZING панели задач корректирует переданный RECT сразу до целых строк,
   сохраняя закреплённую сторону и длину вдоль экрана. Высота строки соответствует
   EnvBarThickness (28/40/44 для обычных/крупных/плиток). Не откладывайте привязку

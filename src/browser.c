@@ -700,7 +700,8 @@ static void Command(Browser *browser, int command)
     } else if (command >= ID_SORT_NAME && command <= ID_SORT_REVERSE) {
         if (command == ID_SORT_REVERSE) browser->descending = !browser->descending;
         else { browser->descending = browser->sort == command - ID_SORT_NAME ? !browser->descending : FALSE; browser->sort = command - ID_SORT_NAME; }
-        if (!browser->native) BrowserFilesShow(browser);
+        if (browser->native) NativeViewSort(browser->native,browser->sort,browser->descending);
+        else BrowserFilesShow(browser);
     } else if (command == ID_BROWSER_OPTIONS || command == ID_CUSTOMIZE_TOOLBAR) BrowserOpenOptions(browser);
     else if (command == ID_FAVORITE_ADD || command == ID_FAVORITE_REMOVE) AddFavorite(browser, command == ID_FAVORITE_REMOVE);
     else if (command >= ID_FAVORITE && command < ID_FAVORITE + 8) {
@@ -724,6 +725,7 @@ static void PaintFrame(Browser *browser, HDC dc)
 static LRESULT CALLBACK BrowserProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
 {
     Browser *browser = (Browser *)GetWindowLongPtrA(window, GWLP_USERDATA);
+    if(message==NATIVE_GETSHELLBROWSER) return browser ? (LRESULT)NativeViewShellBrowser(browser->native) : 0;
     RenderTraceEvent("browser", window, message, wp, lp);
     if (browser && browser->context && (message == WM_INITMENUPOPUP ||
         (message == WM_DRAWITEM && ((DRAWITEMSTRUCT *)lp)->CtlType == ODT_MENU) ||

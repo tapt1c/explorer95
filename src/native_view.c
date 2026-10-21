@@ -50,6 +50,111 @@ struct NativeView {
 };
 
 static EnvironmentHost host;
+static LPITEMIDLIST Combine(LPCITEMIDLIST first,LPCITEMIDLIST second);
+IShellBrowser *NativeViewShellBrowser(NativeView *view)
+{ return view ? &view->browser : NULL; }
+typedef struct NativeSortItem {
+    LPARAM key; LPITEMIDLIST pidl; BOOL folder; int rank;
+    DWORD sizeHigh,sizeLow; FILETIME modified; char type[80];
+} NativeSortItem;
+typedef struct NativeSort {
+    IShellFolder *folder; NativeSortItem *items; UINT mask,column; BOOL descending,native;
+} NativeSort;
+/* MinGW's C IShellFolderView declaration omits the inherited IUnknown slots.
+ * Declare the original Win95 interface prefix explicitly, including them. */
+typedef struct LegacyFolderView LegacyFolderView;
+typedef struct LegacyFolderViewVtbl {
+    HRESULT (STDMETHODCALLTYPE *QueryInterface)(LegacyFolderView *,REFIID,void **);
+    ULONG (STDMETHODCALLTYPE *AddRef)(LegacyFolderView *);
+    ULONG (STDMETHODCALLTYPE *Release)(LegacyFolderView *);
+    HRESULT (STDMETHODCALLTYPE *Rearrange)(LegacyFolderView *,LPARAM);
+    HRESULT (STDMETHODCALLTYPE *GetArrangeParam)(LegacyFolderView *,LPARAM *);
+    HRESULT (STDMETHODCALLTYPE *ArrangeGrid)(LegacyFolderView *);
+    HRESULT (STDMETHODCALLTYPE *AutoArrange)(LegacyFolderView *);
+    HRESULT (STDMETHODCALLTYPE *GetAutoArrange)(LegacyFolderView *);
+    HRESULT (STDMETHODCALLTYPE *AddObject)(LegacyFolderView *,LPITEMIDLIST,UINT *);
+    HRESULT (STDMETHODCALLTYPE *GetObject)(LegacyFolderView *,LPITEMIDLIST *,UINT);
+} LegacyFolderViewVtbl;
+struct LegacyFolderView { const LegacyFolderViewVtbl *lpVtbl; };
+static const IID legacyFolderViewId={0x37a378c0,0xf82d,0x11ce,{0xae,0x65,0x08,0x00,0x2b,0x2e,0x12,0x62}};
+static NativeSortItem *SortItem(NativeSort *sort,LPARAM key)
+{
+    UINT index=(UINT)(((UINT_PTR)key>>3)*2654435761U)&sort->mask;
+    while(sort->items[index].pidl && sort->items[index].key!=key) index=(index+1)&sort->mask;
+    return &sort->items[index];
+}
+static int CALLBACK SortCompare(LPARAM a,LPARAM b,LPARAM data)
+{
+    NativeSort *sort=(NativeSort *)data; NativeSortItem *left=SortItem(sort,a),*right=SortItem(sort,b);
+    HRESULT result; int order;
+    if(!left->pidl || !right->pidl) return 0;
+    if(left->folder!=right->folder) return left->folder ? -1 : 1;
+    if(sort->native) order=left->rank-right->rank;
+    else if(sort->column==1) order=lstrcmpiA(left->type,right->type);
+    else if(sort->column==2) {
+        if(left->sizeHigh!=right->sizeHigh) order=left->sizeHigh<right->sizeHigh ? -1 : 1;
+        else order=left->sizeLow==right->sizeLow ? 0 : left->sizeLow<right->sizeLow ? -1 : 1;
+    } else if(sort->column==3) order=CompareFileTime(&left->modified,&right->modified);
+    else order=0;
+    if(!order) {
+        result=IShellFolder_CompareIDs(sort->folder,0,left->pidl,right->pidl);
+        if(SUCCEEDED(result)) order=(short)HRESULT_CODE(result);
+    }
+    return sort->descending ? -order : order;
+}
+BOOL NativeViewSort(NativeView *view,int column,BOOL descending)
+{
+    LegacyFolderView *folderView; NativeSort sort; int count,i; UINT capacity=8; BOOL okay=FALSE;
+    /* The original IShellFolderView predates Win95. GetObject returns owned
+     * relative PIDLs; ListView lParams are only opaque lookup keys, never PIDLs.
+     * Keep native Rearrange authoritative. Wine leaves it unimplemented and
+     * ignores the column in CompareIDs; only that path reads real file data. */
+    if(!view || view->desktop || !view->list || column<0 || column>3 ||
+       FAILED(IShellView_QueryInterface(view->view,&legacyFolderViewId,(void **)&folderView))) return FALSE;
+    sort.folder=view->folder; sort.column=column; sort.descending=descending;
+    sort.native=SUCCEEDED(folderView->lpVtbl->Rearrange(folderView,column==1 ? 2 : column==2 ? 1 : column));
+    if(sort.native && !descending) {
+        ListView_Arrange(view->list,LVA_DEFAULT); folderView->lpVtbl->Release(folderView); return TRUE;
+    }
+    count=ListView_GetItemCount(view->list);
+    if(count<0 || count>65536) { folderView->lpVtbl->Release(folderView); return FALSE; }
+    while(capacity<(UINT)count*2) capacity*=2;
+    sort.mask=capacity-1; sort.items=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,capacity*sizeof(*sort.items));
+    if(!sort.items) { folderView->lpVtbl->Release(folderView); return FALSE; }
+    for(i=0;i<count;++i) {
+        LVITEMA item; LPITEMIDLIST pidl=NULL; NativeSortItem *slot; SFGAOF attributes=SFGAO_FOLDER;
+        ZeroMemory(&item,sizeof(item)); item.mask=LVIF_PARAM; item.iItem=i;
+        if(!ListView_GetItem(view->list,&item) || FAILED(folderView->lpVtbl->GetObject(folderView,&pidl,i)) || !pidl) {
+            if(pidl) CoTaskMemFree(pidl);
+            goto done;
+        }
+        slot=SortItem(&sort,item.lParam);
+        if(slot->pidl) { CoTaskMemFree(pidl); goto done; }
+        slot->key=item.lParam; slot->pidl=pidl; slot->rank=i;
+        slot->folder=SUCCEEDED(IShellFolder_GetAttributesOf(view->folder,1,(LPCITEMIDLIST *)&pidl,&attributes)) && (attributes&SFGAO_FOLDER);
+        if(!sort.native && column) {
+            LPITEMIDLIST absolute=Combine(view->absolute,pidl); char path[MAX_PATH]; SHFILEINFOA info;
+            if(!absolute) goto done;
+            ZeroMemory(&info,sizeof(info)); SHGetFileInfoA((LPCSTR)absolute,0,&info,sizeof(info),SHGFI_PIDL|SHGFI_TYPENAME);
+            lstrcpynA(slot->type,info.szTypeName,sizeof(slot->type));
+            if(SHGetPathFromIDListA(absolute,path)) {
+                WIN32_FIND_DATAA data; HANDLE find=FindFirstFileA(path,&data);
+                if(find!=INVALID_HANDLE_VALUE) {
+                    slot->sizeHigh=data.nFileSizeHigh; slot->sizeLow=data.nFileSizeLow; slot->modified=data.ftLastWriteTime; FindClose(find);
+                }
+            }
+            HeapFree(GetProcessHeap(),0,absolute);
+        }
+    }
+    okay=ListView_SortItems(view->list,SortCompare,(LPARAM)&sort);
+    if(okay) {
+        ListView_Arrange(view->list,LVA_DEFAULT);
+        InvalidateRect(view->list,NULL,TRUE);
+    }
+done:
+    for(i=0;i<(int)capacity;++i) if(sort.items[i].pidl) CoTaskMemFree(sort.items[i].pidl);
+    HeapFree(GetProcessHeap(),0,sort.items); folderView->lpVtbl->Release(folderView); return okay;
+}
 static const char property[] = "Explorer95.NativeView";
 static BOOL OpenSelection(NativeView *view);
 static void PaintBackground(NativeView *view, HDC target, HWND window);
@@ -567,6 +672,7 @@ static LRESULT CALLBACK Subclass(HWND window, UINT message, WPARAM wp, LPARAM lp
     WNDPROC original;
     if (!view) return DefWindowProcA(window, message, wp, lp);
     original = window == view->list ? view->oldList : view->oldView;
+    if(message==NATIVE_GETSHELLBROWSER) return (LRESULT)NativeViewShellBrowser(view);
     RenderTraceEvent(view->desktop ? (window == view->list ? "desktop-list" : "desktop-view") : "folder-view", window, message, wp, lp);
     BeginDesktopCall(view);
     { BOOL handled=NativeViewMenuMessage(view,message,wp,lp);

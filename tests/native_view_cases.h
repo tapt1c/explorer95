@@ -469,6 +469,7 @@ static void NativeDesktopPasteTests(HWND parent)
     Check(DeleteFileA(copied) && DeleteFileA(source) && RemoveDirectoryA(target) && RemoveDirectoryA(root),"remove only the clipboard fixture paths");
 }
 
+#include "native_sort_cases.h"
 static void NativeViewMessageTests(void)
 {
     HRESULT ole = OleInitialize(NULL); HWND parent, list; NativeView *view; RECT rect = {0, 0, 320, 200};
@@ -477,6 +478,7 @@ static void NativeViewMessageTests(void)
     parent = CreateWindowExA(0, "STATIC", "Native message probe", WS_OVERLAPPED | WS_CLIPCHILDREN,
         0, 0, 320, 200, NULL, NULL, GetModuleHandleA(NULL), NULL);
     Check(parent != NULL, "create hidden parent for native message probe");
+    NativeSortTests(parent);
     NativeShellCommandTests(parent);
     ShellEditContractTests(parent);
     NativeDesktopPasteTests(parent);

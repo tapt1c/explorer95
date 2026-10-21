@@ -838,6 +838,7 @@ void EnvCommand(int id)
 
 static LRESULT CALLBACK DesktopProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
 {
+    if(message==NATIVE_GETSHELLBROWSER) return env.closing ? 0 : (LRESULT)NativeViewShellBrowser(env.desktopView);
     RenderTraceEvent("desktop", window, message, wp, lp);
     if (env.closing) return DefWindowProcA(window, message, wp, lp);
     if (message == WM_LBUTTONDBLCLK) return 0;
@@ -914,6 +915,7 @@ static PaintBuffer barBuffer, barButtonBuffer;
 
 static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
 {
+    if(message==NATIVE_GETSHELLBROWSER) return env.closing ? 0 : (LRESULT)NativeViewShellBrowser(env.desktopView);
     if(message==TASK_SWITCH_MESSAGE) return TaskSwitchMessage(wp,lp);
     RenderTraceEvent("taskbar", window, message, wp, lp);
     if (NativeViewMenuMessage(env.desktopView, message, wp, lp)) return 0;

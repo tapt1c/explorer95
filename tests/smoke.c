@@ -861,6 +861,7 @@ static void NativeFolderTests(HWND menu)
         view = FindWindowExA(frame, NULL, "SHELLDLL_DefView", NULL);
         list = FindWindowExA(view, NULL, WC_LISTVIEWA, NULL);
         Check(view && list, "native folder contains the actual Shell32 list view");
+        Check(SendMessageA(frame,NATIVE_GETSHELLBROWSER,0,0)!=0,"the actual browser frame answers Shell32's legacy active-view query for native menu commands");
         started = GetTickCount();
         do { Sleep(50); samples = PaintedSamples(list); }
         while ((SendMessageA(list, LVM_GETITEMCOUNT, 0, 0) == 0 || samples < 8) && GetTickCount() - started < 10000);
@@ -1767,6 +1768,7 @@ static void EnvironmentTests(HWND bar, HWND browser, HWND childWindow, HWND menu
 }
 
 #include "localization_cases.h"
+#include "shell_run_cases.h"
 
 void start(void)
 {
@@ -1843,7 +1845,7 @@ void start(void)
     if (group == GROUP_FULL || group == GROUP_CORE || group == GROUP_BROWSER) FileDropRegistrationTests();
     if (group == GROUP_FULL || group == GROUP_CORE || group == GROUP_MENU) ShutdownDosTests(settingsDir);
     if (group != GROUP_BROWSER) { LayoutTests(); HistoryTests(settingsDir, module, settings); ShellFeatureTests(); }
-    if (group == GROUP_FULL || group == GROUP_CORE) { PaintTests(); ConfigTests(settingsDir); DesktopIconTests(settingsDir); LanguageTests(settingsDir); FolderHandlerTests(module,settings); FolderSelectionTests(); DragDataTests(); NativeViewMessageTests(); TrayMirrorTests(); TrayMirrorCrossProcessTests(); }
+    if (group == GROUP_FULL || group == GROUP_CORE) { PaintTests(); ConfigTests(settingsDir); DesktopIconTests(settingsDir); LanguageTests(settingsDir); NativeRunTests(); FolderHandlerTests(module,settings); FolderSelectionTests(); DragDataTests(); NativeViewMessageTests(); TrayMirrorTests(); TrayMirrorCrossProcessTests(); }
     if (group == GROUP_CORE) goto cleanup;
     if (group == GROUP_MENU) NativeDesktopIconSizeTests();
     if(group==GROUP_MENU || group==GROUP_FULL) WritePrivateProfileStringA("Desktop","IconSize","16",settings);
@@ -1973,15 +1975,28 @@ void start(void)
     NativeFolderTests(menu);
     AboutCommandTest(browser);
     if (group == GROUP_BROWSER) goto shutdown;
-    SendMessageA(menu, WM_COMMAND, 305, 0);
-    run = WaitFor("Explorer95.Run", NULL);
-    Check(run != NULL, "Run dialog opens");
-    wsprintfA(command, "\"%s\" \"--child\"", module);
-    SendMessageA(GetDlgItem(run, 403), WM_SETTEXT, 0, (LPARAM)command);
-    SendMessageA(run, WM_COMMAND, IDOK, 0);
+    PostMessageA(menu, WM_COMMAND, 305, 0);
+    started=GetTickCount();
+    do { Sleep(30); run=NativeRunWindow(bar); } while(!run && GetTickCount()-started<5000);
+    Check(run != NULL && FindWindowA("Explorer95.Run",NULL)==NULL, "Start / Run opens the installed Shell32 dialog");
+    { IShellLinkA *link; IPersistFile *persist; WCHAR wide[MAX_PATH];
+      wsprintfA(path,"%s\\Native Run probe.lnk",settingsDir);
+      Check(SUCCEEDED(OleInitialize(NULL)) && SUCCEEDED(CoCreateInstance(&CLSID_ShellLink,NULL,CLSCTX_INPROC_SERVER,&IID_IShellLinkA,(void **)&link)),"prepare only our Run shortcut with a fully quoted argument");
+      Check(SUCCEEDED(IShellLinkA_SetPath(link,module)) && SUCCEEDED(IShellLinkA_SetArguments(link,"\"--child\"")) &&
+          SUCCEEDED(IShellLinkA_QueryInterface(link,&IID_IPersistFile,(void **)&persist)),"native Run probe targets only this test executable and its inert helper mode");
+      MultiByteToWideChar(CP_ACP,0,path,-1,wide,MAX_PATH);
+      Check(SUCCEEDED(IPersistFile_Save(persist,wide,TRUE)),"save only the native Run shortcut fixture");
+      IPersistFile_Release(persist); IShellLinkA_Release(link); OleUninitialize(); }
+    /* Wine 10's Run does not split arguments from lpFile. A real .lnk still
+     * exercises Shell32 execution and keeps the quoted argument in its target.
+     * Direct command-line input remains a separate native Win95 VM check. */
+    SendMessageA(FindWindowExA(run,NULL,"ComboBox",NULL), WM_SETTEXT, 0, (LPARAM)path);
+    PostMessageA(run, WM_COMMAND, IDOK, 0);
     child = WaitFor("Explorer95.SmokeChild", NULL);
-    Check(child && !IsWindow(run), "Run launches quoted executable with arguments and closes on success");
-    Check(SendMessageA(child, WM_APP + 35, 0, 0), "Run preserves a fully quoted argument");
+    started=GetTickCount(); while(child && IsWindow(run) && GetTickCount()-started<3000) Sleep(30);
+    Check(child && !IsWindow(run), "native Run launches the prepared shortcut and closes on success");
+    Check(SendMessageA(child, WM_APP + 35, 0, 0), "native Run preserves the shortcut's fully quoted argument");
+    Check(DeleteFileA(path),"remove only our Run shortcut after its target launches");
 
     task = NULL;
     started = GetTickCount();

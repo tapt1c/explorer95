@@ -624,7 +624,7 @@ static LRESULT CALLBACK BoxProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
     }
     return DefWindowProcA(window,message,wp,lp);
 }
-static const char aboutCredits[]="Program author and mockups - Daniil Myslivets\r\nDeveloped with assistance from AI tools";
+static const char aboutCredits[]="Idea and mockups - Daniel Myslivets\r\nCreated with assistance from AI tools";
 typedef struct UiAboutState { HHOOK hook; HWND window; BOOL found; } UiAboutState;
 static UiAboutState *activeAbout;
 typedef struct UiAboutLayout { HWND credit; int below,extra; } UiAboutLayout;
