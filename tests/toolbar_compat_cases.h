@@ -110,8 +110,16 @@ static void ToolbarCompatTests(HWND parent)
           FillRect(reference,&edge,(HBRUSH)(COLOR_BTNFACE+1)); DrawEdge(reference,&edge,EDGE_ETCHED,BF_LEFT);
           actual=GetDC(toolbar); Check(GetPixel(actual,separator.left+3,separator.top+4)==GetPixel(reference,0,2),"the group separator has a visible classic etched line");
           SendMessageA(toolbar,TB_GETITEMRECT,0,(LPARAM)&arrow); int x,y,ink=0;
-          for(y=arrow.top+4;y<arrow.bottom-4;++y) for(x=arrow.right-9;x<arrow.right-3;++x)
-              if(GetPixel(actual,x,y)==GetSysColor(COLOR_BTNTEXT)) ++ink;
+          /* A small antialiased Marlett glyph can have only two pixels in
+           * the exact text color. Count all visible ink inside the arrow. */
+          for(y=arrow.top+4;y<arrow.bottom-4;++y) for(x=arrow.right-9;x<arrow.right-3;++x) {
+              COLORREF color=GetPixel(actual,x,y);
+              if(color!=CLR_INVALID && color!=GetSysColor(COLOR_BTNFACE)) ++ink;
+          }
+          if(ink<=2) {
+              char detail[160]; wsprintfA(detail,"glyph sample: mode=%d ink=%d rect=%d,%d,%d,%d color=%08lx\r\n",mode,ink,arrow.left,arrow.top,arrow.right,arrow.bottom,GetSysColor(COLOR_BTNTEXT));
+              Log(detail); SaveScreen("build/toolbar-legacy-glyph-failure.bmp");
+          }
           Check(ink>2,"the old-control path visibly paints a dropdown glyph"); ReleaseDC(toolbar,actual);
           SelectObject(reference,old); DeleteObject(bitmap); DeleteDC(reference); ReleaseDC(owner,screen); }
         if(mode<2) { RedrawWindow(owner,NULL,NULL,RDW_INVALIDATE|RDW_ALLCHILDREN|RDW_UPDATENOW); PumpFor(50);

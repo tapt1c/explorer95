@@ -14,7 +14,7 @@ static HWND OpenControlTestWindow(void)
             for(i=0;i<n && previous[i]!=window;++i) { }
             if(i==n && IsWindowVisible(window)) {
                 char address[MAX_PATH]; SendMessageA(GetDlgItem(window,ID_ADDRESS),WM_GETTEXT,MAX_PATH,(LPARAM)address);
-                if(!lstrcmpA(address,"Control Panel")) { found=window; break; }
+                if(address[0] && FindWindowExA(window,NULL,"SHELLDLL_DefView",NULL)) { found=window; break; }
             }
         }
     } while(!found && GetTickCount()-started<4000);

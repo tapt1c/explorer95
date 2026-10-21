@@ -86,7 +86,12 @@ static void Build(Browser *browser)
         Add(browser, root, root, NULL, 0, 2); Ancestors(browser, browser->path[end] ? end + 1 : end, 3);
     }
     Special(browser, "Recycle Bin", CSIDL_BITBUCKET, 4, 1);
-    GetWindowTextA(browser->window, title, sizeof(title));
+    /* The address names the Shell location, not the translated frame caption.
+     * An ANSI editable ComboBox cannot round-trip a Unicode caption through
+     * a different system code page. Keep native names and paths literal. */
+    { SHFILEINFOA info; ZeroMemory(&info, sizeof(info));
+      if (!browser->path[0]) SHGetFileInfoA((LPCSTR)browser->pidl, 0, &info, sizeof(info), SHGFI_PIDL | SHGFI_DISPLAYNAME);
+      lstrcpynA(title, info.szDisplayName[0] ? info.szDisplayName : "System folder", sizeof(title)); }
     address->current = Add(browser, browser->path[0] ? browser->path : title,
         browser->path[0] ? browser->path : NULL, browser->pidl, 1, 2);
     for (i = browser->historyCount - 1; i >= 0; --i) {
@@ -99,7 +104,7 @@ static void Build(Browser *browser)
         }
     }
     SendMessageA(browser->address, CB_SETCURSEL, address->current, 0);
-    SetWindowTextA(browser->address, browser->path[0] ? browser->path : title);
+    UiSetLiteralWindowTextA(browser->address, browser->path[0] ? browser->path : title);
     address->rebuilding = FALSE;
 }
 UINT BrowserAddressHeight(Browser *browser)
