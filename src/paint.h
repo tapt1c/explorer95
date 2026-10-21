@@ -27,6 +27,8 @@ BOOL PaintColorKey(HDC target, int x, int y, HBITMAP bitmap, COLORREF key, BOOL 
 void PaintStartLogo(HDC target, int x, int y);
 /* Paint only the shadow; the native control still owns its foreground text. */
 void PaintTextShadow(HDC dc, const char *text, const RECT *bounds, UINT flags);
+/* Match native icon-caption truncation, including expanded focused labels. */
+UINT PaintListLabelFlags(HWND list, int index);
 void PaintDesktopLabelShadows(HWND list, HDC dc);
 void PaintDialogBackground(HWND window, HDC dc);
 /* Win95 Marlett arrows with a plain GDI fallback if the face is unavailable. */

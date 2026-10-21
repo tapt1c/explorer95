@@ -219,11 +219,13 @@ static LRESULT CALLBACK ChildProc(HWND window, UINT message, WPARAM wParam, LPAR
 
 static WNDPROC shadowListOriginal;
 static HBRUSH shadowTestBrush;
+static BOOL shadowTestEnabled=TRUE;
 static LRESULT CALLBACK ShadowListProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
 {
     if (message == WM_ERASEBKGND) {
         RECT area; GetClientRect(window, &area); FillRect((HDC)wp, &area, shadowTestBrush);
-        PaintDesktopLabelShadows(window, (HDC)wp); return TRUE;
+        if(shadowTestEnabled) PaintDesktopLabelShadows(window, (HDC)wp);
+        return TRUE;
     }
     return CallWindowProcA(shadowListOriginal, window, message, wp, lp);
 }
@@ -233,6 +235,34 @@ static int ShadowPixels(HWND list, const RECT *rect, COLORREF color)
     for (y = rect->top; y < rect->bottom; ++y) for (x = rect->left; x < rect->right; ++x)
         if (GetPixel(dc, x, y) == color) ++count;
     ReleaseDC(list, dc); return count;
+}
+static void DesktopLabelShadowAlignment(HWND list,COLORREF backdrop)
+{
+    RECT label; HDC dc; BYTE *ink; int x,y,width,height,native=0,shadows=0,stray=0;
+    shadowTestEnabled=FALSE;
+    RedrawWindow(list,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_UPDATENOW);
+    Check(ListView_GetItemRect(list,0,&label,LVIR_LABEL),"read the native long-name label footprint");
+    width=label.right-label.left; height=label.bottom-label.top;
+    Check(width>0 && height>0 && width*height<65536,"bound the native caption pixel fixture");
+    ink=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,width*height);
+    Check(ink!=NULL,"allocate an independent native foreground mask");
+    dc=GetDC(list);
+    for(y=0;y<height;++y) for(x=0;x<width;++x) {
+        ink[y*width+x]=GetPixel(dc,label.left+x,label.top+y)!=backdrop;
+        native+=ink[y*width+x];
+    }
+    ReleaseDC(list,dc); shadowTestEnabled=TRUE;
+    RedrawWindow(list,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_UPDATENOW);
+    dc=GetDC(list);
+    /* Expected shadow comes from the real control's rendered glyphs, including
+     * its own truncation/wrapping, not a second DrawText with our flags. */
+    for(y=0;y<height;++y) for(x=0;x<width;++x) if(GetPixel(dc,label.left+x,label.top+y)==RGB(0,0,0)) {
+        ++shadows;
+        if(!((x && ink[y*width+x-1]) || (y && ink[(y-1)*width+x]) || (x && y && ink[(y-1)*width+x-1]))) ++stray;
+    }
+    ReleaseDC(list,dc); HeapFree(GetProcessHeap(),0,ink);
+    if(stray) { char note[128]; wsprintfA(note,"Long label: %dx%d native=%d shadow=%d stray=%d\r\n",width,height,native,shadows,stray); Log(note); SaveScreen("build/desktop-long-label-failure.bmp"); }
+    Check(native>5 && shadows>5 && !stray,"long-name shadows follow only the actual native glyphs and ellipsis, without overlapping extra text");
 }
 static void DesktopLabelPaintTests(void)
 {
@@ -276,6 +306,25 @@ static void DesktopLabelPaintTests(void)
     }
     Check(ShadowPixels(list, &oldLabel, backdrop) == (oldLabel.right-oldLabel.left)*(oldLabel.bottom-oldLabel.top),
         "invalidating only the moved label footprint removes its text and shadow, including the surrounding pixels");
+    {
+        const char *names[]={"explorer9574534573457345.exe","A very long shortcut name with several words and an extension.lnk","Shortcut to Inbox (5)"};
+        int size,i;
+        ListView_SetItemState(list,0,0,LVIS_SELECTED|LVIS_FOCUSED); SetFocus(parent);
+        for(size=32;size<=48;size+=16) {
+            HIMAGELIST images=ImageList_Create(size,size,ILC_COLOR|ILC_MASK,1,1);
+            HICON icon=PaintScaleIcon(LoadIconA(NULL,IDI_APPLICATION),32,32,size,size);
+            Check(images && icon && ImageList_AddIcon(images,icon)==0,"give long-name fixtures a real private desktop-size image list");
+            DestroyIcon(icon); ListView_SetImageList(list,images,LVSIL_NORMAL); ListView_SetItemPosition(list,0,80,8);
+            for(i=0;i<3;++i) {
+                ListView_SetItemText(list,0,0,(char *)names[i]); DesktopLabelShadowAlignment(list,backdrop);
+                if(!i) SaveScreen(size==32 ? "build/desktop-long-labels-32.bmp" : "build/desktop-long-labels-48.bmp");
+                SetFocus(list); ListView_SetItemState(list,0,LVIS_FOCUSED,LVIS_FOCUSED|LVIS_SELECTED);
+                DesktopLabelShadowAlignment(list,backdrop);
+                ListView_SetItemState(list,0,0,LVIS_FOCUSED); SetFocus(parent);
+            }
+            ListView_SetImageList(list,NULL,LVSIL_NORMAL); ImageList_Destroy(images);
+        }
+    }
     DestroyWindow(parent); DeleteObject(shadowTestBrush);
 }
 

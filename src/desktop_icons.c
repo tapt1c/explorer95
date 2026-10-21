@@ -477,8 +477,9 @@ static HIMAGELIST CreateGhost(DesktopIcons *icons, POINT *origin)
         } else if (!ImageList_Draw(native,item.iImage,colorDC,iconRect.left-bounds.left,iconRect.top-bounds.top,ILD_TRANSPARENT | (item.state & LVIS_OVERLAYMASK))) goto done;
         label.left -= bounds.left; label.right -= bounds.left; label.top -= bounds.top; label.bottom -= bounds.top;
         if (Name(icons->list,index,text)) {
-            PaintTextShadow(colorDC,text,&label,DT_CENTER | DT_WORDBREAK | DT_NOPREFIX);
-            DrawTextA(colorDC,text,-1,&label,DT_CENTER | DT_WORDBREAK | DT_NOPREFIX);
+            UINT flags=PaintListLabelFlags(icons->list,index);
+            PaintTextShadow(colorDC,text,&label,flags);
+            DrawTextA(colorDC,text,-1,&label,flags);
         }
     }
     /* The Win95 shell's LVM_CREATEDRAGIMAGE can include an opaque selection

@@ -191,6 +191,15 @@ void PaintTextShadow(HDC dc, const char *text, const RECT *bounds, UINT flags)
     }
     RestoreDC(dc, saved);
 }
+UINT PaintListLabelFlags(HWND list, int index)
+{
+    /* Native icon captions ellipsize long words and omit partial last lines.
+     * Plain WORDBREAK casts a shadow for different glyphs on long filenames. */
+    UINT flags=DT_TOP|DT_CENTER|DT_WORDBREAK|DT_NOPREFIX|DT_EDITCONTROL;
+    if(GetFocus()!=list || !(ListView_GetItemState(list,index,LVIS_FOCUSED)&LVIS_FOCUSED))
+        flags|=DT_WORD_ELLIPSIS|DT_END_ELLIPSIS;
+    return flags;
+}
 /* Draw behind the real ListView text during its existing erase/paint pass.
  * NM_CUSTOMDRAW requires newer Common Controls than stock Win95. Painting
  * after the native text would damage its glyphs and selected/editing labels. */
@@ -208,7 +217,7 @@ void PaintDesktopLabelShadows(HWND list, HDC dc)
             !ListView_GetItemRect(list, i, &label, LVIR_LABEL) || label.right <= clip.left || label.left >= clip.right ||
             label.bottom <= clip.top || label.top >= clip.bottom) continue;
         ListView_GetItemText(list, i, 0, text, sizeof(text));
-        if (text[0]) PaintTextShadow(dc, text, &label, DT_CENTER | DT_WORDBREAK | DT_NOPREFIX);
+        if (text[0]) PaintTextShadow(dc, text, &label, PaintListLabelFlags(list,i));
     }
     RestoreDC(dc, saved);
 }

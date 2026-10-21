@@ -892,6 +892,16 @@ explorer95.exe --settings="C:\EX95TEST\Explorer95.ini"
   изменение LVIS_SELECTED инвалидирует только их LVIR_LABEL с erase.
   PaintTextShadow ограничен исходным LVIR_LABEL, сохраняет DC/clip/color/font
   и не меняет кэш обоев. Та же тень используется в прозрачном образе drag.
+  PaintListLabelFlags согласует тень с native icon caption: DT_EDITCONTROL,
+  DT_WORD_ELLIPSIS и DT_END_ELLIPSIS нужны для длинных имён без пробелов и
+  обрезанных последних строк. Для focused caption с фокусом на ListView
+  многоточие отключено, как при системном раскрытии имени. Ghost использует
+  одинаковые flags для тени и собственного текста. Не исправляйте это расширением
+  LVIR_LABEL или повторной отрисовкой белого текста рабочего стола.
+  DesktopLabelShadowAlignment сравнивает тень с маской настоящего native
+  foreground без тени: каждый чёрный пиксель должен соответствовать одному
+  из трёх смещений видимого системного glyph. Есть длинное слово, несколько
+  слов, focused/unfocused и 32/48px; сверка со вторым DrawText не заменяет маску.
   ApplyPlan после смены координат инвалидирует старый и новый LVIR_BOUNDS,
   без UpdateWindow внутри цикла и без полного desktop Refresh: CLR_NONE
   ListView может иначе оставить старые пиксели текста. Проверки светлого фона,
