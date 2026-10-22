@@ -2,6 +2,7 @@
 #define COBJMACROS
 #include <windows.h>
 #include <shlobj.h>
+#include <shellapi.h>
 #include "taskbar_links.h"
 
 static BOOL Absolute(const char *path)
@@ -24,6 +25,7 @@ BOOL TaskbarLinkRead(const char *path, TaskbarLink *out)
     if(SUCCEEDED(result)) {
         IShellLinkA_GetArguments(link,out->arguments,sizeof(out->arguments));
         IShellLinkA_GetWorkingDirectory(link,out->directory,MAX_PATH);
+        IShellLinkA_GetIconLocation(link,out->icon,MAX_PATH,&out->iconIndex);
     }
     IShellLinkA_Release(link);
     if(FAILED(result) || !raw[0]) return FALSE;
@@ -42,6 +44,7 @@ BOOL TaskbarLinkWrite(const char *path,const TaskbarLink *data)
     result=IShellLinkA_SetPath(link,data->target);
     if(SUCCEEDED(result)) result=IShellLinkA_SetArguments(link,data->arguments);
     if(SUCCEEDED(result) && data->directory[0]) result=IShellLinkA_SetWorkingDirectory(link,data->directory);
+    if(SUCCEEDED(result) && data->icon[0]) result=IShellLinkA_SetIconLocation(link,data->icon,data->iconIndex);
     if(SUCCEEDED(result)) result=IShellLinkA_QueryInterface(link,&IID_IPersistFile,(void **)&file);
     if(SUCCEEDED(result)) {
         result=MultiByteToWideChar(CP_ACP,0,path,-1,wide,MAX_PATH) ? IPersistFile_Save(file,wide,TRUE) : E_FAIL;
@@ -69,4 +72,29 @@ BOOL TaskbarSameApplication(const char *left,const char *right)
     length=GetShortPathNameA(left,a,MAX_PATH); if(!length || length>=MAX_PATH) lstrcpynA(a,left,MAX_PATH);
     length=GetShortPathNameA(right,b,MAX_PATH); if(!length || length>=MAX_PATH) lstrcpynA(b,right,MAX_PATH);
     return !lstrcmpiA(a,b);
+}
+HICON TaskbarLinkIcon(const TaskbarLink *link,BOOL large)
+{
+    HICON icon=NULL; SHFILEINFOA info; char expanded[MAX_PATH],path[MAX_PATH]; DWORD length;
+    if(link->icon[0]) {
+        length=ExpandEnvironmentStringsA(link->icon,expanded,MAX_PATH);
+        if(length && length<=MAX_PATH) {
+            if(Absolute(expanded)) lstrcpyA(path,expanded);
+            else {
+                /* Relative built-in resources belong to the system directory;
+                 * never load a same-named DLL from the current directory. */
+                length=GetSystemDirectoryA(path,MAX_PATH);
+                if(length && length+lstrlenA(expanded)+1<MAX_PATH) {
+                    path[length++]='\\'; lstrcpyA(path+length,expanded);
+                } else path[0]=0;
+            }
+            if(path[0]) ExtractIconExA(path,link->iconIndex,large ? &icon : NULL,large ? NULL : &icon,1);
+        }
+    }
+    if(!icon) {
+        ZeroMemory(&info,sizeof(info));
+        SHGetFileInfoA(link->target,0,&info,sizeof(info),SHGFI_ICON|(large ? SHGFI_LARGEICON : SHGFI_SMALLICON));
+        icon=info.hIcon;
+    }
+    return icon;
 }

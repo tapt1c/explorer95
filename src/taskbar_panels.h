@@ -24,11 +24,14 @@ int TaskbarFoldersLayout(int begin,int end,int cross,BOOL vertical);
 int TaskbarPinsLayout(int begin,int end,int cross,BOOL vertical);
 int TaskbarPinsCount(void);
 const char *TaskbarPinTarget(int index);
-void TaskbarPinState(int index,int count,BOOL active);
+BOOL TaskbarPinState(int index,int count,BOOL active);
+void TaskbarPinCaptionChanged(int index);
 BOOL TaskbarPinApplication(const char *path,const char *arguments);
 int TaskbarPinFind(const char *path);
 BOOL TaskbarUnpinApplication(const char *path);
 void TaskbarPinnedAction(int index,BOOL newInstance);
 /* Environment supplies the same activate/minimize/group action as task buttons. */
 BOOL EnvActivatePinnedTask(int index);
+BOOL EnvPinnedSystemMenu(int index,POINT point);
+int EnvPinnedTaskCaption(int index,char *caption,int capacity);
 #endif

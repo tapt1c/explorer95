@@ -222,7 +222,21 @@ static void FileDragTests(HWND bar, HWND desktop, HWND source, const char *fixtu
     Check(Exists(original) && !Exists(result),"cancelling a right drag leaves both folders intact");
     start=DragItemPoint(list,"cancel-me"); DragMouse(list,start,targetList,end,0,3);
     wsprintfA(result,"%s\\cancel-me.lnk",to); WaitDragFile(result,TRUE);
-    Check(Exists(original),"creating a shortcut through right drag preserves the original"); Check(DeleteFileA(result),"remove only our created drag shortcut");
+    Check(Exists(original),"creating a shortcut through right drag preserves the original");
+    {
+        DWORD started=GetTickCount(),error=0; BOOL removed;
+        /* IPersistFile can create the directory entry before its writer closes.
+         * Wait only for sharing/lock contention on OUR new shortcut, never
+         * repeat the drag or hide a different cleanup error. */
+        do {
+            removed=DeleteFileA(result); if(removed) break;
+            error=GetLastError();
+            if(error!=ERROR_SHARING_VIOLATION && error!=ERROR_LOCK_VIOLATION) break;
+            PumpFor(20);
+        } while(GetTickCount()-started<2000);
+        if(!removed) { char note[100]; wsprintfA(note,"Drag shortcut cleanup error: %lu\r\n",error); Log(note); }
+        Check(removed,"remove only our created drag shortcut after its native writer releases it");
+    }
     Check(SUCCEEDED(SHGetSpecialFolderLocation(NULL,CSIDL_DESKTOPDIRECTORY,&pidl)) && SHGetPathFromIDListA(pidl,desktopPath),"resolve the isolated Wine desktop for a round trip"); CoTaskMemFree(pidl);
     wsprintfA(desktopName,"ex95-drag-%lu",GetCurrentProcessId()); wsprintfA(original,"%s\\%s",from,desktopName);
     { HANDLE file=CreateFileA(original,GENERIC_WRITE,0,NULL,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL); Check(file!=INVALID_HANDLE_VALUE,"create desktop round-trip fixture"); CloseHandle(file); }

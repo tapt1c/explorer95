@@ -14,13 +14,33 @@ static void TaskbarPinsCleanup(const char *directory)
 }
 static void __attribute__((noinline)) TaskbarLinksTests(const char *directory,const char *module)
 {
-    char path[MAX_PATH],missing[MAX_PATH]; TaskbarLink input,output;
+    char path[MAX_PATH],missing[MAX_PATH]; static TaskbarLink input,output;
     Check(SUCCEEDED(OleInitialize(NULL)),"initialize COM for taskbar shortcut fixtures");
     ZeroMemory(&input,sizeof(input)); lstrcpyA(input.target,module); lstrcpyA(input.arguments,"\"--child\""); lstrcpyA(input.directory,directory);
     wsprintfA(path,"%s\\taskbar-link-fixture.lnk",directory);
     Check(TaskbarLinkWrite(path,&input) && TaskbarLinkRead(path,&output),"write and read a real taskbar shortcut without executing or resolving it");
     Check(TaskbarSameApplication(output.target,module) && !lstrcmpA(output.arguments,input.arguments) && !lstrcmpiA(output.directory,directory) && TaskbarLinkExists(&output),
         "taskbar shortcut preserves its executable, quoted argument and working directory");
+    GetSystemDirectoryA(input.icon,MAX_PATH); lstrcatA(input.icon,"\\shell32.dll"); input.iconIndex=-4;
+    Check(TaskbarLinkWrite(path,&input) && TaskbarLinkRead(path,&output) &&
+        !lstrcmpiA(input.icon,output.icon) && input.iconIndex==output.iconIndex,"a pinned shortcut preserves its custom icon resource");
+    {
+        int size;
+        for(size=16;size<=32;size+=16) {
+            HICON actual=TaskbarLinkIcon(&output,size==32),expected=NULL;
+            HDC screen=GetDC(NULL),a=CreateCompatibleDC(screen),b=CreateCompatibleDC(screen);
+            HBITMAP ab=CreateCompatibleBitmap(screen,size,size),bb=CreateCompatibleBitmap(screen,size,size);
+            HGDIOBJ ao=SelectObject(a,ab),bo=SelectObject(b,bb); RECT rect={0,0,size,size}; int x,y; BOOL same=TRUE;
+            ExtractIconExA(input.icon,input.iconIndex,size==32 ? &expected : NULL,size==16 ? &expected : NULL,1);
+            Check(actual && expected,"extract both sizes of the original pinned custom resource");
+            FillRect(a,&rect,(HBRUSH)(COLOR_BTNFACE+1)); FillRect(b,&rect,(HBRUSH)(COLOR_BTNFACE+1));
+            DrawIconEx(a,0,0,actual,size,size,0,NULL,DI_NORMAL); DrawIconEx(b,0,0,expected,size,size,0,NULL,DI_NORMAL);
+            for(y=0;y<size;++y) for(x=0;x<size;++x) if(GetPixel(a,x,y)!=GetPixel(b,x,y)) same=FALSE;
+            Check(same,"the pinned icon retains every original pixel without a shortcut overlay");
+            SelectObject(a,ao); SelectObject(b,bo); DeleteObject(ab); DeleteObject(bb); DeleteDC(a); DeleteDC(b); ReleaseDC(NULL,screen);
+            DestroyIcon(actual); DestroyIcon(expected);
+        }
+    }
     wsprintfA(missing,"%s\\not-installed.exe",directory); lstrcpyA(input.target,missing);
     Check(TaskbarLinkWrite(path,&input) && TaskbarLinkRead(path,&output) && !TaskbarLinkExists(&output),"a missing shortcut target is readable but cannot become a visible pin");
     lstrcpyA(output.target,directory); Check(!TaskbarLinkExists(&output),"a directory is not an application pin");
@@ -49,6 +69,84 @@ static void PanelClick(HWND panel,int x)
     RECT rect; GetWindowRect(panel,&rect); SetCursorPos(rect.left+x,(rect.top+rect.bottom)/2); PumpFor(30);
     mouse_event(MOUSEEVENTF_LEFTDOWN,0,0,0,0); mouse_event(MOUSEEVENTF_LEFTUP,0,0,0,0); PumpFor(80);
 }
+static void PanelNativeCommand(HWND panel,HWND child,UINT command)
+{
+    RECT rect; HWND popup; HMENU menu; int i,steps;
+    GetWindowRect(panel,&rect); SetCursorPos(rect.right-11,(rect.top+rect.bottom)/2); PumpFor(40);
+    mouse_event(MOUSEEVENTF_RIGHTDOWN,0,0,0,0); mouse_event(MOUSEEVENTF_RIGHTUP,0,0,0,0);
+    popup=WaitFor("#32768",NULL); Check(popup!=NULL,"a running pin opens the actual window system menu"); PumpFor(100);
+    menu=(HMENU)SendMessageA(popup,0x01e1,0,0); /* MN_GETHMENU: test-only popup inspection. */
+    steps=(int)SendMessageA(child,WM_APP+38,(WPARAM)menu,command);
+    Check(steps>0,"the popup is the target's own system menu and the native command is enabled directly");
+    --steps;
+    keybd_event(VK_HOME,0,0,0); keybd_event(VK_HOME,0,KEYEVENTF_KEYUP,0);
+    for(i=0;i<steps;++i) { keybd_event(VK_DOWN,0,0,0); keybd_event(VK_DOWN,0,KEYEVENTF_KEYUP,0); }
+    keybd_event(VK_RETURN,0,0,0); keybd_event(VK_RETURN,0,KEYEVENTF_KEYUP,0); PumpFor(180);
+}
+static int PanelArrowGray(HWND panel,BOOL next,BOOL vertical)
+{
+    RECT rect; HDC dc=GetDC(panel); int x,y,count=0; GetClientRect(panel,&rect);
+    if(vertical) { rect.top=next ? rect.bottom-16 : 0; rect.bottom=rect.top+16; }
+    else { rect.left=next ? rect.right-16 : 0; rect.right=rect.left+16; }
+    for(y=rect.top+3;y<rect.bottom-3;++y) for(x=rect.left+3;x<rect.right-3;++x)
+        if(GetPixel(dc,x,y)==GetSysColor(COLOR_GRAYTEXT)) ++count;
+    ReleaseDC(panel,dc); return count;
+}
+static void __attribute__((noinline)) PanelScrollTests(HWND bar,HWND pins,const char *directory,const char *source,int initial)
+{
+    char path[MAX_PATH]; int i,width; DWORD started; HWND child,properties; RECT rect;
+    for(i=0;i<26;++i) {
+        wsprintfA(path,"%s\\Taskbar Pins\\zz-scroll-%02d.lnk",directory,i);
+        Check(CopyFileA(source,path,TRUE),"populate only our disposable pinned folder for overflow");
+    }
+    /* A bulk change can still be loading ShellLink/icon data after 600 ms.
+     * Wait for the pinned section to fill its available space and actually
+     * paint its initial arrows before sending any navigation input. */
+    started=GetTickCount();
+    do {
+        RECT folder; GetWindowRect(pins,&rect); GetWindowRect(GetDlgItem(bar,ID_TASKBAR_FOLDER),&folder);
+        if(rect.right==folder.left-55 && PanelArrowGray(pins,FALSE,FALSE)>0 && !PanelArrowGray(pins,TRUE,FALSE)) break;
+        PumpFor(30);
+    } while(GetTickCount()-started<5000);
+    width=PanelWidth(pins);
+    Check(width<initial+26*22 && width>=54,"crowded pinned items reserve room for two scroll arrows");
+    Check(PanelArrowGray(pins,FALSE,FALSE)>0 && !PanelArrowGray(pins,TRUE,FALSE),"the first position disables only the backward arrow");
+    for(i=0;i<32;++i) PanelClick(pins,width-8);
+    SetCursorPos(450,200); PumpFor(200);
+    Check(!PanelArrowGray(pins,FALSE,FALSE) && PanelArrowGray(pins,TRUE,FALSE)>0,"real forward arrow clicks reach the last pinned items without wrapping");
+    SaveScreen("build/taskbar-pins-scrolled.bmp");
+    for(i=0;i<32;++i) PanelClick(pins,8);
+    SetCursorPos(450,200); PumpFor(200);
+    Check(PanelArrowGray(pins,FALSE,FALSE)>0 && !PanelArrowGray(pins,TRUE,FALSE),"real backward arrow clicks return to the first pinned items");
+    SendMessageA(pins,WM_KEYDOWN,VK_END,0); PumpFor(100);
+    Check(PanelArrowGray(pins,TRUE,FALSE)>0,"End reveals the last hidden pin with the keyboard");
+    SendMessageA(pins,WM_KEYDOWN,VK_RETURN,0); child=WaitFor("Explorer95.SmokeChild",NULL);
+    Check(child!=NULL,"the last scrolled pin remains launchable");
+    PostMessageA(child,WM_CLOSE,0,0); started=GetTickCount(); while(IsWindow(child) && GetTickCount()-started<3000) PumpFor(20);
+    Check(!IsWindow(child),"close only the application launched through the scrolled pins");
+    properties=OpenSettings(bar);
+    SendDlgItemMessageA(properties,ID_TASKTILES,BM_SETCHECK,BST_CHECKED,0);
+    SendMessageA(properties,WM_COMMAND,ID_TASKTILES,0); SendMessageA(properties,WM_COMMAND,IDOK,0);
+    SendMessageA(bar,WM_COMMAND,ID_LOCK,0);
+    SendMessageA(bar,WM_COMMAND,ID_EDGE_MENU+ABE_LEFT,0); SendMessageA(pins,WM_KEYDOWN,VK_HOME,0); PumpFor(200);
+    GetWindowRect(bar,&rect); Check(rect.bottom-rect.top>rect.right-rect.left,"the unlocked taskbar actually docks vertically before testing its arrows");
+    Check(PanelArrowGray(pins,FALSE,TRUE)>0 && !PanelArrowGray(pins,TRUE,TRUE),"vertical icon-only pins start with a disabled up arrow and an enabled down arrow");
+    for(i=0;i<32;++i) {
+        GetWindowRect(pins,&rect); SetCursorPos((rect.left+rect.right)/2,rect.bottom-8); PumpFor(20);
+        mouse_event(MOUSEEVENTF_LEFTDOWN,0,0,0,0); mouse_event(MOUSEEVENTF_LEFTUP,0,0,0,0); PumpFor(30);
+    }
+    SetCursorPos(450,200); PumpFor(200);
+    Check(!PanelArrowGray(pins,FALSE,TRUE) && PanelArrowGray(pins,TRUE,TRUE)>0,"vertical down-arrow clicks reach the final tile column");
+    SaveScreen("build/taskbar-pins-vertical-scrolled.bmp");
+    SendMessageA(pins,WM_KEYDOWN,VK_HOME,0); PumpFor(100);
+    Check(PanelArrowGray(pins,FALSE,TRUE)>0,"Home reveals the first hidden vertical tile");
+    SendMessageA(bar,WM_COMMAND,ID_EDGE_MENU+ABE_BOTTOM,0); SendMessageA(bar,WM_COMMAND,ID_LOCK,0);
+    properties=OpenSettings(bar);
+    SendDlgItemMessageA(properties,ID_TASKTILES,BM_SETCHECK,BST_UNCHECKED,0);
+    SendMessageA(properties,WM_COMMAND,ID_TASKTILES,0); SendMessageA(properties,WM_COMMAND,IDOK,0);
+    for(i=0;i<26;++i) { wsprintfA(path,"%s\\Taskbar Pins\\zz-scroll-%02d.lnk",directory,i); Check(DeleteFileA(path),"remove only our overflow fixture shortcuts"); }
+    WaitPanelWidth(pins,initial,"removing excess pins removes scrolling and restores compact geometry");
+}
 static void PanelContextChoice(HWND panel,int downs)
 {
     int i; RECT rect; GetWindowRect(panel,&rect); SetCursorPos(rect.left+12,(rect.top+rect.bottom)/2); PumpFor(40);
@@ -73,7 +171,12 @@ static void PanelIconSize(HWND panel,BOOL large)
     keybd_event(VK_HOME,0,0,0); keybd_event(VK_HOME,0,KEYEVENTF_KEYUP,0);
     keybd_event(VK_RIGHT,0,0,0); keybd_event(VK_RIGHT,0,KEYEVENTF_KEYUP,0); PumpFor(60);
     keybd_event(large ? VK_END : VK_HOME,0,0,0); keybd_event(large ? VK_END : VK_HOME,0,KEYEVENTF_KEYUP,0);
-    keybd_event(VK_RETURN,0,0,0); keybd_event(VK_RETURN,0,KEYEVENTF_KEYUP,0); PumpFor(150);
+    keybd_event(VK_RETURN,0,0,0); keybd_event(VK_RETURN,0,KEYEVENTF_KEYUP,0);
+    {
+        DWORD started=GetTickCount();
+        do { PumpFor(20); GetWindowRect(GetParent(panel),&rect); }
+        while(rect.bottom-rect.top!=(large ? 40 : 28) && GetTickCount()-started<3000);
+    }
 }
 static void OversizedPanelTest(HWND bar,const char *settings)
 {
@@ -141,7 +244,14 @@ static void __attribute__((noinline)) TaskbarPanelsTests(HWND bar,const char *di
     WaitPanelWidth(pins,initial+22,"a pin disappears when its executable is removed");
     PanelClick(pins,PanelWidth(pins)-11); launched=WaitFor("Explorer95.SmokeChild",NULL);
     Check(launched && SendMessageA(launched,WM_APP+35,0,0),"a pinned shortcut launches its executable with the original quoted argument");
-    PumpFor(600);
+    WaitPanelWidth(pins,initial+160,"the running pin itself expands into a titled classic task button");
+    PumpFor(150); SaveScreen("build/taskbar-pinned-running.bmp");
+    {
+        HDC dc=GetDC(pins); RECT rect; int x,y,ink=0; GetClientRect(pins,&rect);
+        for(y=4;y<rect.bottom-4;++y) for(x=initial+26;x<rect.right-8;++x)
+            if(GetPixel(dc,x,y)==GetSysColor(COLOR_BTNTEXT)) ++ink;
+        ReleaseDC(pins,dc); Check(ink>20,"the expanded pinned button visibly draws its running window title");
+    }
     for(i=ID_TASK;i<ID_TASK+TASK_LIMIT;++i) {
         HWND task=GetDlgItem(bar,i); char text[80]; text[0]=0; if(task) GetWindowTextA(task,text,sizeof(text));
         if(!lstrcmpA(text,"Explorer95 smoke child")) Check(!IsWindowVisible(task),"the running pinned application does not gain a duplicate task button");
@@ -152,11 +262,15 @@ static void __attribute__((noinline)) TaskbarPanelsTests(HWND bar,const char *di
     Check(IsIconic(launched),"clicking the active pin minimizes its existing window");
     PanelClick(pins,PanelWidth(pins)-11); started=GetTickCount(); while(IsIconic(launched) && GetTickCount()-started<2000) PumpFor(20);
     Check(!IsIconic(launched),"clicking a running pin restores the same application window");
-    PostMessageA(launched,WM_CLOSE,0,0); started=GetTickCount(); while(IsWindow(launched) && GetTickCount()-started<3000) PumpFor(20);
-    Check(!IsWindow(launched),"close only the pinned application fixture");
+    PanelNativeCommand(pins,launched,SC_MINIMIZE); Check(IsIconic(launched),"the pinned native menu minimizes its real target");
+    PanelNativeCommand(pins,launched,SC_RESTORE); Check(!IsIconic(launched),"the pinned native menu restores its real target");
+    PanelNativeCommand(pins,launched,SC_CLOSE); started=GetTickCount(); while(IsWindow(launched) && GetTickCount()-started<3000) PumpFor(20);
+    Check(!IsWindow(launched),"the pinned native menu closes only its own target");
+    WaitPanelWidth(pins,initial+22,"closing the application turns its title button back into a compact pin");
     Check(DeleteFileA(live),"unpin by deleting only the shortcut copy");
     WaitPanelWidth(pins,initial,"removing a shortcut immediately removes its pinned tile");
     Check(GetFileAttributesA(target)!=INVALID_FILE_ATTRIBUTES,"unpinning leaves the application executable intact");
+    PanelScrollTests(bar,pins,directory,source,initial);
     Check(DeleteFileA(broken) && DeleteFileA(source) && DeleteFileA(target),"remove only our live shortcut fixtures");
     GetWindowRect(bar,&before); PanelDrag(toolbar,-30,FALSE); GetWindowRect(bar,&after);
     Check(PanelWidth(toolbar)==160 && EqualRect(&before,&after),"taskbar lock protects the folder toolbar's independent size");
@@ -189,11 +303,14 @@ static void __attribute__((noinline)) TaskbarPanelsTests(HWND bar,const char *di
     PanelContextChoice(toolbar,3);
     Check(!GetPrivateProfileIntA("TaskbarToolbars","Title0",TRUE,settings),"Show Title toggles and saves the custom toolbar's heading");
     SaveScreen("build/taskbar-folder-panels.bmp");
+    SendMessageA(bar,WM_COMMAND,ID_LOCK,0);
     for(i=0;i<4;++i) {
         RECT panelRect,barRect; SendMessageA(bar,WM_COMMAND,ID_EDGE_MENU+i,0); GetWindowRect(toolbar,&panelRect); GetWindowRect(bar,&barRect);
+        Check((i==ABE_LEFT || i==ABE_RIGHT) ? barRect.bottom-barRect.top>barRect.right-barRect.left : barRect.right-barRect.left>barRect.bottom-barRect.top,
+            "the taskbar really changes orientation for each requested dock edge");
         Check(panelRect.left>=barRect.left && panelRect.top>=barRect.top && panelRect.right<=barRect.right && panelRect.bottom<=barRect.bottom,"custom folder panels fit inside every taskbar dock edge");
     }
-    SendMessageA(bar,WM_COMMAND,ID_EDGE_MENU+ABE_BOTTOM,0);
+    SendMessageA(bar,WM_COMMAND,ID_EDGE_MENU+ABE_BOTTOM,0); SendMessageA(bar,WM_COMMAND,ID_LOCK,0);
     SendMessageA(bar,WM_COMMAND,ID_TOOLBAR_TOGGLE,0);
     Check(!IsWindowVisible(toolbar) && !GetPrivateProfileIntA("TaskbarToolbars","Enabled0",TRUE,settings),"the Toolbars menu hides a custom panel and persists its visibility");
     SendMessageA(bar,WM_COMMAND,ID_TOOLBAR_TOGGLE,0); Check(IsWindowVisible(toolbar),"the same configured folder panel can be shown again");

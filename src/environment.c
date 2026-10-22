@@ -283,7 +283,7 @@ HICON EnvWindowIcon(HWND target, BOOL large)
     if (!icon) icon = (HICON)GetClassLongPtrA(target, GCLP_HICON);
     return icon;
 }
-static int BindPinnedTasks(void)
+static int BindPinnedTasks(BOOL *layoutChanged)
 {
     int i,j,visible=0;
     for(i=0;i<taskCount;++i) tasks[i].pin=-1;
@@ -292,7 +292,7 @@ static int BindPinnedTasks(void)
         for(j=0;j<taskCount;++j) if(tasks[j].pin<0 && target && tasks[j].application[0] && !lstrcmpiA(target,tasks[j].application)) {
             tasks[j].pin=i; count=tasks[j].count; active=tasks[j].active; break;
         }
-        TaskbarPinState(i,count,active);
+        if(TaskbarPinState(i,count,active) && layoutChanged) *layoutChanged=TRUE;
     }
     for(i=0;i<taskCount;++i) if(tasks[i].pin<0) ++visible;
     return visible;
@@ -302,6 +302,50 @@ BOOL EnvActivatePinnedTask(int index)
     int i;
     for(i=0;i<taskCount;++i) if(tasks[i].pin==index) { TaskAction(i); return TRUE; }
     return FALSE;
+}
+static void TaskSystemMenu(HWND target,POINT point)
+{
+    HMENU menu; DWORD process=0,current=0; DWORD_PTR result; UINT command;
+    if(!IsWindow(target) || !GetWindowThreadProcessId(target,&process)) return;
+    menu=GetSystemMenu(target,FALSE);
+    if(!menu) {
+        /* Wine cannot borrow another process's system HMENU. Ask the real
+         * window to open its own system menu; no simulated key input. */
+        if(GetWindowLongA(target,GWL_STYLE)&WS_SYSMENU) {
+            SetForegroundWindow(target);
+            PostMessageA(target,WM_SYSCOMMAND,SC_KEYMENU,' ');
+        }
+        return;
+    }
+    /* Let the real window prepare its own menu, including application-specific
+     * entries and disabled states. A hung task must not hang the taskbar. */
+    SendMessageTimeoutA(target,WM_INITMENU,(WPARAM)menu,0,SMTO_ABORTIFHUNG,100,&result);
+    SendMessageTimeoutA(target,WM_INITMENUPOPUP,(WPARAM)menu,MAKELPARAM(0,TRUE),SMTO_ABORTIFHUNG,100,&result);
+    if(!IsWindow(target)) return;
+    menu=GetSystemMenu(target,FALSE); if(!menu) return;
+    SetForegroundWindow(env.bar);
+    command=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_RIGHTBUTTON,point.x,point.y,0,target,NULL);
+    PostMessageA(env.bar,WM_NULL,0,0);
+    if(command && GetWindowThreadProcessId(target,&current) && current==process)
+        PostMessageA(target,WM_SYSCOMMAND,command,0);
+    /* GetSystemMenu is borrowed from the target: never DestroyMenu it. */
+}
+BOOL EnvPinnedSystemMenu(int index,POINT point)
+{
+    int i,j;
+    for(i=0;i<taskCount;++i) if(tasks[i].pin==index) {
+        HWND target=tasks[i].windows[0];
+        for(j=0;j<tasks[i].count;++j) if(tasks[i].windows[j]==lastActive) { target=lastActive; break; }
+        TaskSystemMenu(target,point); return TRUE;
+    }
+    return FALSE;
+}
+int EnvPinnedTaskCaption(int index,char *caption,int capacity)
+{
+    int i;
+    for(i=0;i<taskCount;++i) if(tasks[i].pin==index) return GetWindowTextA(tasks[i].button,caption,capacity);
+    if(capacity>0) caption[0]=0;
+    return 0;
 }
 static void UpdateTasks(void)
 {
@@ -350,14 +394,18 @@ static void UpdateTasks(void)
         if (tasks[i].count > 1) wsprintfA(label, "%s (%d)", text, tasks[i].count); else lstrcpyA(label, text);
         if(translated) UiMarkTranslated(label);
         { char previous[160]; GetWindowTextA(tasks[i].button, previous, sizeof(previous));
-          if (lstrcmpA(previous,label)) { if(translated) SetWindowTextA(tasks[i].button,label); else UiSetLiteralWindowTextA(tasks[i].button,label); } }
+          if (lstrcmpA(previous,label)) {
+              if(translated) SetWindowTextA(tasks[i].button,label); else UiSetLiteralWindowTextA(tasks[i].button,label);
+              TaskbarPinCaptionChanged(tasks[i].pin);
+          } }
         for (j = 0; j < tasks[i].count; ++j) if (tasks[i].windows[j] == active) selected = TRUE;
         if (tasks[i].active != selected) {
             tasks[i].active = selected; InvalidateRect(tasks[i].button, NULL, FALSE);
         }
         if (selected) lastActive = active;
     }
-    BindPinnedTasks(); TaskSwitchObserve();
+    { BOOL layoutChanged=FALSE; BindPinnedTasks(&layoutChanged); if(layoutChanged) EnvLayoutBar(); }
+    TaskSwitchObserve();
 }
 void EnvShowDesktop(void)
 {
@@ -590,7 +638,7 @@ void EnvLayoutBar(void)
     BOOL changed = FALSE;
     BOOL vertical = env.options.edge == ABE_LEFT || env.options.edge == ABE_RIGHT;
     if (!env.bar || !env.tray) return;
-    visible=BindPinnedTasks();
+    visible=BindPinnedTasks(NULL);
     GetClientRect(env.bar, &rect); width = rect.right; height = rect.bottom;
     if (width < 10 || height < 10) return;
     if (vertical) {
@@ -771,6 +819,10 @@ static void BarMenu(HWND source)
     GetCursorPos(&point);
     if (id >= ID_TASK && id < ID_TASK + taskCount) {
         HWND target = tasks[id - ID_TASK].windows[0]; HMENU system = GetSystemMenu(target, FALSE);
+        if(tasks[id-ID_TASK].pin>=0) {
+            TaskSystemMenu(target,point);
+            DestroyMenu(toolbars); DestroyMenu(dock); DestroyMenu(size); DestroyMenu(menu); return;
+        }
         if (system) {
             char application[MAX_PATH]; int pin;
             lstrcpyA(application,tasks[id-ID_TASK].application); pin=TaskbarPinFind(application);

@@ -471,6 +471,8 @@
   "The saved list will be cleared when you apply changes.": "Список посещений будет очищен после применения изменений.",
   "Clearing saved visits does not affect Back and Forward in open windows.": "Очистка журнала не затрагивает переходы «Назад» и «Вперёд» в открытых окнах.",
   "Saved visits are shared by Explorer95 windows. Disabling this option clears the saved list when you apply changes.": "Окна Explorer95 используют общий журнал посещений. Отключение записи очистит журнал после применения изменений.",
+  "Scroll backward": "Прокрутить назад",
+  "Scroll forward": "Прокрутить вперёд",
   "Pinned applications": "Закреплённые приложения",
   "Open pinned shortcuts folder": "Папка закреплённых ярлыков",
   "New Toolbar...": "Создать панель инструментов...",

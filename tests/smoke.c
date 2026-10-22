@@ -213,6 +213,20 @@ static LRESULT CALLBACK ChildProc(HWND window, UINT message, WPARAM wParam, LPAR
         int length = lstrlenA(command);
         return length >= 9 && !lstrcmpA(command + length - 9, "\"--child\"");
     }
+    if(message==WM_APP+38) {
+        /* Inspect only this disposable child's own HMENU: Wine does not let
+         * the controller inspect another process's menu handles. */
+        HMENU menu=GetSystemMenu(window,FALSE); int i,steps=1;
+        if(menu!=(HMENU)wParam || GetMenuState(menu,SC_CLOSE,MF_BYCOMMAND)==(UINT)-1 ||
+           GetMenuState(menu,SC_MINIMIZE,MF_BYCOMMAND)==(UINT)-1) return 0;
+        for(i=0;i<GetMenuItemCount(menu);++i) {
+            UINT state=GetMenuState(menu,i,MF_BYPOSITION);
+            if(state&MF_SEPARATOR) continue;
+            if(GetMenuItemID(menu,i)==(UINT)lParam) return state&(MF_DISABLED|MF_GRAYED) ? 0 : steps;
+            ++steps;
+        }
+        return 0;
+    }
     if (message == WM_DESTROY) { PostQuitMessage(0); return 0; }
     return DefWindowProcA(window, message, wParam, lParam);
 }

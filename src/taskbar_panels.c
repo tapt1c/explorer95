@@ -7,6 +7,7 @@
 
 #define PANEL_MORE TASKBAR_FOLDER_ITEMS
 #define PANEL_GRIP (TASKBAR_FOLDER_ITEMS+1)
+#define PANEL_NEXT (TASKBAR_FOLDER_ITEMS+2)
 #define PANEL_MENU_ITEM 12000
 #define PANEL_OPEN 12100
 #define PANEL_TEXT 12101
@@ -30,7 +31,8 @@ typedef struct FolderPanel {
     HWND window; HANDLE watch; PaintBuffer buffer;
     PanelItem *items;
     int count,shown,hot,pressed,focus,extent,resizeSaved,resizeStart,resizeExtent;
-    BOOL pins,dirty,vertical,resizing,overflow; RECT more,grip,title;
+    BOOL pins,dirty,vertical,resizing,overflow; RECT more,grip,title,previous,next;
+    int scroll,scrollMax,lastColumn;
 } FolderPanel;
 static FolderPanel *panels;
 static int panelCount,busy;
@@ -78,8 +80,16 @@ static void ItemIcon(PanelItem *item,BOOL large)
         char normalized[MAX_PATH]; DWORD length=GetShortPathNameA(item->target,normalized,MAX_PATH);
         if(length && length<MAX_PATH) lstrcpyA(item->identity,normalized);
     }
+    if(item->target[0]) {
+        TaskbarLink *link=EnvAlloc(sizeof(*link));
+        if(link) {
+            if(TaskbarLinkRead(item->path,link)) item->icon=TaskbarLinkIcon(link,large);
+            EnvFree(link);
+        }
+        if(item->icon) return;
+    }
     ZeroMemory(&info,sizeof(info));
-    SHGetFileInfoA(item->path,0,&info,sizeof(info),SHGFI_ICON|(large ? SHGFI_LARGEICON : SHGFI_SMALLICON));
+    SHGetFileInfoA(item->target[0] ? item->target : item->path,0,&info,sizeof(info),SHGFI_ICON|(large ? SHGFI_LARGEICON : SHGFI_SMALLICON));
     item->icon=info.hIcon;
 }
 static void Tooltips(FolderPanel *panel,BOOL remove)
@@ -92,6 +102,12 @@ static void Tooltips(FolderPanel *panel,BOOL remove)
         tool.uId=i+1; tool.rect=panel->items[i].rect;
         SendMessageA(tips,TTM_DELTOOLA,0,(LPARAM)&tool);
         if(!remove && !IsRectEmpty(&tool.rect)) SendMessageA(tips,TTM_ADDTOOLA,0,(LPARAM)&tool);
+    }
+    if(panel->pins) for(i=0;i<2;++i) {
+        tool.uId=(i ? PANEL_NEXT : PANEL_MORE)+1;
+        tool.rect=i ? panel->next : panel->previous;
+        SendMessageA(tips,TTM_DELTOOLA,0,(LPARAM)&tool);
+        if(!remove && panel->overflow && !IsRectEmpty(&tool.rect)) SendMessageA(tips,TTM_ADDTOOLA,0,(LPARAM)&tool);
     }
 }
 static void ClearItems(FolderPanel *panel)
@@ -286,14 +302,19 @@ const char *TaskbarPinTarget(int index)
 {
     return panels && index>=0 && index<panels[0].count && panels[0].items[index].valid ? panels[0].items[index].identity : NULL;
 }
-void TaskbarPinState(int index,int count,BOOL active)
+void TaskbarPinCaptionChanged(int index)
 {
-    PanelItem *item;
-    if(!panels || index<0 || index>=panels[0].count) return;
-    item=&panels[0].items[index];
-    if(item->running==count && item->active==active) return;
-    item->running=count; item->active=active;
-    if(!IsRectEmpty(&item->rect)) InvalidateRect(panels[0].window,&item->rect,FALSE);
+    if(panels && index>=0 && index<panels[0].count && !IsRectEmpty(&panels[0].items[index].rect))
+        InvalidateRect(panels[0].window,&panels[0].items[index].rect,FALSE);
+}
+BOOL TaskbarPinState(int index,int count,BOOL active)
+{
+    PanelItem *item; BOOL layout;
+    if(!panels || index<0 || index>=panels[0].count) return FALSE;
+    item=&panels[0].items[index]; layout=!!item->running!=!!count;
+    if(item->running==count && item->active==active) return FALSE;
+    item->running=count; item->active=active; TaskbarPinCaptionChanged(index);
+    return layout;
 }
 void TaskbarPinnedAction(int index,BOOL newInstance)
 {
@@ -309,14 +330,119 @@ static int Hit(FolderPanel *panel,POINT point)
 {
     int i;
     if(PtInRect(&panel->grip,point)) return PANEL_GRIP;
-    if(panel->overflow && PtInRect(&panel->more,point)) return PANEL_MORE;
+    if(panel->pins && panel->overflow) {
+        if(panel->scroll>0 && PtInRect(&panel->previous,point)) return PANEL_MORE;
+        if(panel->scroll<panel->scrollMax && PtInRect(&panel->next,point)) return PANEL_NEXT;
+    }
+    if(!panel->pins && panel->overflow && PtInRect(&panel->more,point)) return PANEL_MORE;
     for(i=0;i<panel->count;++i) if(panel->items[i].valid && PtInRect(&panel->items[i].rect,point)) return i;
     return -1;
+}
+typedef struct PinLayout {
+    int rows,cell,columns,width[TASKBAR_FOLDER_ITEMS],desired;
+    BOOL expanded;
+} PinLayout;
+static void MeasurePins(FolderPanel *panel,int cross,BOOL vertical,PinLayout *layout)
+{
+    int i,ordinal=0,slot=env.options.taskTiles ? 38 : 22;
+    ZeroMemory(layout,sizeof(*layout));
+    if(!env.options.taskTiles) for(i=0;i<panel->count;++i)
+        if(panel->items[i].valid && panel->items[i].running) { layout->expanded=TRUE; break; }
+    if(layout->expanded) {
+        layout->rows=vertical ? 1 : env.options.rows;
+        layout->cell=vertical ? 26 : (cross+2)/layout->rows;
+        if(layout->cell<22) layout->cell=22;
+    } else {
+        layout->cell=slot; layout->rows=cross/slot;
+        if(layout->rows<1) layout->rows=1;
+    }
+    for(i=0;i<panel->count;++i) if(panel->items[i].valid) {
+        int column=ordinal++/layout->rows;
+        int width=vertical ? layout->cell : layout->expanded && panel->items[i].running ? env.options.taskWidth : slot;
+        if(width>layout->width[column]) layout->width[column]=width;
+    }
+    layout->columns=(ordinal+layout->rows-1)/layout->rows;
+    for(i=0;i<layout->columns;++i) layout->desired+=layout->width[i];
+}
+static int DesiredPins(int cross,BOOL vertical)
+{
+    PinLayout layout;
+    if(!panels) return 0;
+    MeasurePins(&panels[0],cross,vertical,&layout); return layout.desired;
+}
+static void LayoutPins(FolderPanel *panel)
+{
+    RECT rect; PinLayout layout; int axis,cross,limit,along,ordinal=0,i,column,last,width;
+    GetClientRect(panel->window,&rect); axis=panel->vertical ? rect.bottom : rect.right;
+    cross=panel->vertical ? rect.right : rect.bottom;
+    MeasurePins(panel,cross,panel->vertical,&layout);
+    panel->overflow=layout.desired>axis; panel->shown=0;
+    SetRectEmpty(&panel->more); SetRectEmpty(&panel->grip); SetRectEmpty(&panel->title);
+    SetRectEmpty(&panel->previous); SetRectEmpty(&panel->next);
+    limit=axis-(panel->overflow ? 32 : 0); if(limit<0) limit=0;
+    panel->scrollMax=0;
+    if(panel->overflow && layout.columns) {
+        int used=layout.width[layout.columns-1];
+        panel->scrollMax=layout.columns-1;
+        while(panel->scrollMax>0 && used+layout.width[panel->scrollMax-1]<=limit) used+=layout.width[--panel->scrollMax];
+        if(panel->vertical) {
+            SetRect(&panel->previous,0,0,cross,16); SetRect(&panel->next,0,axis-16,cross,axis);
+        } else {
+            SetRect(&panel->previous,0,0,16,cross); SetRect(&panel->next,axis-16,0,axis,cross);
+        }
+    }
+    if(panel->scroll>panel->scrollMax) panel->scroll=panel->scrollMax;
+    if(panel->scroll<0) panel->scroll=0;
+    along=panel->overflow ? 16 : 0; last=panel->scroll;
+    for(column=panel->scroll;column<layout.columns;++column) {
+        int remaining=limit-(along-(panel->overflow ? 16 : 0));
+        if(remaining<(env.options.taskTiles ? 38 : 22)) break;
+        width=layout.width[column]; if(width>remaining) width=remaining;
+        layout.width[column]=width; along+=width; last=column+1;
+    }
+    panel->lastColumn=last;
+    along=panel->overflow ? 16 : 0; column=panel->scroll;
+    for(i=0;i<panel->count;++i) {
+        PanelItem *item=&panel->items[i]; int itemColumn,row,other,size=env.options.taskTiles ? 38 : 22;
+        SetRectEmpty(&item->rect); if(!item->valid) continue;
+        itemColumn=ordinal/layout.rows; row=ordinal++%layout.rows;
+        if(itemColumn<panel->scroll || itemColumn>=last) continue;
+        while(column<itemColumn) along+=layout.width[column++];
+        other=(cross-layout.rows*layout.cell)/2+row*layout.cell;
+        if(layout.expanded) {
+            if(panel->vertical) {
+                if(item->running) SetRect(&item->rect,0,along,cross,along+layout.cell-2);
+                else SetRect(&item->rect,(cross-size)/2,along+(layout.cell-size)/2,(cross+size)/2,along+(layout.cell+size)/2);
+            } else if(item->running) SetRect(&item->rect,along,row*layout.cell,along+layout.width[itemColumn]-2,row*layout.cell+layout.cell-2);
+            else SetRect(&item->rect,along,row*layout.cell+(layout.cell-size)/2,along+size,row*layout.cell+(layout.cell+size)/2);
+        } else if(panel->vertical) SetRect(&item->rect,other,along,other+size,along+size);
+        else SetRect(&item->rect,along,other,along+size,other+size);
+        ++panel->shown;
+    }
+    Tooltips(panel,FALSE); InvalidateRect(panel->window,NULL,FALSE);
+}
+static void ScrollPins(FolderPanel *panel,int delta)
+{
+    int value=panel->scroll+delta;
+    if(value<0) value=0;
+    if(value>panel->scrollMax) value=panel->scrollMax;
+    if(value!=panel->scroll) { panel->scroll=value; LayoutPins(panel); }
+}
+static void RevealPin(FolderPanel *panel,int index)
+{
+    PinLayout layout; RECT rect; int i,ordinal=0,column;
+    if(index<0 || index>=panel->count) return;
+    if(!IsRectEmpty(&panel->items[index].rect)) return;
+    GetClientRect(panel->window,&rect); MeasurePins(panel,panel->vertical ? rect.right : rect.bottom,panel->vertical,&layout);
+    for(i=0;i<index;++i) if(panel->items[i].valid) ++ordinal;
+    column=ordinal/layout.rows;
+    if(column<panel->scroll || column>=panel->lastColumn) { panel->scroll=column; LayoutPins(panel); }
 }
 static void LayoutContents(FolderPanel *panel)
 {
     RECT rect; int axis,cross,slot,across,cells,available,title=0,total=0,i,n,icon,width;
     HDC dc; HGDIOBJ old; SIZE measured;
+    if(panel->pins) { LayoutPins(panel); return; }
     GetClientRect(panel->window,&rect); axis=panel->vertical ? rect.bottom : rect.right;
     cross=panel->vertical ? rect.right : rect.bottom; icon=panel->pins ? (env.options.taskTiles ? 32 : 16) : (panel->config.large ? 32 : 16);
     slot=panel->pins ? (env.options.taskTiles ? 38 : 22) : icon+6;
@@ -373,8 +499,6 @@ static void LayoutContents(FolderPanel *panel)
     }
     Tooltips(panel,FALSE); InvalidateRect(panel->window,NULL,FALSE);
 }
-static int VisibleCount(FolderPanel *panel)
-{ int i,count=0; for(i=0;i<panel->count;++i) if(panel->items[i].valid) ++count; return count; }
 static void Place(FolderPanel *panel,int begin,int extent,int cross,BOOL vertical)
 {
     BOOL moved;
@@ -389,9 +513,11 @@ int TaskbarFoldersLayout(int begin,int end,int cross,BOOL vertical)
     if(!panels) return end;
     for(i=1;i<=panelCount;++i) if(panels[i].config.enabled) ++remaining;
     for(i=panelCount;i>0;--i) {
-        FolderPanel *panel=&panels[i]; int available,size;
+        FolderPanel *panel=&panels[i]; int available,size,reserve=DesiredPins(cross-6,vertical),budget=(end-begin)/2;
         if(!panel->config.enabled) { EnvShowControl(panel->window,FALSE); continue; }
-        available=end-begin-80-(VisibleCount(&panels[0]) ? 52 : 0);
+        if(budget<70) budget=70;
+        if(reserve>budget) reserve=budget;
+        available=end-begin-80-reserve;
         if(available<0) available=0;
         available/=remaining; --remaining;
         size=panel->config.size; if(size>available) size=available; if(size<24) size=0;
@@ -402,14 +528,15 @@ int TaskbarFoldersLayout(int begin,int end,int cross,BOOL vertical)
 }
 int TaskbarPinsLayout(int begin,int end,int cross,BOOL vertical)
 {
-    int count,across,slot,size,available;
+    int size,available,minimum=32+(env.options.taskTiles ? 38 : 22);
     if(!panels) return begin;
-    slot=env.options.taskTiles ? 38 : 22;
-    across=(cross-6)/slot; if(across<1) across=1;
-    count=VisibleCount(&panels[0]); size=((count+across-1)/across)*slot;
+    size=DesiredPins(cross-6,vertical);
     available=end-begin-52; if(available<0) available=0;
+    /* Keep both arrows and at least one complete launch icon usable on a
+     * crowded bar, borrowing ordinary task space only when necessary. */
+    if(size>available && available<minimum && end-begin>=minimum+4) available=minimum;
     if(size>available) size=available;
-    if(size<20) size=0;
+    if(size<20 || (size<DesiredPins(cross-6,vertical) && size<minimum)) size=0;
     Place(&panels[0],begin,size,cross,vertical); return begin+(size ? size+4 : 0);
 }
 static void Activate(FolderPanel *panel,int index)
@@ -444,6 +571,10 @@ static void Context(FolderPanel *panel,POINT point)
         index=panel->focus;
     } else { ScreenToClient(panel->window,&local); index=Hit(panel,local); }
     if(panel->pins) {
+        if(index>=0 && index<panel->count && panel->items[index].running) {
+            BOOL shown; ++busy; shown=EnvPinnedSystemMenu(index,point); --busy;
+            if(shown) { DestroyMenu(menu); return; }
+        }
         if(index>=0 && index<panel->count && panel->items[index].valid) {
             AppendMenuA(menu,MF_STRING,PANEL_NEW,"Open new window");
             AppendMenuA(menu,MF_STRING,PANEL_UNPIN,"Unpin from taskbar"); AppendMenuA(menu,MF_SEPARATOR,0,NULL);
@@ -512,7 +643,10 @@ static void PaintItem(FolderPanel *panel,HDC dc,int index,const RECT *bounds,BOO
     PanelItem *item=&panel->items[index]; int icon=panel->pins ? (env.options.taskTiles ? 32 : 16) : (panel->config.large ? 32 : 16);
     if(panel->pins && item->running) {
         if(env.options.taskTiles) EnvPaintTaskTile(dc,bounds,item->icon,item->running,down||item->active,focus);
-        else EnvPaintTaskButton(dc,bounds,"",item->icon,down||item->active,focus);
+        else {
+            char caption[160]; EnvPinnedTaskCaption(index,caption,sizeof(caption));
+            EnvPaintTaskButton(dc,bounds,caption,item->icon,down||item->active,focus);
+        }
     } else if(panel->config.text && !panel->pins) {
         RECT rect=*bounds; FillRect(dc,&rect,(HBRUSH)(COLOR_BTNFACE+1));
         if(down || hot) DrawEdge(dc,&rect,down ? EDGE_SUNKEN : EDGE_RAISED,BF_RECT);
@@ -547,7 +681,18 @@ static LRESULT CALLBACK PanelProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
         }
         for(i=0;i<panel->count;++i) if(!IsRectEmpty(&panel->items[i].rect))
             PaintItem(panel,dc,i,&panel->items[i].rect,panel->pressed==i,panel->hot==i,GetFocus()==window && panel->focus==i);
-        if(panel->overflow) {
+        if(panel->pins && panel->overflow) {
+            for(i=0;i<2;++i) {
+                int id=i ? PANEL_NEXT : PANEL_MORE;
+                BOOL enabled=i ? panel->scroll<panel->scrollMax : panel->scroll>0;
+                RECT arrow=i ? panel->next : panel->previous;
+                EnvPaintQuickButton(dc,&arrow,NULL,16,enabled && panel->pressed==id,enabled && panel->hot==id,
+                    GetFocus()==window && panel->focus==id);
+                if(enabled && panel->pressed==id) OffsetRect(&arrow,1,1);
+                PaintArrow(dc,&arrow,panel->vertical ? (i ? DFCS_SCROLLDOWN : DFCS_SCROLLUP) : (i ? DFCS_SCROLLRIGHT : DFCS_SCROLLLEFT),
+                    GetSysColor(enabled ? COLOR_BTNTEXT : COLOR_GRAYTEXT),TRUE);
+            }
+        } else if(panel->overflow) {
             RECT arrow=panel->more;
             EnvPaintQuickButton(dc,&arrow,NULL,16,panel->pressed==PANEL_MORE,panel->hot==PANEL_MORE,FALSE);
             if(panel->pressed==PANEL_MORE) OffsetRect(&arrow,1,1);
@@ -595,7 +740,7 @@ static LRESULT CALLBACK PanelProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
             GetCursorPos(&point); panel->resizing=TRUE; panel->resizeSaved=panel->config.size; panel->resizeExtent=panel->extent;
             panel->resizeStart=panel->vertical ? point.y : point.x; SetCapture(window); return 0;
         }
-        if(hit>=0 && hit<=PANEL_MORE) {
+        if(hit>=0 && (hit<=PANEL_MORE || (panel->pins && hit==PANEL_NEXT))) {
             panel->pressed=hit; panel->focus=hit; SetFocus(window); SetCapture(window); InvalidateRect(window,NULL,FALSE);
         }
         return 0;
@@ -606,7 +751,10 @@ static LRESULT CALLBACK PanelProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
         GetCursorPos(&point); ScreenToClient(window,&point); hit=Hit(panel,point); panel->pressed=-1;
         if(GetCapture()==window) ReleaseCapture();
         InvalidateRect(window,NULL,FALSE);
-        if(hit==pressed) { if(hit==PANEL_MORE) Overflow(panel); else Activate(panel,hit); }
+        if(hit==pressed) {
+            if(panel->pins && (hit==PANEL_MORE || hit==PANEL_NEXT)) ScrollPins(panel,hit==PANEL_MORE ? -1 : 1);
+            else if(hit==PANEL_MORE) Overflow(panel); else Activate(panel,hit);
+        }
         return 0;
     }
     case WM_CANCELMODE: case WM_CAPTURECHANGED:
@@ -617,12 +765,19 @@ static LRESULT CALLBACK PanelProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
     case WM_KILLFOCUS: InvalidateRect(window,NULL,FALSE); return 0;
     case WM_GETDLGCODE: return DLGC_WANTARROWS;
     case WM_KEYDOWN:
-        if(wp==VK_RETURN || wp==VK_SPACE) { if(panel->focus==PANEL_MORE) Overflow(panel); else Activate(panel,panel->focus); return 0; }
+        if(wp==VK_RETURN || wp==VK_SPACE) {
+            if(panel->pins && (panel->focus==PANEL_MORE || panel->focus==PANEL_NEXT)) ScrollPins(panel,panel->focus==PANEL_MORE ? -1 : 1);
+            else if(panel->focus==PANEL_MORE) Overflow(panel); else Activate(panel,panel->focus);
+            return 0;
+        }
+        if(panel->pins && (wp==VK_PRIOR || wp==VK_NEXT)) { ScrollPins(panel,wp==VK_PRIOR ? -1 : 1); return 0; }
         if(wp==VK_RIGHT || wp==VK_DOWN || wp==VK_LEFT || wp==VK_UP || wp==VK_HOME || wp==VK_END) {
             int direction=(wp==VK_LEFT || wp==VK_UP || wp==VK_END) ? -1 : 1, next;
-            next=wp==VK_HOME ? -1 : wp==VK_END ? (panel->overflow ? PANEL_MORE+1 : panel->count) : panel->focus;
-            do { next+=direction; } while(next>=0 && next<PANEL_MORE && (next>=panel->count || IsRectEmpty(&panel->items[next].rect)));
-            if(next>=0 && (next<panel->count || (next==PANEL_MORE && panel->overflow))) panel->focus=next;
+            next=wp==VK_HOME ? -1 : wp==VK_END ? (panel->pins ? panel->count : panel->overflow ? PANEL_MORE+1 : panel->count) : panel->focus;
+            do { next+=direction; } while(next>=0 && next<PANEL_MORE && (next>=panel->count || (panel->pins ? !panel->items[next].valid : IsRectEmpty(&panel->items[next].rect))));
+            if(next>=0 && (next<panel->count || (!panel->pins && next==PANEL_MORE && panel->overflow))) {
+                panel->focus=next; if(panel->pins) RevealPin(panel,next);
+            }
             InvalidateRect(window,NULL,FALSE); return 0;
         }
         break;
@@ -631,8 +786,18 @@ static LRESULT CALLBACK PanelProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
     }
     case WM_NOTIFY: {
         NMHDR *notice=(NMHDR *)lp; int index=(int)notice->idFrom-1;
-        if(notice->hwndFrom==tips && index>=0 && index<panel->count && (notice->code==TTN_NEEDTEXTA || notice->code==TTN_NEEDTEXTW)) {
-            UiTooltipText(notice,panel->items[index].label,env.host.font); return 0;
+        if(notice->hwndFrom==tips && (notice->code==TTN_NEEDTEXTA || notice->code==TTN_NEEDTEXTW)) {
+            if(index>=0 && index<panel->count) {
+                /* ANSI tooltips keep the pointer after returning from WM_NOTIFY. */
+                static char caption[160];
+                if(panel->pins && panel->items[index].running && EnvPinnedTaskCaption(index,caption,sizeof(caption)))
+                    UiTooltipText(notice,caption,env.host.font);
+                else UiTooltipText(notice,panel->items[index].label,env.host.font);
+                return 0;
+            }
+            if(panel->pins && (index==PANEL_MORE || index==PANEL_NEXT)) {
+                UiTooltipText(notice,UiText(index==PANEL_MORE ? "Scroll backward" : "Scroll forward"),env.host.font); return 0;
+            }
         }
         break;
     }

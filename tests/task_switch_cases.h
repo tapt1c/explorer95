@@ -4,10 +4,22 @@ static void SwitchKey(BYTE key,BOOL up)
 static void SwitchTab(void) { SwitchKey(VK_TAB,FALSE); SwitchKey(VK_TAB,TRUE); }
 static HWND SwitchOpen(HWND foreground)
 {
-    DWORD started; HWND popup;
-    SetForegroundWindow(foreground); PumpFor(450);
-    Check(GetForegroundWindow()==foreground,"Alt+Tab starts from the requested foreground window");
-    SwitchKey(VK_MENU,FALSE); SwitchTab(); started=GetTickCount();
+    DWORD started=GetTickCount(),settled=started; DWORD_PTR result; HWND popup,bar=FindWindowA("Explorer95.Taskbar",NULL);
+    SetForegroundWindow(foreground);
+    /* Modal activation can leave delayed X11 FocusIn events which clear Wine's
+     * injected modifiers. Require settled ownership and released keys before
+     * the one real Alt+Tab attempt; never repeat a lost press. */
+    do {
+        PumpFor(20);
+        if(GetForegroundWindow()!=foreground || (GetAsyncKeyState(VK_MENU)&0x8000) ||
+           (GetAsyncKeyState(VK_TAB)&0x8000)) settled=GetTickCount();
+        else if(GetTickCount()-settled>=300) break;
+    } while(GetTickCount()-started<3000);
+    Check(GetForegroundWindow()==foreground && GetTickCount()-settled>=300,"Alt+Tab starts from settled foreground ownership with released keys");
+    Check(SendMessageTimeoutA(bar,WM_NULL,0,0,SMTO_ABORTIFHUNG,1000,&result),"the shell finishes its pending UI work before real hook input");
+    SwitchKey(VK_MENU,FALSE);
+    Check(GetAsyncKeyState(VK_MENU)&0x8000,"Alt remains held before the native Tab press");
+    SwitchTab(); started=GetTickCount();
     do { PumpFor(30); popup=FindWindowA("Explorer95.TaskSwitch",NULL); } while((!popup || !IsWindowVisible(popup)) && GetTickCount()-started<2000);
     Check(popup && IsWindowVisible(popup),"the global classic keyboard hook opens the replacement Alt+Tab window");
     return popup;
