@@ -20,11 +20,13 @@ jobs:
       group: full
   build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - name: Install cross compiler
-        run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-i686 ccache
+        run: |
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -y gcc-mingw-w64-i686 ccache
       - name: Install pinned native Win95 build tools
         run: |
           python3 tools/install_watcom.py
