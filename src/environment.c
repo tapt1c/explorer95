@@ -4,13 +4,15 @@
 #include "render_trace.h"
 #include "tray_mirror.h"
 #include "task_groups.h"
+#include "taskbar_panels.h"
+#include "taskbar_links.h"
 #include "task_switch.h"
 #include "shell_sounds.h"
 #define EX95_LOCALIZE_UI
 #include "localization.h"
 
 ShellState env;
-typedef struct TaskGroup { HWND windows[TASK_LIMIT], button; int count; DWORD process; BOOL active; HICON icon; char application[MAX_PATH]; } TaskGroup;
+typedef struct TaskGroup { HWND windows[TASK_LIMIT], button; int count,pin; DWORD process; BOOL active; HICON icon; char application[MAX_PATH]; } TaskGroup;
 typedef struct QuickItem { char path[MAX_PATH]; HICON icon; HWND button; } QuickItem;
 static TaskGroup tasks[TASK_LIMIT];
 static HWND taskWindows[TASK_LIMIT], savedWindows[TASK_LIMIT], lastActive, bridge, quickTip, desktopButton;
@@ -150,7 +152,7 @@ static BOOL SettingsPath(void)
     env.options.taskTiles = !!Option("TaskTiles", FALSE);
     env.options.locked = !!Option("Locked", TRUE); env.options.autoHide = !!Option("AutoHide", FALSE);
     env.options.topmost = !!Option("AlwaysOnTop", TRUE); env.options.clock = !!Option("Clock", TRUE);
-    env.options.quick = !!Option("QuickLaunch", TRUE); env.options.largeIcons = !!Option("LargeIcons", FALSE);
+    env.options.quick = !!Option("QuickLaunch", FALSE); env.options.largeIcons = !!Option("LargeIcons", FALSE);
     env.options.quickSize = Clamp(Option("QuickLaunchSize", 0), 0, 4096);
     env.options.group = !!Option("GroupTasks", FALSE); env.options.hideInactive = !!Option("HideInactive", FALSE);
     env.options.classicStart = !!GetPrivateProfileIntA("Start", "Classic", FALSE, env.ini);
@@ -177,12 +179,20 @@ static BOOL SettingsPath(void)
 
 BOOL EnvironmentLaunch(HWND owner, const char *path, const char *arguments, const char *directory)
 {
-    HINSTANCE result = ShellExecuteA(owner, "open", path, arguments && *arguments ? arguments : NULL, directory, SW_SHOWNORMAL);
+    TaskbarLink *shortcut=NULL; int length=lstrlenA(path); HINSTANCE result;
+    /* Execute the original .lnk, but retain the program in history even if
+     * its taskbar shortcut is subsequently unpinned or renamed. */
+    if(length>4 && !lstrcmpiA(path+length-4,".lnk") && (!arguments || !*arguments)) {
+        shortcut=EnvAlloc(sizeof(*shortcut));
+        if(shortcut && (!TaskbarLinkRead(path,shortcut) || !TaskbarLinkExists(shortcut))) { EnvFree(shortcut); shortcut=NULL; }
+    }
+    result = ShellExecuteA(owner, "open", path, arguments && *arguments ? arguments : NULL, directory, SW_SHOWNORMAL);
     if ((INT_PTR)result <= 32) {
         char text[384]; wsprintfA(text, "Windows could not open:\r\n%s\r\n\r\nShell error %ld.", path, (LONG)(INT_PTR)result);
-        MessageBoxA(owner, text, "Explorer95", MB_OK | MB_ICONEXCLAMATION); return FALSE;
+        EnvFree(shortcut); MessageBoxA(owner, text, "Explorer95", MB_OK | MB_ICONEXCLAMATION); return FALSE;
     }
-    EnvironmentRecordLaunch(path, arguments); return TRUE;
+    EnvironmentRecordLaunch(shortcut ? shortcut->target : path, shortcut ? shortcut->arguments : arguments);
+    EnvFree(shortcut); return TRUE;
 }
 void EnvironmentRecordLaunch(const char *path, const char *arguments) { StartRecord(path, arguments); }
 void EnvironmentFind(HWND owner, const char *directory)
@@ -252,13 +262,15 @@ static void TaskAction(int index)
     TaskGroup *task = &tasks[index];
     if (task->count > 1) {
         HMENU menu = CreatePopupMenu(); POINT point; int i, selected; char text[128];
-        for (i = 0; i < task->count; ++i) {
-            GetWindowTextA(task->windows[i], text, sizeof(text)); UiAppendLiteralMenuA(menu, MF_STRING, i + 1, text);
+        HWND choices[TASK_LIMIT]; int count=task->count;
+        CopyMemory(choices,task->windows,count*sizeof(HWND));
+        for (i = 0; i < count; ++i) {
+            GetWindowTextA(choices[i], text, sizeof(text)); UiAppendLiteralMenuA(menu, MF_STRING, i + 1, text);
         }
         SetForegroundWindow(env.bar);
         GetCursorPos(&point); selected = TrackPopupMenu(menu, TPM_RETURNCMD, point.x, point.y, 0, env.bar, NULL);
         PostMessageA(env.bar,WM_NULL,0,0);
-        DestroyMenu(menu); if (selected > 0 && selected <= task->count) EnvActivateWindow(task->windows[selected - 1]);
+        DestroyMenu(menu); if (selected > 0 && selected <= count) EnvActivateWindow(choices[selected - 1]);
     } else if (task->windows[0] == lastActive && !IsIconic(task->windows[0])) PostMessageA(task->windows[0], WM_SYSCOMMAND, SC_MINIMIZE, 0);
     else EnvActivateWindow(task->windows[0]);
 }
@@ -270,6 +282,26 @@ HICON EnvWindowIcon(HWND target, BOOL large)
     if (!icon) icon = (HICON)GetClassLongPtrA(target, large ? GCLP_HICON : GCLP_HICONSM);
     if (!icon) icon = (HICON)GetClassLongPtrA(target, GCLP_HICON);
     return icon;
+}
+static int BindPinnedTasks(void)
+{
+    int i,j,visible=0;
+    for(i=0;i<taskCount;++i) tasks[i].pin=-1;
+    for(i=0;i<TaskbarPinsCount();++i) {
+        int count=0; BOOL active=FALSE; const char *target=TaskbarPinTarget(i);
+        for(j=0;j<taskCount;++j) if(tasks[j].pin<0 && target && tasks[j].application[0] && !lstrcmpiA(target,tasks[j].application)) {
+            tasks[j].pin=i; count=tasks[j].count; active=tasks[j].active; break;
+        }
+        TaskbarPinState(i,count,active);
+    }
+    for(i=0;i<taskCount;++i) if(tasks[i].pin<0) ++visible;
+    return visible;
+}
+BOOL EnvActivatePinnedTask(int index)
+{
+    int i;
+    for(i=0;i<taskCount;++i) if(tasks[i].pin==index) { TaskAction(i); return TRUE; }
+    return FALSE;
 }
 static void UpdateTasks(void)
 {
@@ -291,10 +323,11 @@ static void UpdateTasks(void)
             DWORD process=0; char application[MAX_PATH]; application[0]=0;
             taskWindows[i] = windows[i]; if(!GetWindowThreadProcessId(windows[i], &process) || !process) continue;
             group = taskCount;
+            for(j=0;j<taskCount;++j) if(tasks[j].process==process) { lstrcpyA(application,tasks[j].application); break; }
+            if(j==taskCount) TaskApplicationPath(process,application);
             if (env.options.group) {
-                for(j=0;j<taskCount;++j) if(tasks[j].process==process) { group=j; break; }
-                if(group==taskCount && TaskApplicationPath(process,application))
-                    for(j=0;j<taskCount;++j) if(tasks[j].application[0] && !lstrcmpiA(tasks[j].application,application)) { group=j; break; }
+                for(j=0;j<taskCount;++j) if(tasks[j].process==process ||
+                    (application[0] && tasks[j].application[0] && !lstrcmpiA(tasks[j].application,application))) { group=j; break; }
             }
             if (group == taskCount) {
                 tasks[group].process = process;
@@ -324,7 +357,7 @@ static void UpdateTasks(void)
         }
         if (selected) lastActive = active;
     }
-    TaskSwitchObserve();
+    BindPinnedTasks(); TaskSwitchObserve();
 }
 void EnvShowDesktop(void)
 {
@@ -553,19 +586,25 @@ static void AddQuickFile(const char *source)
 void EnvLayoutBar(void)
 {
     RECT rect; int width, height;
-    int i, begin, end, trayWidth, rows, columns, taskWidth, taskHeight;
+    int i, begin, end, trayWidth, rows, columns, taskWidth, taskHeight, visible,position=0;
     BOOL changed = FALSE;
     BOOL vertical = env.options.edge == ABE_LEFT || env.options.edge == ABE_RIGHT;
     if (!env.bar || !env.tray) return;
+    visible=BindPinnedTasks();
     GetClientRect(env.bar, &rect); width = rect.right; height = rect.bottom;
     if (width < 10 || height < 10) return;
     if (vertical) {
         changed |= EnvMoveControl(env.startButton, 3, 3, width - 6, 26);
         end = height - 36;
         begin = LayoutQuick(34, end, width, TRUE);
+        end=TaskbarFoldersLayout(begin,end,width,TRUE);
+        begin=TaskbarPinsLayout(begin,end,width,TRUE);
         changed |= EnvMoveControl(env.tray, 2, height - 30, width - 4, 28); TrayLayout(width - 6, 26);
-        taskHeight = taskCount ? (end - begin) / taskCount : 26; taskHeight = Clamp(taskHeight, 8, env.options.taskTiles ? 42 : 26);
-        for (i = 0; i < taskCount; ++i) changed |= EnvMoveControl(tasks[i].button, 3, begin + i * taskHeight, env.options.taskTiles ? taskHeight-2 : width - 6, taskHeight - 2);
+        taskHeight = visible ? (end - begin) / visible : 26; taskHeight = Clamp(taskHeight, 8, env.options.taskTiles ? 42 : 26);
+        for (i = 0; i < taskCount; ++i) {
+            changed|=EnvShowControl(tasks[i].button,tasks[i].pin<0);
+            if(tasks[i].pin<0) changed |= EnvMoveControl(tasks[i].button, 3, begin + position++ * taskHeight, env.options.taskTiles ? taskHeight-2 : width - 6, taskHeight - 2);
+        }
     } else {
         rows = env.options.rows;
         changed |= EnvMoveControl(env.startButton, 2, 3, EnvStartButtonWidth(), EnvBarButtonHeight(height, rows)); begin = EnvStartButtonWidth() + 10;
@@ -573,12 +612,19 @@ void EnvLayoutBar(void)
         if (trayWidth > width / 2) trayWidth = width / 2;
         end = width - trayWidth - 8;
         begin = LayoutQuick(begin, end, height, FALSE);
+        end=TaskbarFoldersLayout(begin,end,height,FALSE);
+        begin=TaskbarPinsLayout(begin,end,height,FALSE);
         changed |= EnvMoveControl(env.tray, width - trayWidth - 3, 3, trayWidth, height - 6); TrayLayout(trayWidth - 2, height - 8);
-        columns = taskCount ? (taskCount + rows - 1) / rows : 1;
+        columns = visible ? (visible + rows - 1) / rows : 1;
         taskWidth = (end - begin) / columns; taskWidth = Clamp(taskWidth, 4, env.options.taskTiles ? (height-4)/rows : env.options.taskWidth);
         taskHeight = (height - 4) / rows;
-        for (i = 0; i < taskCount; ++i)
-            changed |= EnvMoveControl(tasks[i].button, begin + (i / rows) * taskWidth, 3 + (i % rows) * taskHeight, taskWidth - 2, taskHeight - 2);
+        for (i = 0; i < taskCount; ++i) {
+            changed|=EnvShowControl(tasks[i].button,tasks[i].pin<0);
+            if(tasks[i].pin<0) {
+                changed |= EnvMoveControl(tasks[i].button, begin + (position / rows) * taskWidth, 3 + (position % rows) * taskHeight, taskWidth - 2, taskHeight - 2);
+                ++position;
+            }
+        }
     }
     if (changed) InvalidateRect(env.bar, NULL, FALSE);
 }
@@ -587,7 +633,7 @@ int EnvBarButtonHeight(int height, int rows) { return (height - 4) / rows - 2; }
 int EnvBarThickness(const ShellOptions *options)
 {
     if (options->edge == ABE_LEFT || options->edge == ABE_RIGHT) return 140 + (options->rows - 1) * 32;
-    return (options->taskTiles ? 44 : options->largeIcons ? 40 : 28) * options->rows;
+    return (options->taskTiles ? 44 : (options->largeIcons || TaskbarFoldersLargeIcons()) ? 40 : 28) * options->rows;
 }
 static void ResizeDesktop(void)
 {
@@ -650,7 +696,7 @@ void EnvApplyOptions(void)
     /* Preserve a native accessible name when only the flag is painted. */
     if(!lstrcmpA(env.options.startLabel,"Start")) SetWindowTextA(env.startButton,"Start");
     else UiSetLiteralWindowTextA(env.startButton,env.options.startLabel[0] ? env.options.startLabel : "Start");
-    StartRefresh();
+    StartRefresh(); TaskbarPanelsOptionsChanged();
     env.hidden = FALSE; RefreshQuick(); EnvPositionBar(); UpdateTasks(); EnvLayoutBar();
     InvalidateRect(quickGrip, NULL, FALSE);
     if (env.desktopView) {
@@ -719,21 +765,31 @@ void EnvironmentToggleDesktopIcons(void)
 
 static void BarMenu(HWND source)
 {
-    HMENU menu = CreatePopupMenu(), toolbars = CreatePopupMenu(), dock = CreatePopupMenu(), size = CreatePopupMenu();
+    HMENU menu = CreatePopupMenu(), toolbars = TaskbarPanelsMenu(), dock = CreatePopupMenu(), size = CreatePopupMenu();
     POINT point; int command, id = GetDlgCtrlID(source), i;
     const char *names[] = {"Left", "Top", "Right", "Bottom"};
     GetCursorPos(&point);
     if (id >= ID_TASK && id < ID_TASK + taskCount) {
         HWND target = tasks[id - ID_TASK].windows[0]; HMENU system = GetSystemMenu(target, FALSE);
         if (system) {
+            char application[MAX_PATH]; int pin;
+            lstrcpyA(application,tasks[id-ID_TASK].application); pin=TaskbarPinFind(application);
+            AppendMenuA(menu,MF_STRING|(!application[0] ? MF_GRAYED : 0),ID_TASKBAR_PIN,
+                pin>=0 ? "Unpin from taskbar" : "Pin to taskbar");
+            AppendMenuA(menu,MF_SEPARATOR,0,NULL);
+            AppendMenuA(menu,MF_POPUP,(UINT_PTR)system,"Window");
             SetForegroundWindow(env.bar);
-            command = TrackPopupMenu(system, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, 0, env.bar, NULL);
-            if (command) PostMessageA(target, WM_SYSCOMMAND, command, 0);
+            command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, 0, env.bar, NULL);
+            /* The system owns this submenu. Never destroy it with our wrapper. */
+            RemoveMenu(menu,2,MF_BYPOSITION);
+            if(command==ID_TASKBAR_PIN) {
+                if(pin>=0) TaskbarUnpinApplication(application);
+                else TaskbarPinApplication(application,NULL);
+            } else if (command) PostMessageA(target, WM_SYSCOMMAND, command, 0);
+            PostMessageA(env.bar,WM_NULL,0,0);
         }
         DestroyMenu(toolbars); DestroyMenu(dock); DestroyMenu(size); DestroyMenu(menu); return;
     }
-    AppendMenuA(toolbars, MF_STRING | (env.options.quick ? MF_CHECKED : 0), ID_QUICK, "Quick Launch");
-    AppendMenuA(toolbars, MF_STRING, ID_QUICKFOLDER, "Open Quick Launch Folder");
     AppendMenuA(menu, MF_POPUP, (UINT_PTR)toolbars, "Toolbars");
     for (i = 0; i < 4; ++i) AppendMenuA(dock, MF_STRING | (env.options.edge == i ? MF_CHECKED : 0), ID_EDGE_MENU + i, names[i]);
     AppendMenuA(menu, MF_POPUP | (env.options.locked ? MF_GRAYED : 0), (UINT_PTR)dock, "Position");
@@ -756,6 +812,7 @@ static void BarMenu(HWND source)
 void EnvCommand(int id)
 {
     char path[MAX_PATH];
+    if(TaskbarPanelsCommand(id)) return;
     switch (id) {
     case ID_COMPUTER: EnvironmentOpenNamespace(CSIDL_DRIVES); break;
     case ID_CONTROL: EnvironmentOpenNamespace(CSIDL_CONTROLS); break;
@@ -982,7 +1039,7 @@ static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
         return 0;
     }
     case WM_SETTINGCHANGE: case WM_DISPLAYCHANGE:
-        if (message == WM_DISPLAYCHANGE) EndQuickResize(FALSE);
+        if (message == WM_DISPLAYCHANGE) { EndQuickResize(FALSE); TaskbarPanelsCancelResize(); }
         if (message == WM_DISPLAYCHANGE || wp != SPI_SETWORKAREA) StartRefresh();
         if (message == WM_DISPLAYCHANGE && env.primary) SetRect(&env.originalArea, 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
         EnvPositionBar(); return 0;
@@ -997,6 +1054,7 @@ static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
             return 0;
         }
         if (wp == 2) { WinKeyTick(); return 0; }
+        if (wp == 4) { TaskbarPanelsTick(); return 0; }
         UpdateTasks(); TrayPrune(); AutoHideTick();
         GetLocalTime(&now);
         if (!GetTimeFormatA(LOCALE_USER_DEFAULT, TIME_NOSECONDS, &now, NULL, text, sizeof(text)))
@@ -1059,7 +1117,7 @@ static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
     case WM_SIZING: {
         RECT *rect = (RECT *)lp;
         BOOL vertical = env.options.edge == ABE_LEFT || env.options.edge == ABE_RIGHT;
-        int unit=env.options.taskTiles ? 44 : env.options.largeIcons ? 40 : 28, full;
+        int unit=env.options.taskTiles ? 44 : (env.options.largeIcons || TaskbarFoldersLargeIcons()) ? 40 : 28, full;
         env.options.rows = vertical ? Clamp((rect->right - rect->left - 140 + 16) / 32 + 1, 1, 3) :
             Clamp((rect->bottom - rect->top + unit/2) / unit, 1, 3);
         /* Snap the live sizing rectangle as well as the saved row count.
@@ -1093,7 +1151,7 @@ static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
         /* Global shell teardown runs after this window procedure unwinds.
          * Destroying another top-level desktop inside WM_DESTROY can reenter
          * activation/IME handling while the taskbar is half destroyed. */
-        KillTimer(window, 1); KillTimer(window, 2); KillTimer(window, 3); PostQuitMessage(0); return 0;
+        KillTimer(window, 1); KillTimer(window, 2); KillTimer(window, 3); KillTimer(window,4); PostQuitMessage(0); return 0;
     }
     return DefWindowProcA(window, message, wp, lp);
 }
@@ -1140,6 +1198,7 @@ HWND EnvironmentCreate(const EnvironmentHost *callbacks)
         ZeroMemory(&data, sizeof(data)); data.cbSize = sizeof(data); data.hWnd = env.bar; data.uCallbackMessage = WM_APPBAR;
         env.appbar = (BOOL)SHAppBarMessage(ABM_NEW, &data);
     }
+    if(!TaskbarPanelsCreate()) { EnvironmentShutdown(); return NULL; }
     RefreshQuick(); EnvApplyOptions(); ShowWindow(env.desktop, SW_SHOWNOACTIVATE);
     SetWindowPos(env.desktop, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     TaskSwitchCreate();
@@ -1153,7 +1212,7 @@ HWND EnvironmentCreate(const EnvironmentHost *callbacks)
 }
 BOOL EnvironmentTranslate(MSG *message)
 {
-    if(TaskSwitchTranslate(message)) return TRUE;
+    if(TaskbarPanelsTranslate(message) || TaskSwitchTranslate(message)) return TRUE;
     if (quickResizing && message->message == WM_KEYDOWN && message->wParam == VK_ESCAPE) {
         EndQuickResize(FALSE); return TRUE;
     }
@@ -1174,7 +1233,7 @@ void EnvironmentShutdown(void)
     TaskSwitchDestroy();
     RenderTraceShutdown("exit.begin",S_OK,0);
     folderHead = folderCount = 0;
-    ShutdownClose(); EndQuickResize(FALSE); QuickHover(NULL);
+    ShutdownClose(); EndQuickResize(FALSE); QuickHover(NULL); TaskbarPanelsDestroy();
     KillTimer(env.bar, 1); KillTimer(env.bar, 2); winPending = FALSE; DragAcceptFiles(env.bar, FALSE);
     if (hotkeyDesktop) UnregisterHotKey(env.bar, 1);
     if (hotkeyStart) UnregisterHotKey(env.bar, 2);

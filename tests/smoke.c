@@ -1062,6 +1062,7 @@ static void PumpFor(DWORD duration)
         Sleep(10);
     } while (GetTickCount() - started < duration);
 }
+#include "taskbar_panels_cases.h"
 #include "quick_launch_cases.h"
 #include "backlog_menu_cases.h"
 #include "shutdown_dos_cases.h"
@@ -1848,9 +1849,11 @@ void start(void)
     if (group == GROUP_FULL || group == GROUP_CORE || group == GROUP_MENU) ShutdownDosTests(settingsDir);
     if (group != GROUP_BROWSER) { LayoutTests(); HistoryTests(settingsDir, module, settings); ShellFeatureTests(); }
     if (group == GROUP_FULL || group == GROUP_CORE) { PaintTests(); ConfigTests(settingsDir); DesktopIconTests(settingsDir); LanguageTests(settingsDir); NativeRunTests(); FolderHandlerTests(module,settings); FolderSelectionTests(); DragDataTests(); NativeViewMessageTests(); TrayMirrorTests(); TrayMirrorCrossProcessTests(); }
+    if(group==GROUP_FULL || group==GROUP_MENU || group==GROUP_CORE) TaskbarLinksTests(settingsDir,module);
     if (group == GROUP_CORE) goto cleanup;
     if (group == GROUP_MENU) NativeDesktopIconSizeTests();
     if(group==GROUP_MENU || group==GROUP_FULL) WritePrivateProfileStringA("Desktop","IconSize","16",settings);
+    if(group==GROUP_FULL || group==GROUP_MENU) TaskbarPanelsPrepare(settingsDir,settings,module);
     {
         LPITEMIDLIST programs; char directory[MAX_PATH];
         Check(SUCCEEDED(OleInitialize(NULL)),"initialize COM for the installed-program UI fixture");
@@ -1902,6 +1905,7 @@ void start(void)
     /* Finish the cold-start folder activation check before deliberately
      * moving foreground among independent Alt+Tab fixture processes. */
     if(group==GROUP_MENU || group==GROUP_FULL) TaskSwitchTests(bar);
+    if(group==GROUP_FULL || group==GROUP_MENU) { TaskbarPanelsTests(bar,settingsDir,settings); SendMessageA(bar,WM_COMMAND,ID_QUICK,0); }
     if (group != GROUP_BROWSER) { QuickLaunchTests(bar, settings); TaskTileTests(bar,settings); TaskGroupProcessesTests(bar,settingsDir); TaskManagerMenuTests(bar); StartOrderTests(bar,FindWindowA("Explorer95.Start",NULL),settings); }
     if (group != GROUP_MENU) {
         FolderForwardTests(executable,settings,fixture,bar); DesktopRefreshTests(desktop);
@@ -2043,6 +2047,12 @@ shutdown:
         Check(CreateProcessA(NULL,command,NULL,NULL,FALSE,0,NULL,NULL,&startup,&process),"restart the shell with an icon-only Start profile");
         bar = WaitFor("Explorer95.Taskbar",NULL); GetWindowRect(GetDlgItem(bar,100),&button);
         Check(bar && button.right - button.left == 26,"the real restarted shell retains the compact icon-only Start button");
+        Check(GetPrivateProfileIntA("TaskbarToolbars","Count",0,settings)==2 &&
+              GetPrivateProfileIntA("TaskbarToolbars","Size0",0,settings)==190 &&
+              !IsWindowVisible(GetDlgItem(bar,ID_TASKBAR_FOLDER)),"custom folder panels retain their size and hidden state after real restart and unrelated settings edits");
+        SendMessageA(bar,WM_COMMAND,ID_TOOLBAR_TOGGLE,0);
+        Check(IsWindowVisible(GetDlgItem(bar,ID_TASKBAR_FOLDER)),"a restarted custom panel can be restored from the Toolbars menu");
+        SendMessageA(bar,WM_COMMAND,ID_TOOLBAR_TOGGLE,0);
         {
             HWND desktopList=NULL,desktopWindow; DWORD ready=GetTickCount();
             do {
@@ -2058,10 +2068,13 @@ shutdown:
         WritePrivateProfileStringA("Start","ButtonLabel",caption,settings);
     }
     if (group != GROUP_FULL) goto cleanup;
+    Check(WritePrivateProfileStringA("TaskbarToolbars","Size0","4096",settings) &&
+          WritePrivateProfileStringA("TaskbarToolbars","Enabled0","1",settings),"prepare only our own oversized folder panel preference before a real restart");
     wsprintfA(command, "\"%s\" --settings=\"%s\" --trace-render", executable, settings);
     Check(CreateProcessA(NULL, command, NULL, NULL, FALSE, 0, NULL, NULL, &startup, &process), "restart with saved profile");
     bar = WaitFor("Explorer95.Taskbar", NULL);
     Check(bar != NULL, "shell restarts successfully");
+    OversizedPanelTest(bar,settings);
     Check(GetPrivateProfileIntA("Taskbar", "QuickLaunchSize", 0, settings) == 150 && QuickExtent(bar) == 150,
         "custom Quick Launch extent survives shell restart and later settings edits");
     Check(GetPrivateProfileIntA("Start", "RecentCount", -1, settings) == 2, "recent count survives restart");
@@ -2138,6 +2151,9 @@ cleanup:
     wsprintfA(path, "%s\\history-document.txt", settingsDir); DeleteFileA(path);
     wsprintfA(path, "%s\\document.lnk", settingsDir); DeleteFileA(path);
     wsprintfA(path, "%s\\program.lnk", settingsDir); DeleteFileA(path);
+    TaskbarPinsCleanup(settingsDir);
+    wsprintfA(path,"%s\\Toolbar fixture",settingsDir); RemoveDirectoryA(path);
+    wsprintfA(path,"%s\\New toolbar",settingsDir); RemoveDirectoryA(path);
     wsprintfA(path, "%s\\Quick Launch", settingsDir); RemoveDirectoryA(path);
     Check(RemoveDirectoryA(settingsDir), "temporary profile removed");
     wsprintfA(path, "%s\\sample.txt", fixture); DeleteFileA(path);

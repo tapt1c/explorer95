@@ -323,6 +323,7 @@ static void LanguageRestartTests(const char *directory,const char *executable)
     Check(CreateProcessA(NULL,command,NULL,NULL,FALSE,0,NULL,NULL,&startup,&process),"launch the real application in Russian");
     bar=WaitFor("Explorer95.Taskbar",NULL); Check(bar!=NULL,"the Russian taskbar starts"); PumpFor(500);
     Check(LanguageWideEqual(GetDlgItem(bar,100),L"\u041f\u0443\u0441\u043a"),"the actual Start button reads Пуск on an English system locale");
+    Check(LanguageWideEqual(GetDlgItem(bar,ID_TASKBAR_PINS),L"\u0417\u0430\u043a\u0440\u0435\u043f\u043b\u0451\u043d\u043d\u044b\u0435 \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u044f"),"the new pinned-applications panel follows Russian on an English system");
     {
         HWND dialog;
         SendMessageA(bar,WM_COMMAND,ID_SHUTDOWN,0); dialog=WaitFor("Explorer95.Shutdown",NULL);
@@ -417,5 +418,6 @@ static void LanguageRestartTests(const char *directory,const char *executable)
     Check(DeleteFileA(ownExe),"remove only our copied bilingual executable");
     Check(DeleteFileA(renamed),"remove only the bilingual rename fixture");
     char path[MAX_PATH]; wsprintfA(path,"%s.DIP",profile); DeleteFileA(path); Check(DeleteFileA(profile),"remove the isolated bilingual settings file");
+    TaskbarPinsCleanup(folder);
     wsprintfA(path,"%s\\Quick Launch",folder); Check(RemoveDirectoryA(path) && RemoveDirectoryA(folder),"remove only the bilingual restart profile directories");
 }

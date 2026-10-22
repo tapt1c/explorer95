@@ -470,5 +470,20 @@
   "Saved visits: %d": "Сохранено посещений: %d",
   "The saved list will be cleared when you apply changes.": "Список посещений будет очищен после применения изменений.",
   "Clearing saved visits does not affect Back and Forward in open windows.": "Очистка журнала не затрагивает переходы «Назад» и «Вперёд» в открытых окнах.",
-  "Saved visits are shared by Explorer95 windows. Disabling this option clears the saved list when you apply changes.": "Окна Explorer95 используют общий журнал посещений. Отключение записи очистит журнал после применения изменений."
+  "Saved visits are shared by Explorer95 windows. Disabling this option clears the saved list when you apply changes.": "Окна Explorer95 используют общий журнал посещений. Отключение записи очистит журнал после применения изменений.",
+  "Pinned applications": "Закреплённые приложения",
+  "Open pinned shortcuts folder": "Папка закреплённых ярлыков",
+  "New Toolbar...": "Создать панель инструментов...",
+  "Choose a folder for the new toolbar.": "Выберите папку для новой панели инструментов.",
+  "Show Text": "Показывать подписи",
+  "Show Title": "Показывать заголовок",
+  "Close Toolbar": "Закрыть панель инструментов",
+  "Open new window": "Открыть новое окно",
+  "Pin to taskbar": "Закрепить на панели задач",
+  "Unpin from taskbar": "Открепить от панели задач",
+  "Taskbar Properties...": "Свойства панели задач...",
+  "Cannot pin this application to the taskbar.": "Не удалось закрепить приложение на панели задач.",
+  "Cannot remove this taskbar shortcut.": "Не удалось удалить закреплённый ярлык.",
+  "Close a toolbar before adding another one.": "Закройте одну из панелей инструментов, прежде чем добавлять новую.",
+  "Window": "Окно"
 }
