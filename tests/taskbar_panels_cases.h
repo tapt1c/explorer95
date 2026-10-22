@@ -198,27 +198,49 @@ static void OversizedPanelTest(HWND bar,const char *settings)
 }
 static void PanelChooseFolder(HWND bar,const char *folder)
 {
-    HWND picker; void *remote;
+    HWND picker,tree=NULL; void *remote; DWORD started,settled; int previous=-1;
+    struct { TVITEMA item; char text[MAX_PATH]; } selection;
+    const char *expected=folder,*p;
+    for(p=folder;*p;++p) if(*p=='\\' || *p=='/') expected=p+1;
     PostMessageA(bar,WM_COMMAND,ID_NEWTOOLBAR,0); picker=WaitFor("#32770",NULL);
     Check(picker!=NULL,"New Toolbar opens the native directory chooser");
-    {
-        HWND tree; DWORD started=GetTickCount();
-        do {
-            tree=FindWindowExA(picker,NULL,WC_TREEVIEWA,NULL);
-            if(!tree || !SendMessageA(tree,TVM_GETCOUNT,0,0)) PumpFor(20);
-        } while((!tree || !SendMessageA(tree,TVM_GETCOUNT,0,0)) && GetTickCount()-started<2000);
-        Check(tree && SendMessageA(tree,TVM_GETCOUNT,0,0),"the native directory tree finishes initialization before selection");
-        PumpFor(100);
-    }
-    /* BFFM_* is above WM_USER: marshal into OUR child process, never pass
-     * a local pointer or modify a foreign application. */
-    remote=VirtualAllocEx(process.hProcess,NULL,MAX_PATH,MEM_COMMIT|MEM_RESERVE,PAGE_READWRITE);
+    started=settled=GetTickCount();
+    do {
+        int count;
+        PumpFor(20); tree=FindWindowExA(picker,NULL,WC_TREEVIEWA,NULL);
+        count=tree ? (int)SendMessageA(tree,TVM_GETCOUNT,0,0) : 0;
+        if(!count || count!=previous || GetForegroundWindow()!=picker) settled=GetTickCount();
+        else if(GetTickCount()-settled>=200) break;
+        previous=count;
+    } while(GetTickCount()-started<3000);
+    Check(tree && previous>0 && GetTickCount()-settled>=200,"the native directory tree settles before selecting a folder");
+    /* BFFM_* and TVM_GETITEM are above WM_USER: marshal into OUR child,
+     * never pass local pointers or interpret Shell32's private tree data. */
+    remote=VirtualAllocEx(process.hProcess,NULL,sizeof(selection),MEM_COMMIT|MEM_RESERVE,PAGE_READWRITE);
     Check(remote && WriteProcessMemory(process.hProcess,remote,folder,lstrlenA(folder)+1,NULL),"marshal only our own folder selection into the child chooser");
-    SendMessageA(picker,BFFM_SETSELECTIONA,TRUE,(LPARAM)remote); PumpFor(100);
+    SendMessageA(picker,BFFM_SETSELECTIONA,TRUE,(LPARAM)remote);
+    started=GetTickCount(); settled=0;
+    do {
+        PumpFor(20); ZeroMemory(&selection,sizeof(selection));
+        selection.item.mask=TVIF_HANDLE|TVIF_TEXT;
+        selection.item.hItem=(HTREEITEM)SendMessageA(tree,TVM_GETNEXTITEM,TVGN_CARET,0);
+        selection.item.pszText=(char *)remote+sizeof(selection.item); selection.item.cchTextMax=MAX_PATH;
+        Check(WriteProcessMemory(process.hProcess,remote,&selection,sizeof(selection),NULL) &&
+            SendMessageA(tree,TVM_GETITEMA,0,(LPARAM)remote) &&
+            ReadProcessMemory(process.hProcess,(char *)remote+sizeof(selection.item),selection.text,MAX_PATH,NULL),
+            "read only the selected native folder's public label");
+        if(lstrcmpiA(selection.text,expected)) settled=0;
+        else if(!settled) settled=GetTickCount();
+        else if(GetTickCount()-settled>=200) break;
+    } while(GetTickCount()-started<3000);
     VirtualFreeEx(process.hProcess,remote,0,MEM_RELEASE);
+    Check(settled && GetTickCount()-settled>=200,"the requested folder remains selected before accepting the native chooser");
     Check(IsWindowEnabled(GetDlgItem(picker,IDOK)),"the native chooser accepts our existing filesystem folder");
-    PostMessageA(picker,WM_COMMAND,IDOK,0); PumpFor(250);
+    PostMessageA(picker,WM_COMMAND,IDOK,0); started=GetTickCount();
+    while(IsWindow(picker) && GetTickCount()-started<3000) PumpFor(20);
     Check(!IsWindow(picker),"the native folder selection completes");
+    { DWORD_PTR result; Check(SendMessageTimeoutA(bar,WM_NULL,0,0,SMTO_ABORTIFHUNG,2000,&result),"the taskbar resumes after accepting the native folder"); }
+    PumpFor(100);
 }
 static void __attribute__((noinline)) TaskbarPanelsTests(HWND bar,const char *directory,const char *settings)
 {
@@ -321,7 +343,20 @@ static void __attribute__((noinline)) TaskbarPanelsTests(HWND bar,const char *di
     PanelChooseFolder(bar,path);
     Check(GetPrivateProfileIntA("TaskbarToolbars","Count",0,settings)==2 && IsWindowVisible(GetDlgItem(bar,ID_TASKBAR_FOLDER+1)),"selecting a folder creates and immediately shows a second independent toolbar");
     wsprintfA(path,"%s\\Toolbar fixture",directory); PanelChooseFolder(bar,path);
-    Check(GetPrivateProfileIntA("TaskbarToolbars","Count",0,settings)==2,"selecting the same folder again reuses its existing toolbar");
+    {
+        DWORD started=GetTickCount(); UINT count;
+        do { count=GetPrivateProfileIntA("TaskbarToolbars","Count",0,settings); if(count==2) break; PumpFor(20); }
+        while(GetTickCount()-started<2000);
+        if(count!=2) {
+            char note[128],recorded[MAX_PATH]; int n;
+            wsprintfA(note,"FAIL: repeated folder picker saved %u toolbars instead of 2\r\n",count); Log(note);
+            for(n=0;n<3;++n) {
+                wsprintfA(note,"Folder%d",n); GetPrivateProfileStringA("TaskbarToolbars",note,"",recorded,sizeof(recorded),settings);
+                Log("FAIL: "); Log(note); Log(": "); Log(recorded); Log("\r\n");
+            }
+        }
+        Check(count==2,"selecting the same folder again reuses its existing toolbar");
+    }
     SendMessageA(bar,WM_COMMAND,ID_TOOLBAR_TOGGLE+1,0);
     SendMessageA(bar,WM_COMMAND,ID_TOOLBAR_TOGGLE,0);
     wsprintfA(path,"%s\\Toolbar fixture\\Toolbar launch.lnk",directory); Check(DeleteFileA(path),"remove only our custom toolbar's shortcut");
