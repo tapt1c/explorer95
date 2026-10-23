@@ -11,7 +11,8 @@ static HWND TaskFixtureButton(HWND bar,BOOL grouped,int *count)
     int i; HWND result=NULL; *count=0;
     for(i=0;i<TASK_LIMIT;++i) {
         HWND button=GetDlgItem(bar,ID_TASK+i); char text[160]; int length;
-        GetWindowTextA(button,text,sizeof(text)); length=lstrlenA(text);
+        text[0]=0; if(!button || !GetWindowTextA(button,text,sizeof(text))) continue;
+        length=lstrlenA(text);
         if(length<18 || text[0]!='E' || text[5]!='g' || text[11]!='f') continue;
         ++*count;
         if(!grouped || (length>=4 && !lstrcmpA(text+length-4," (2)"))) result=button;
@@ -22,6 +23,13 @@ static HWND TaskWaitCount(HWND bar,int expected,BOOL grouped)
 {
     DWORD started=GetTickCount(); int count; HWND button;
     do { PumpFor(40); button=TaskFixtureButton(bar,grouped,&count); } while((count!=expected || !button) && GetTickCount()-started<4000);
+    if(count!=expected || !button) {
+        char note[256]; int i; wsprintfA(note,"group fixture count=%d expected=%d grouped=%d\r\n",count,expected,grouped); Log(note);
+        for(i=0;i<TASK_LIMIT;++i) {
+            HWND task=GetDlgItem(bar,ID_TASK+i); char text[160]={0};
+            if(task && GetWindowTextA(task,text,sizeof(text))) { wsprintfA(note,"task %d: %s\r\n",i,text); Log(note); }
+        }
+    }
     Check(count==expected && button,"separate processes group by full executable path while another copy with the same filename stays separate");
     return button;
 }

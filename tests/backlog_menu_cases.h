@@ -18,7 +18,7 @@ static int TileFixtureButtons(HWND bar, BOOL square)
     int i,count=0;
     for(i=ID_TASK;i<ID_TASK+TASK_LIMIT;++i) {
         HWND button=GetDlgItem(bar,i); char title[160]; RECT rect;
-        GetWindowTextA(button,title,sizeof(title));
+        title[0]=0; if(!button || !GetWindowTextA(button,title,sizeof(title))) continue;
         if(!title[0] || title[0]!='T' || title[1]!='i' || title[2]!='l' || title[3]!='e') continue;
         GetWindowRect(button,&rect);
         if(square && (rect.right-rect.left!=rect.bottom-rect.top || rect.right-rect.left>40)) return -1;
