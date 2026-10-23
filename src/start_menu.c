@@ -864,6 +864,9 @@ static LRESULT CALLBACK StartProc(HWND window, UINT message, WPARAM wp, LPARAM l
     case WM_MEASUREITEM: {
         MEASUREITEMSTRUCT *item = (MEASUREITEMSTRUCT *)lp;
         if (item->CtlType == ODT_MENU) {
+            /* Shell extensions own their opaque itemData, even if they do
+             * not implement IContextMenu2 or decline this notification. */
+            if(item->itemID>=0x4000) return FALSE;
             ProgramItem *entry = (ProgramItem *)item->itemData; SIZE size; HDC dc = GetDC(window); HFONT old;
             old = SelectObject(dc, env.host.font);
             if(entry->localize) { UiMarkTranslated(entry->label); UiGetTextExtentPoint32A(dc,entry->label,lstrlenA(entry->label),&size); }
@@ -876,7 +879,7 @@ static LRESULT CALLBACK StartProc(HWND window, UINT message, WPARAM wp, LPARAM l
     }
     case WM_DRAWITEM: {
         DRAWITEMSTRUCT *item = (DRAWITEMSTRUCT *)lp;
-        if (item->CtlType == ODT_MENU) return DrawProgramItem(item);
+        if (item->CtlType == ODT_MENU) return item->itemID>=0x4000 ? FALSE : DrawProgramItem(item);
         DRAWITEMSTRUCT buffered = *item; HDC target = item->hDC;
         int iconSize = (item->CtlID == ID_EXIT || item->CtlID == ID_LOGOFF || item->CtlID == ID_SHUTDOWN) ? 16 : IconSize();
         RECT text = item->rcItem; char label[MAX_PATH]; HICON icon = NULL;
