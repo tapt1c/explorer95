@@ -37,6 +37,23 @@ static void TaskTileTests(HWND bar, const char *settings)
     HWND first=CreateWindowA("STATIC","Tile fixture A",WS_OVERLAPPEDWINDOW|WS_VISIBLE,20,30,200,140,NULL,NULL,GetModuleHandleA(NULL),NULL);
     HWND second=CreateWindowA("STATIC","Tile fixture B",WS_OVERLAPPEDWINDOW|WS_VISIBLE,240,30,200,140,NULL,NULL,GetModuleHandleA(NULL),NULL);
     HWND properties=OpenSettings(bar); Check(first && second,"create two real task windows in one process");
+    {
+        HWND button=NULL,other; int i; char caption[80];
+        WaitTileButtons(bar,2,FALSE);
+        for(i=0;i<TASK_LIMIT;++i) {
+            HWND candidate=GetDlgItem(bar,ID_TASK+i); caption[0]=0;
+            if(candidate && GetWindowTextA(candidate,caption,sizeof(caption)) && !lstrcmpA(caption,"Tile fixture A")) button=candidate;
+        }
+        Check(button!=NULL,"find the real button before another application window appears");
+        other=CreateWindowA("STATIC","Tile fixture C",WS_OVERLAPPEDWINDOW|WS_VISIBLE,60,80,180,100,NULL,NULL,GetModuleHandleA(NULL),NULL);
+        Check(other!=NULL,"create an additional task without replacing the first application's window");
+        WaitTileButtons(bar,3,FALSE); caption[0]=0;
+        Check(IsWindow(button) && GetWindowTextA(button,caption,sizeof(caption)) && !lstrcmpA(caption,"Tile fixture A"),
+            "opening another window preserves the first task's actual button and its queued clicks");
+        DestroyWindow(other); WaitTileButtons(bar,2,FALSE); caption[0]=0;
+        Check(IsWindow(button) && GetWindowTextA(button,caption,sizeof(caption)) && !lstrcmpA(caption,"Tile fixture A"),
+            "closing another window also preserves the first task button");
+    }
     SendDlgItemMessageA(properties,ID_TASKTILES,BM_SETCHECK,BST_CHECKED,0);
     SendMessageA(properties,WM_COMMAND,ID_TASKTILES,0); SendMessageA(properties,WM_COMMAND,IDCANCEL,0);
     Check(!GetPrivateProfileIntA("Taskbar","TaskTiles",0,settings),"Cancel discards the pending task style");

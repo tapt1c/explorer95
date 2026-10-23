@@ -353,7 +353,12 @@ static void UpdateTasks(void)
         if (j == windowCount) { changed = TRUE; break; }
     }
     if (changed && !GetCapture()) {
-        for (i = 0; i < taskCount; ++i) { QuickTip(tasks[i].button,LPSTR_TEXTCALLBACKA,TRUE); DestroyWindow(tasks[i].button); }
+        struct { HWND window,button; HICON icon; BOOL active; } previous[TASK_LIMIT];
+        int previousCount=taskCount;
+        for(i=0;i<previousCount;++i) {
+            previous[i].window=tasks[i].windows[0]; previous[i].button=tasks[i].button;
+            previous[i].icon=tasks[i].icon; previous[i].active=tasks[i].active;
+        }
         ZeroMemory(tasks, sizeof(tasks)); taskCount = 0;
         windowCount = count; previousGrouping = env.options.group; previousTaskTiles=env.options.taskTiles;
         for (i = 0; i < count; ++i) {
@@ -369,10 +374,24 @@ static void UpdateTasks(void)
             if (group == taskCount) {
                 tasks[group].process = process;
                 lstrcpyA(tasks[group].application,application);
-                tasks[group].button = EnvControl(env.bar, "BUTTON", "", BS_OWNERDRAW, ID_TASK + taskCount++);
-                QuickTip(tasks[group].button,LPSTR_TEXTCALLBACKA,FALSE);
+                /* Keep an existing window's real button alive when another
+                 * application opens/closes. Replacing every HWND loses an
+                 * in-progress click and briefly paints unrelated tasks empty. */
+                for(j=0;j<previousCount;++j) if(previous[j].window==windows[i] && previous[j].button) {
+                    tasks[group].button=previous[j].button; previous[j].button=NULL;
+                    tasks[group].icon=previous[j].icon; tasks[group].active=previous[j].active;
+                    SetWindowLongA(tasks[group].button,GWL_ID,ID_TASK+taskCount); break;
+                }
+                if(!tasks[group].button) {
+                    tasks[group].button=EnvControl(env.bar,"BUTTON","",BS_OWNERDRAW,ID_TASK+taskCount);
+                    QuickTip(tasks[group].button,LPSTR_TEXTCALLBACKA,FALSE);
+                }
+                ++taskCount;
             }
             tasks[group].windows[tasks[group].count++] = windows[i];
+        }
+        for(i=0;i<previousCount;++i) if(previous[i].button) {
+            QuickTip(previous[i].button,LPSTR_TEXTCALLBACKA,TRUE); DestroyWindow(previous[i].button);
         }
         EnvLayoutBar();
     }
