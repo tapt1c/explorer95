@@ -47,11 +47,31 @@ static void __attribute__((noinline)) TaskbarLinksTests(const char *directory,co
     Check(!TaskbarSameApplication(module,missing),"different full paths never merge as the same application");
     Check(DeleteFileA(path),"remove only our shortcut reader fixture"); OleUninitialize();
 }
+/* Our test driver is a console EXE. Application shortcuts must exercise a
+ * GUI executable, otherwise ShellExecute creates a second, unrelated console
+ * task. Change only the PE subsystem of this owned disposable copy. */
+static void PanelGuiFixture(const char *source,const char *destination)
+{
+    HANDLE file; IMAGE_DOS_HEADER dos; IMAGE_NT_HEADERS nt; DWORD bytes,offset;
+    Check(CopyFileA(source,destination,TRUE),"create only our own GUI application executable");
+    file=CreateFileA(destination,GENERIC_READ|GENERIC_WRITE,FILE_SHARE_READ,NULL,OPEN_EXISTING,0,NULL);
+    Check(file!=INVALID_HANDLE_VALUE && ReadFile(file,&dos,sizeof(dos),&bytes,NULL) && bytes==sizeof(dos) && dos.e_magic==IMAGE_DOS_SIGNATURE,
+        "read the disposable application's DOS header");
+    offset=dos.e_lfanew;
+    Check(SetFilePointer(file,offset,NULL,FILE_BEGIN)==offset && ReadFile(file,&nt,sizeof(nt),&bytes,NULL) && bytes==sizeof(nt) && nt.Signature==IMAGE_NT_SIGNATURE,
+        "read the disposable application's PE header");
+    nt.OptionalHeader.Subsystem=IMAGE_SUBSYSTEM_WINDOWS_GUI;
+    Check(SetFilePointer(file,offset,NULL,FILE_BEGIN)==offset && WriteFile(file,&nt,sizeof(nt),&bytes,NULL) && bytes==sizeof(nt),
+        "mark only the copied fixture as a GUI application without creating an extra console task");
+    CloseHandle(file);
+}
 static void __attribute__((noinline)) TaskbarPanelsPrepare(const char *directory,const char *settings,const char *module)
 {
     char folder[MAX_PATH],path[MAX_PATH]; TaskbarLink link;
     wsprintfA(folder,"%s\\Toolbar fixture",directory); Check(CreateDirectoryA(folder,NULL),"create only our custom toolbar directory");
-    ZeroMemory(&link,sizeof(link)); lstrcpyA(link.target,module); lstrcpyA(link.arguments,"\"--child\""); lstrcpyA(link.directory,directory);
+    wsprintfA(path,"%s\\toolbar-child.exe",folder); PanelGuiFixture(module,path);
+    Check(SetFileAttributesA(path,FILE_ATTRIBUTE_HIDDEN),"keep the owned GUI fixture out of the toolbar's directory listing");
+    ZeroMemory(&link,sizeof(link)); lstrcpyA(link.target,path); lstrcpyA(link.arguments,"\"--child\""); lstrcpyA(link.directory,directory);
     wsprintfA(path,"%s\\Toolbar launch.lnk",folder);
     Check(SUCCEEDED(OleInitialize(NULL)) && TaskbarLinkWrite(path,&link),"create the custom toolbar's own executable shortcut"); OleUninitialize();
     Check(WritePrivateProfileStringA("TaskbarToolbars","Count","1",settings) && WritePrivateProfileStringA("TaskbarToolbars","Folder0",folder,settings),"save the custom folder panel in an isolated profile");
@@ -62,6 +82,13 @@ static void WaitPanelWidth(HWND panel,int expected,const char *message)
 {
     DWORD started=GetTickCount();
     while(PanelWidth(panel)!=expected && GetTickCount()-started<1800) PumpFor(20);
+    if(PanelWidth(panel)!=expected) {
+        char detail[300]; int i; wsprintfA(detail,"panel width: actual=%d expected=%d\r\n",PanelWidth(panel),expected); Log(detail);
+        for(i=0;i<TASK_LIMIT;++i) {
+            char caption[160]; HWND task=GetDlgItem(GetParent(panel),ID_TASK+i);
+            if(IsWindow(task) && GetWindowTextA(task,caption,sizeof(caption))) { wsprintfA(detail,"task %d visible=%d: %s\r\n",i,IsWindowVisible(task),caption); Log(detail); }
+        }
+    }
     Check(PanelWidth(panel)==expected,message);
 }
 static void PanelClick(HWND panel,int x)
@@ -105,7 +132,7 @@ static void __attribute__((noinline)) PanelScrollTests(HWND bar,HWND pins,const 
     started=GetTickCount();
     do {
         RECT folder; GetWindowRect(pins,&rect); GetWindowRect(GetDlgItem(bar,ID_TASKBAR_FOLDER),&folder);
-        if(rect.right==folder.left-55 && PanelArrowGray(pins,FALSE,FALSE)>0 && !PanelArrowGray(pins,TRUE,FALSE)) break;
+        if(rect.right==folder.left-3 && PanelArrowGray(pins,FALSE,FALSE)>0 && !PanelArrowGray(pins,TRUE,FALSE)) break;
         PumpFor(30);
     } while(GetTickCount()-started<5000);
     width=PanelWidth(pins);
@@ -225,9 +252,12 @@ static void PanelChooseFolder(HWND bar,const char *folder)
         selection.item.mask=TVIF_HANDLE|TVIF_TEXT;
         selection.item.hItem=(HTREEITEM)SendMessageA(tree,TVM_GETNEXTITEM,TVGN_CARET,0);
         selection.item.pszText=(char *)remote+sizeof(selection.item); selection.item.cchTextMax=MAX_PATH;
-        Check(WriteProcessMemory(process.hProcess,remote,&selection,sizeof(selection),NULL) &&
-            SendMessageA(tree,TVM_GETITEMA,0,(LPARAM)remote) &&
-            ReadProcessMemory(process.hProcess,(char *)remote+sizeof(selection.item),selection.text,MAX_PATH,NULL),
+        Check(WriteProcessMemory(process.hProcess,remote,&selection,sizeof(selection),NULL),"marshal the selected native folder's public item request");
+        /* The native picker can clear/rebuild its caret during expansion.
+         * Treat an unavailable row as not ready, retaining the same deadline
+         * and the requirement that the requested label settles before OK. */
+        if(!selection.item.hItem || !SendMessageA(tree,TVM_GETITEMA,0,(LPARAM)remote)) { settled=0; continue; }
+        Check(ReadProcessMemory(process.hProcess,(char *)remote+sizeof(selection.item),selection.text,MAX_PATH,NULL),
             "read only the selected native folder's public label");
         if(lstrcmpiA(selection.text,expected)) settled=0;
         else if(!settled) settled=GetTickCount();
@@ -249,10 +279,50 @@ static void __attribute__((noinline)) TaskbarPanelsTests(HWND bar,const char *di
     static char module[MAX_PATH]; static TaskbarLink link; RECT before,after; int initial,i; DWORD started;
     Check(SUCCEEDED(OleInitialize(NULL)),"initialize COM for live folder panel tests");
     GetModuleFileNameA(NULL,module,MAX_PATH); wsprintfA(target,"%s\\taskbar-child.exe",directory);
-    Check(CopyFileA(module,target,TRUE),"create only our own pinned application executable");
+    PanelGuiFixture(module,target);
     Check(pins && toolbar && IsWindowVisible(pins) && IsWindowVisible(toolbar),"the shell loads pinned applications and a persisted custom folder panel");
     Check(!IsWindowVisible(GetDlgItem(bar,ID_QUICKGRIP)) && !GetPrivateProfileIntA("Taskbar","QuickLaunch",TRUE,settings),"Quick Launch is disabled for a fresh profile while pinned applications remain visible");
+    started=GetTickCount();
+    for(;;) {
+        BOOL pending=FALSE;
+        for(i=0;i<TASK_LIMIT;++i) {
+            char caption[100]={0}; GetWindowTextA(GetDlgItem(bar,ID_TASK+i),caption,sizeof(caption));
+            if(!lstrcmpA(caption,"First application") || !lstrcmpA(caption,"Second application")) pending=TRUE;
+        }
+        if(!pending || GetTickCount()-started>=2500) break;
+        PumpFor(30);
+    }
     initial=PanelWidth(pins);
+    {
+        HWND task=NULL; RECT strip,button; DWORD deadline=GetTickCount();
+        Check((INT_PTR)ShellExecuteA(bar,"open",target,"\"--child\"",directory,SW_SHOWNORMAL)>32,"launch an application that is not pinned");
+        launched=WaitFor("Explorer95.SmokeChild",NULL); Check(launched!=NULL,"the unpinned application creates its real window");
+        do {
+            for(i=0;i<TASK_LIMIT;++i) {
+                HWND candidate=GetDlgItem(bar,ID_TASK+i); char title[80]; GetWindowTextA(candidate,title,sizeof(title));
+                if(!lstrcmpA(title,"Explorer95 smoke child") && IsWindowVisible(candidate)) { task=candidate; break; }
+            }
+            if(!task) PumpFor(30);
+        } while(!task && GetTickCount()-deadline<4000);
+        Check(task!=NULL,"an unpinned application has a visible real task button");
+        WaitPanelWidth(pins,initial+160,"ordinary tasks extend the same strip immediately after pinned launchers");
+        GetWindowRect(pins,&strip); GetWindowRect(task,&button);
+        Check(button.left>=strip.left && button.top==strip.top && button.right<=strip.right,
+            "the ordinary task uses the next shared slot with no separate reserved task area");
+        {
+            RECT movedStrip,movedTask;
+            SendMessageA(bar,WM_COMMAND,ID_QUICK,0); GetWindowRect(pins,&movedStrip); GetWindowRect(task,&movedTask);
+            Check(movedTask.left-button.left==movedStrip.left-strip.left && movedTask.top==movedStrip.top,
+                "a position-only Quick Launch layout change moves ordinary tasks with the shared strip");
+            SendMessageA(bar,WM_COMMAND,ID_QUICK,0);
+        }
+        PanelNativeCommand(task,launched,SC_MINIMIZE); Check(IsIconic(launched),"right-click on an ordinary task opens its native Minimize command");
+        PanelNativeCommand(task,launched,SC_RESTORE); Check(!IsIconic(launched),"the ordinary task's native menu restores its window");
+        PanelNativeCommand(task,launched,SC_CLOSE); deadline=GetTickCount();
+        while(IsWindow(launched) && GetTickCount()-deadline<3000) PumpFor(20);
+        Check(!IsWindow(launched),"the ordinary task's native menu closes the original window");
+        WaitPanelWidth(pins,initial,"closing an unpinned task releases its shared slot");
+    }
     ZeroMemory(&link,sizeof(link)); lstrcpyA(link.target,target); lstrcpyA(link.arguments,"\"--child\""); lstrcpyA(link.directory,directory);
     wsprintfA(source,"%s\\copy-me.lnk",directory); Check(TaskbarLinkWrite(source,&link),"prepare a real shortcut to copy into the pins folder");
     wsprintfA(live,"%s\\Taskbar Pins\\zz-live.lnk",directory); Check(CopyFileA(source,live,TRUE),"pin by copying a shortcut into Taskbar Pins");
@@ -364,5 +434,90 @@ static void __attribute__((noinline)) TaskbarPanelsTests(HWND bar,const char *di
         char recorded[MAX_PATH]; GetPrivateProfileStringA("Recent","Program0","",recorded,sizeof(recorded),settings);
         Check(!lstrcmpiA(recorded,module),"shortcut launches retain the real program in history after the toolbar shortcut is removed");
     }
+    OleUninitialize();
+}
+
+static void ApplicationContextSecond(void)
+{
+    Check(WaitFor("#32768",NULL)!=NULL,"the application context menu is visible");
+    keybd_event(VK_HOME,0,0,0); keybd_event(VK_HOME,0,KEYEVENTF_KEYUP,0);
+    keybd_event(VK_DOWN,0,0,0); keybd_event(VK_DOWN,0,KEYEVENTF_KEYUP,0);
+    keybd_event(VK_RETURN,0,0,0); keybd_event(VK_RETURN,0,KEYEVENTF_KEYUP,0);
+    PumpFor(120);
+}
+static void ApplicationWaitPin(const char *path,BOOL exists)
+{
+    DWORD started=GetTickCount();
+    while((GetFileAttributesA(path)!=INVALID_FILE_ATTRIBUTES)!=exists && GetTickCount()-started<4000) PumpFor(30);
+    Check((GetFileAttributesA(path)!=INVALID_FILE_ATTRIBUTES)==exists,exists ?
+        "Pin to taskbar creates a real shortcut immediately" : "Unpin from taskbar removes only the pinned shortcut");
+}
+static HWND ApplicationProgramsSubmenu(HWND bar,HWND menu)
+{
+    HWND root,sub=NULL,candidate; DWORD started;
+    if(!IsWindowVisible(menu)) SendMessageA(GetDlgItem(bar,ID_START),BM_CLICK,0,0);
+    PostMessageA(menu,WM_COMMAND,ID_PROGRAMS,0); root=WaitFor("#32768",NULL);
+    Check(root!=NULL,"open the real All Programs menu"); PumpFor(80);
+    keybd_event(VK_HOME,0,0,0); keybd_event(VK_HOME,0,KEYEVENTF_KEYUP,0);
+    keybd_event(VK_RIGHT,0,0,0); keybd_event(VK_RIGHT,0,KEYEVENTF_KEYUP,0);
+    started=GetTickCount();
+    do {
+        candidate=NULL;
+        while((candidate=FindWindowExA(NULL,candidate,"#32768",NULL))!=NULL)
+            if(candidate!=root && IsWindowVisible(candidate)) { sub=candidate; break; }
+        if(!sub) PumpFor(20);
+    } while(!sub && GetTickCount()-started<3000);
+    Check(sub!=NULL,"All Programs opens the nested fixture folder");
+    keybd_event(VK_HOME,0,0,0); keybd_event(VK_HOME,0,KEYEVENTF_KEYUP,0); PumpFor(60); return sub;
+}
+static void __attribute__((noinline)) StartApplicationContextTests(HWND bar,HWND menu,const char *settings)
+{
+    static char folder[MAX_PATH],source[MAX_PATH],pinned[MAX_PATH],module[MAX_PATH],recentPin[MAX_PATH],directory[MAX_PATH];
+    static TaskbarLink link,copy; HWND sub,dialog; RECT rect;
+    Check(SUCCEEDED(OleInitialize(NULL)),"initialize COM for application context menu tests");
+    GetModuleFileNameA(NULL,module,MAX_PATH);
+    lstrcpyA(directory,settings); int length=lstrlenA(directory);
+    while(length && directory[length-1]!='\\') --length;
+    if(length>3) --length;
+    directory[length]=0;
+    wsprintfA(recentPin,"%s\\Taskbar Pins\\smoke.lnk",directory);
+    SendMessageA(GetDlgItem(bar,ID_START),BM_CLICK,0,0);
+    Check(IsWindowVisible(GetDlgItem(menu,ID_RECENT)),"the main Start menu exposes the recent fixture");
+    PostMessageA(menu,WM_CONTEXTMENU,(WPARAM)GetDlgItem(menu,ID_RECENT),(LPARAM)-1);
+    ApplicationContextSecond(); ApplicationWaitPin(recentPin,TRUE);
+    Check(TaskbarLinkRead(recentPin,&copy) && TaskbarSameApplication(copy.target,module) && !lstrcmpA(copy.arguments,"\"--child\""),
+        "pinning from the main Start menu preserves the actual launch arguments");
+    PostMessageA(menu,WM_CONTEXTMENU,(WPARAM)GetDlgItem(menu,ID_RECENT),(LPARAM)-1);
+    ApplicationContextSecond(); ApplicationWaitPin(recentPin,FALSE);
+    PostMessageA(menu,WM_CONTEXTMENU,(WPARAM)GetDlgItem(menu,ID_RECENT),(LPARAM)-1);
+    Check(WaitFor("#32768",NULL)!=NULL,"the main Start menu also exposes Shell32 file commands");
+    keybd_event(VK_END,0,0,0); keybd_event(VK_END,0,KEYEVENTF_KEYUP,0);
+    keybd_event(VK_RETURN,0,0,0); keybd_event(VK_RETURN,0,KEYEVENTF_KEYUP,0);
+    dialog=WaitFor("#32770",NULL); Check(dialog!=NULL,"native Properties opens for the real application shortcut");
+    PostMessageA(dialog,WM_COMMAND,IDCANCEL,0); PumpFor(120);
+    if(IsWindowVisible(menu)) SendMessageA(GetDlgItem(bar,ID_START),BM_CLICK,0,0);
+    lstrcpyA(folder,programsShortcut); length=lstrlenA(folder);
+    while(length && folder[length-1]!='\\') --length;
+    wsprintfA(folder+length,"000 Explorer95 context %lu",GetTickCount());
+    Check(CreateDirectoryA(folder,NULL),"create only our own first-sorted nested Programs fixture");
+    wsprintfA(source,"%s\\Context app.lnk",folder); wsprintfA(pinned,"%s\\Taskbar Pins\\Context app.lnk",directory);
+    ZeroMemory(&link,sizeof(link)); lstrcpyA(link.target,module); lstrcpyA(link.arguments,"\"--child\""); lstrcpyA(link.directory,directory);
+    GetSystemDirectoryA(link.icon,MAX_PATH); lstrcatA(link.icon,"\\shell32.dll"); link.iconIndex=-4;
+    Check(TaskbarLinkWrite(source,&link),"create the nested application's real shortcut with a custom icon");
+    sub=ApplicationProgramsSubmenu(bar,menu); GetWindowRect(sub,&rect);
+    SetCursorPos(rect.left+30,rect.top+12); PumpFor(80);
+    mouse_event(MOUSEEVENTF_RIGHTDOWN,0,0,0,0); mouse_event(MOUSEEVENTF_RIGHTUP,0,0,0,0); PumpFor(100);
+    SaveScreen("build/start-program-context.bmp"); ApplicationContextSecond(); ApplicationWaitPin(pinned,TRUE);
+    Check(TaskbarLinkRead(pinned,&copy) && TaskbarSameApplication(copy.target,module) && !lstrcmpA(copy.arguments,link.arguments) &&
+        !lstrcmpiA(copy.directory,link.directory) && !lstrcmpiA(copy.icon,link.icon) && copy.iconIndex==link.iconIndex,
+        "right-click in nested All Programs copies the original shortcut with arguments, working directory and custom icon");
+    ApplicationProgramsSubmenu(bar,menu);
+    keybd_event(VK_SHIFT,0,0,0); PumpFor(70);
+    Check(GetAsyncKeyState(VK_SHIFT)&0x8000,"Shift remains held before opening the keyboard application context menu");
+    keybd_event(VK_F10,0,0,0); PumpFor(70);
+    keybd_event(VK_F10,0,KEYEVENTF_KEYUP,0); keybd_event(VK_SHIFT,0,KEYEVENTF_KEYUP,0);
+    PumpFor(100); ApplicationContextSecond(); ApplicationWaitPin(pinned,FALSE);
+    if(IsWindowVisible(menu)) SendMessageA(GetDlgItem(bar,ID_START),BM_CLICK,0,0);
+    Check(DeleteFileA(source) && RemoveDirectoryA(folder),"remove only our own nested Programs shortcut and folder");
     OleUninitialize();
 }

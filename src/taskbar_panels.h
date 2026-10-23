@@ -18,7 +18,7 @@ BOOL TaskbarPanelsTranslate(MSG *message);
 void TaskbarPanelsCancelResize(void);
 HMENU TaskbarPanelsMenu(void);
 BOOL TaskbarPanelsCommand(UINT command);
-/* Folder panels reserve the end; pinned tiles start after Start/Quick Launch. */
+/* Folder panels reserve the end; pins and tasks share one scrolling strip. */
 BOOL TaskbarFoldersLargeIcons(void);
 int TaskbarFoldersLayout(int begin,int end,int cross,BOOL vertical);
 int TaskbarPinsLayout(int begin,int end,int cross,BOOL vertical);
@@ -34,4 +34,12 @@ void TaskbarPinnedAction(int index,BOOL newInstance);
 BOOL EnvActivatePinnedTask(int index);
 BOOL EnvPinnedSystemMenu(int index,POINT point);
 int EnvPinnedTaskCaption(int index,char *caption,int capacity);
+/* Snapshot references borrow the environment's BUTTON and icon. */
+typedef struct TaskbarTask {
+    HWND button; HICON icon; int count; BOOL active;
+} TaskbarTask;
+int EnvTaskCount(void);
+BOOL EnvTaskInfo(int index,TaskbarTask *task);
+void EnvTaskAction(int index);
+BOOL TaskbarTasksChanged(void);
 #endif

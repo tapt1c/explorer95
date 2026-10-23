@@ -5,9 +5,10 @@
 #define EX95_LOCALIZE_UI
 #include "localization.h"
 
-#define PANEL_MORE TASKBAR_FOLDER_ITEMS
-#define PANEL_GRIP (TASKBAR_FOLDER_ITEMS+1)
-#define PANEL_NEXT (TASKBAR_FOLDER_ITEMS+2)
+#define TASKBAR_ENTRIES (TASKBAR_FOLDER_ITEMS+TASK_LIMIT)
+#define PANEL_MORE TASKBAR_ENTRIES
+#define PANEL_GRIP (TASKBAR_ENTRIES+1)
+#define PANEL_NEXT (TASKBAR_ENTRIES+2)
 #define PANEL_MENU_ITEM 12000
 #define PANEL_OPEN 12100
 #define PANEL_TEXT 12101
@@ -21,7 +22,7 @@
 typedef struct PanelItem {
     char path[MAX_PATH],label[MAX_PATH],target[MAX_PATH],identity[MAX_PATH];
     HICON icon; RECT rect;
-    BOOL valid,active; int running;
+    BOOL valid,active; int running,task; HWND button;
 } PanelItem;
 typedef struct PanelConfig {
     char path[MAX_PATH]; int size; BOOL enabled,text,title,large;
@@ -30,7 +31,7 @@ typedef struct FolderPanel {
     PanelConfig config;
     HWND window; HANDLE watch; PaintBuffer buffer;
     PanelItem *items;
-    int count,shown,hot,pressed,focus,extent,resizeSaved,resizeStart,resizeExtent;
+    int count,pinCount,shown,hot,pressed,focus,extent,resizeSaved,resizeStart,resizeExtent;
     BOOL pins,dirty,vertical,resizing,overflow; RECT more,grip,title,previous,next;
     int scroll,scrollMax,lastColumn;
 } FolderPanel;
@@ -101,7 +102,7 @@ static void Tooltips(FolderPanel *panel,BOOL remove)
     for(i=0;i<panel->count;++i) {
         tool.uId=i+1; tool.rect=panel->items[i].rect;
         SendMessageA(tips,TTM_DELTOOLA,0,(LPARAM)&tool);
-        if(!remove && !IsRectEmpty(&tool.rect)) SendMessageA(tips,TTM_ADDTOOLA,0,(LPARAM)&tool);
+        if(!remove && !panel->items[i].task && !IsRectEmpty(&tool.rect)) SendMessageA(tips,TTM_ADDTOOLA,0,(LPARAM)&tool);
     }
     if(panel->pins) for(i=0;i<2;++i) {
         tool.uId=(i ? PANEL_NEXT : PANEL_MORE)+1;
@@ -113,8 +114,8 @@ static void Tooltips(FolderPanel *panel,BOOL remove)
 static void ClearItems(FolderPanel *panel)
 {
     int i; Tooltips(panel,TRUE);
-    for(i=0;i<panel->count;++i) if(panel->items[i].icon) DestroyIcon(panel->items[i].icon);
-    EnvFree(panel->items); panel->items=NULL; panel->count=panel->shown=0;
+    for(i=0;i<panel->count;++i) if(!panel->items[i].task && panel->items[i].icon) DestroyIcon(panel->items[i].icon);
+    EnvFree(panel->items); panel->items=NULL; panel->count=panel->pinCount=panel->shown=0;
 }
 static void DisablePanel(FolderPanel *panel)
 {
@@ -126,7 +127,7 @@ static void Refresh(FolderPanel *panel)
     WIN32_FIND_DATAA data; HANDLE find; char pattern[MAX_PATH];
     PanelItem *items; TaskbarLink *link; int count=0,i,j;
     if(!panel->config.enabled || !EnvJoin(pattern,panel->config.path,"*")) return;
-    items=EnvAlloc(sizeof(*items)*TASKBAR_FOLDER_ITEMS); link=EnvAlloc(sizeof(*link));
+    items=EnvAlloc(sizeof(*items)*(panel->pins ? TASKBAR_ENTRIES : TASKBAR_FOLDER_ITEMS)); link=EnvAlloc(sizeof(*link));
     if(!items || !link) { EnvFree(items); EnvFree(link); return; }
     find=FindFirstFileA(pattern,&data);
     if(find!=INVALID_HANDLE_VALUE) {
@@ -153,8 +154,8 @@ static void Refresh(FolderPanel *panel)
     for(i=1;i<count;++i) for(j=i;j>0 && lstrcmpiA(items[j-1].path,items[j].path)>0;--j) {
         PanelItem swap=items[j-1]; items[j-1]=items[j]; items[j]=swap;
     }
-    ClearItems(panel); panel->items=items; panel->count=count;
-    if(!count) { EnvFree(panel->items); panel->items=NULL; }
+    ClearItems(panel); panel->items=items; panel->count=panel->pinCount=count;
+    if(!count && !panel->pins) { EnvFree(panel->items); panel->items=NULL; }
     for(i=0;i<count;++i) ItemIcon(&panel->items[i],panel->pins ? env.options.taskTiles : panel->config.large);
     panel->dirty=FALSE; panel->hot=panel->pressed=panel->focus=-1;
     Watch(panel); EnvFree(link);
@@ -270,10 +271,15 @@ BOOL TaskbarPinApplication(const char *path,const char *arguments)
 }
 int TaskbarPinFind(const char *path)
 {
-    int i;
-    if(panels) for(i=0;i<panels[0].count;++i)
-        if(TaskbarSameApplication(path,TaskbarPinTarget(i))) return i;
-    return -1;
+    int i,found=-1,length=path ? lstrlenA(path) : 0; TaskbarLink *link=NULL;
+    if(length>4 && !lstrcmpiA(path+length-4,".lnk")) {
+        link=EnvAlloc(sizeof(*link));
+        if(!link || !TaskbarLinkRead(path,link)) { EnvFree(link); return -1; }
+        path=link->target;
+    }
+    if(panels && path) for(i=0;i<panels[0].pinCount;++i)
+        if(TaskbarSameApplication(path,TaskbarPinTarget(i))) { found=i; break; }
+    EnvFree(link); return found;
 }
 BOOL TaskbarUnpinApplication(const char *path)
 {
@@ -292,25 +298,25 @@ void TaskbarPanelsOptionsChanged(void)
     if(env.options.locked) TaskbarPanelsCancelResize();
     if(pinsLarge!=env.options.taskTiles) {
         pinsLarge=env.options.taskTiles;
-        for(i=0;i<panels[0].count;++i) ItemIcon(&panels[0].items[i],pinsLarge);
+        for(i=0;i<panels[0].pinCount;++i) ItemIcon(&panels[0].items[i],pinsLarge);
     }
     for(i=0;i<=panelCount;++i) InvalidateRect(panels[i].window,NULL,FALSE);
     --busy;
 }
-int TaskbarPinsCount(void) { return panels ? panels[0].count : 0; }
+int TaskbarPinsCount(void) { return panels ? panels[0].pinCount : 0; }
 const char *TaskbarPinTarget(int index)
 {
-    return panels && index>=0 && index<panels[0].count && panels[0].items[index].valid ? panels[0].items[index].identity : NULL;
+    return panels && index>=0 && index<panels[0].pinCount && panels[0].items[index].valid ? panels[0].items[index].identity : NULL;
 }
 void TaskbarPinCaptionChanged(int index)
 {
-    if(panels && index>=0 && index<panels[0].count && !IsRectEmpty(&panels[0].items[index].rect))
+    if(panels && index>=0 && index<panels[0].pinCount && !IsRectEmpty(&panels[0].items[index].rect))
         InvalidateRect(panels[0].window,&panels[0].items[index].rect,FALSE);
 }
 BOOL TaskbarPinState(int index,int count,BOOL active)
 {
     PanelItem *item; BOOL layout;
-    if(!panels || index<0 || index>=panels[0].count) return FALSE;
+    if(!panels || index<0 || index>=panels[0].pinCount) return FALSE;
     item=&panels[0].items[index]; layout=!!item->running!=!!count;
     if(item->running==count && item->active==active) return FALSE;
     item->running=count; item->active=active; TaskbarPinCaptionChanged(index);
@@ -319,12 +325,33 @@ BOOL TaskbarPinState(int index,int count,BOOL active)
 void TaskbarPinnedAction(int index,BOOL newInstance)
 {
     PanelItem *item;
-    if(!panels || index<0 || index>=panels[0].count) return;
+    if(!panels || index<0 || index>=panels[0].pinCount) return;
     item=&panels[0].items[index]; if(!item->valid) return;
     ++busy;
     if(!newInstance && EnvActivatePinnedTask(index)) { --busy; return; }
     StartHide(); EnvironmentLaunch(env.bar,item->path,NULL,panels[0].config.path);
     --busy;
+}
+/* Only launch shortcuts own icons. Live task entries borrow their existing
+ * BUTTON/icon and use the exact same columns and scroll range as the pins. */
+BOOL TaskbarTasksChanged(void)
+{
+    FolderPanel *panel; int i,used; BOOL changed=FALSE;
+    if(!panels || !panels[0].items) return FALSE;
+    panel=&panels[0]; used=panel->pinCount;
+    for(i=0;i<EnvTaskCount();++i) {
+        TaskbarTask task; PanelItem *item;
+        if(!EnvTaskInfo(i,&task)) continue;
+        item=&panel->items[used++];
+        if(item->task!=i+1 || item->button!=task.button) {
+            ZeroMemory(item,sizeof(*item)); changed=TRUE;
+        }
+        item->task=i+1; item->button=task.button; item->icon=task.icon;
+        item->valid=TRUE; item->running=task.count; item->active=task.active;
+    }
+    if(panel->count!=used) { Tooltips(panel,TRUE); changed=TRUE; }
+    panel->count=used;
+    return changed;
 }
 static int Hit(FolderPanel *panel,POINT point)
 {
@@ -339,14 +366,14 @@ static int Hit(FolderPanel *panel,POINT point)
     return -1;
 }
 typedef struct PinLayout {
-    int rows,cell,columns,width[TASKBAR_FOLDER_ITEMS],desired;
+    int rows,cell,columns,width[TASKBAR_ENTRIES],desired;
     BOOL expanded;
 } PinLayout;
 static void MeasurePins(FolderPanel *panel,int cross,BOOL vertical,PinLayout *layout)
 {
     int i,ordinal=0,slot=env.options.taskTiles ? 38 : 22;
     ZeroMemory(layout,sizeof(*layout));
-    if(!env.options.taskTiles) for(i=0;i<panel->count;++i)
+    if(!env.options.taskTiles && !env.options.hideTaskLabels) for(i=0;i<panel->count;++i)
         if(panel->items[i].valid && panel->items[i].running) { layout->expanded=TRUE; break; }
     if(layout->expanded) {
         layout->rows=vertical ? 1 : env.options.rows;
@@ -418,6 +445,16 @@ static void LayoutPins(FolderPanel *panel)
         } else if(panel->vertical) SetRect(&item->rect,other,along,other+size,along+size);
         else SetRect(&item->rect,along,other,along+size,other+size);
         ++panel->shown;
+    }
+    for(i=panel->pinCount;i<panel->count;++i) {
+        PanelItem *item=&panel->items[i]; RECT bounds=item->rect; POINT origin={0,0};
+        ClientToScreen(panel->window,&origin); ScreenToClient(env.bar,&origin);
+        OffsetRect(&bounds,origin.x,origin.y);
+        if(!IsRectEmpty(&item->rect)) {
+            EnvMoveControl(item->button,bounds.left,bounds.top,bounds.right-bounds.left,bounds.bottom-bounds.top);
+            SetWindowPos(item->button,HWND_TOP,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
+        }
+        EnvShowControl(item->button,!IsRectEmpty(&item->rect));
     }
     Tooltips(panel,FALSE); InvalidateRect(panel->window,NULL,FALSE);
 }
@@ -501,11 +538,15 @@ static void LayoutContents(FolderPanel *panel)
 }
 static void Place(FolderPanel *panel,int begin,int extent,int cross,BOOL vertical)
 {
-    BOOL moved;
+    BOOL moved; RECT previous;
+    GetClientRect(panel->window,&previous);
     panel->vertical=vertical; panel->extent=extent;
     moved=EnvMoveControl(panel->window,vertical ? 3 : begin,vertical ? begin : 3,vertical ? cross-6 : extent,vertical ? extent : cross-6);
     EnvShowControl(panel->window,extent>0);
-    if(!moved) LayoutContents(panel);
+    /* WM_SIZE covers resizing. A position-only move must also move the
+     * ordinary BUTTON siblings, whose coordinates belong to env.bar. */
+    if(!moved || (panel->pins && previous.right==(vertical ? cross-6 : extent) &&
+        previous.bottom==(vertical ? extent : cross-6))) LayoutContents(panel);
 }
 int TaskbarFoldersLayout(int begin,int end,int cross,BOOL vertical)
 {
@@ -517,7 +558,8 @@ int TaskbarFoldersLayout(int begin,int end,int cross,BOOL vertical)
         if(!panel->config.enabled) { EnvShowControl(panel->window,FALSE); continue; }
         if(budget<70) budget=70;
         if(reserve>budget) reserve=budget;
-        available=end-begin-80-reserve;
+        if(reserve<80) reserve=80;
+        available=end-begin-reserve;
         if(available<0) available=0;
         available/=remaining; --remaining;
         size=panel->config.size; if(size>available) size=available; if(size<24) size=0;
@@ -531,10 +573,8 @@ int TaskbarPinsLayout(int begin,int end,int cross,BOOL vertical)
     int size,available,minimum=32+(env.options.taskTiles ? 38 : 22);
     if(!panels) return begin;
     size=DesiredPins(cross-6,vertical);
-    available=end-begin-52; if(available<0) available=0;
-    /* Keep both arrows and at least one complete launch icon usable on a
-     * crowded bar, borrowing ordinary task space only when necessary. */
-    if(size>available && available<minimum && end-begin>=minimum+4) available=minimum;
+    available=end-begin; if(available<0) available=0;
+    /* The shared strip needs both arrows and one complete icon when crowded. */
     if(size>available) size=available;
     if(size<20 || (size<DesiredPins(cross-6,vertical) && size<minimum)) size=0;
     Place(&panels[0],begin,size,cross,vertical); return begin+(size ? size+4 : 0);
@@ -543,7 +583,8 @@ static void Activate(FolderPanel *panel,int index)
 {
     if(index<0 || index>=panel->count || !panel->items[index].valid) return;
     ++busy;
-    if(panel->pins) TaskbarPinnedAction(index,(GetKeyState(VK_SHIFT)&0x8000)!=0);
+    if(panel->pins && panel->items[index].task) EnvTaskAction(panel->items[index].task-1);
+    else if(panel->pins) TaskbarPinnedAction(index,(GetKeyState(VK_SHIFT)&0x8000)!=0);
     else if(Directory(panel->items[index].path)) env.host.openFolder(panel->items[index].path);
     else EnvironmentLaunch(env.bar,panel->items[index].path,NULL,panel->config.path);
     --busy;
@@ -571,7 +612,11 @@ static void Context(FolderPanel *panel,POINT point)
         index=panel->focus;
     } else { ScreenToClient(panel->window,&local); index=Hit(panel,local); }
     if(panel->pins) {
-        if(index>=0 && index<panel->count && panel->items[index].running) {
+        if(index>=0 && index<panel->count && panel->items[index].task) {
+            SendMessageA(env.bar,WM_CONTEXTMENU,(WPARAM)panel->items[index].button,MAKELPARAM(point.x,point.y));
+            DestroyMenu(menu); return;
+        }
+        if(index>=0 && index<panel->pinCount && panel->items[index].running) {
             BOOL shown; ++busy; shown=EnvPinnedSystemMenu(index,point); --busy;
             if(shown) { DestroyMenu(menu); return; }
         }
@@ -641,8 +686,9 @@ BOOL TaskbarPanelsTranslate(MSG *message)
 static void PaintItem(FolderPanel *panel,HDC dc,int index,const RECT *bounds,BOOL down,BOOL hot,BOOL focus)
 {
     PanelItem *item=&panel->items[index]; int icon=panel->pins ? (env.options.taskTiles ? 32 : 16) : (panel->config.large ? 32 : 16);
+    if(item->task) return; /* Real task BUTTONs share our layout as clipped siblings. */
     if(panel->pins && item->running) {
-        if(env.options.taskTiles) EnvPaintTaskTile(dc,bounds,item->icon,item->running,down||item->active,focus);
+        if(env.options.taskTiles || env.options.hideTaskLabels) EnvPaintTaskTile(dc,bounds,item->icon,item->running,down||item->active,focus);
         else {
             char caption[160]; EnvPinnedTaskCaption(index,caption,sizeof(caption));
             EnvPaintTaskButton(dc,bounds,caption,item->icon,down||item->active,focus);
@@ -904,7 +950,7 @@ BOOL TaskbarPanelsCreate(void)
             if(config->size>4096) config->size=4096;
             if(!config->path[0]) config->enabled=FALSE;
         }
-        panel->window=CreateWindowExA(0,"Explorer95.FolderToolbar",NULL,WS_CHILD|WS_TABSTOP,0,0,0,0,env.bar,
+        panel->window=CreateWindowExA(0,"Explorer95.FolderToolbar",NULL,WS_CHILD|WS_TABSTOP|WS_CLIPSIBLINGS,0,0,0,0,env.bar,
             (HMENU)(INT_PTR)(ID_TASKBAR_PINS+i),env.host.instance,panel);
         if(!panel->window) return FALSE;
         if(i) UiSetLiteralWindowTextA(panel->window,BaseName(panel->config.path));
@@ -930,7 +976,7 @@ void TaskbarPanelsTick(void)
         }
         if(panel->dirty) { Refresh(panel); changed=TRUE; }
     }
-    if(probe) for(j=0;j<panels[0].count;++j) {
+    if(probe) for(j=0;j<panels[0].pinCount;++j) {
         PanelItem *item=&panels[0].items[j]; TaskbarLink link; BOOL valid;
         ZeroMemory(&link,sizeof(link)); lstrcpyA(link.target,item->target); valid=TaskbarLinkExists(&link);
         if(valid!=item->valid) { item->valid=valid; ItemIcon(item,env.options.taskTiles); changed=TRUE; }

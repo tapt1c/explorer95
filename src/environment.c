@@ -150,6 +150,7 @@ static BOOL SettingsPath(void)
     env.options.rows = Clamp(Option("Rows", 1), 1, 3);
     env.options.taskWidth = Clamp(Option("TaskWidth", 160), 80, 300);
     env.options.taskTiles = !!Option("TaskTiles", FALSE);
+    env.options.hideTaskLabels = !!Option("HideTaskLabels", FALSE);
     env.options.locked = !!Option("Locked", TRUE); env.options.autoHide = !!Option("AutoHide", FALSE);
     env.options.topmost = !!Option("AlwaysOnTop", TRUE); env.options.clock = !!Option("Clock", TRUE);
     env.options.quick = !!Option("QuickLaunch", FALSE); env.options.largeIcons = !!Option("LargeIcons", FALSE);
@@ -305,31 +306,23 @@ BOOL EnvActivatePinnedTask(int index)
 }
 static void TaskSystemMenu(HWND target,POINT point)
 {
-    HMENU menu; DWORD process=0,current=0; DWORD_PTR result; UINT command;
-    if(!IsWindow(target) || !GetWindowThreadProcessId(target,&process)) return;
-    menu=GetSystemMenu(target,FALSE);
-    if(!menu) {
-        /* Wine cannot borrow another process's system HMENU. Ask the real
-         * window to open its own system menu; no simulated key input. */
-        if(GetWindowLongA(target,GWL_STYLE)&WS_SYSMENU) {
-            SetForegroundWindow(target);
-            PostMessageA(target,WM_SYSCOMMAND,SC_KEYMENU,' ');
-        }
-        return;
-    }
-    /* Let the real window prepare its own menu, including application-specific
-     * entries and disabled states. A hung task must not hang the taskbar. */
-    SendMessageTimeoutA(target,WM_INITMENU,(WPARAM)menu,0,SMTO_ABORTIFHUNG,100,&result);
-    SendMessageTimeoutA(target,WM_INITMENUPOPUP,(WPARAM)menu,MAKELPARAM(0,TRUE),SMTO_ABORTIFHUNG,100,&result);
-    if(!IsWindow(target)) return;
-    menu=GetSystemMenu(target,FALSE); if(!menu) return;
-    SetForegroundWindow(env.bar);
-    command=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_RIGHTBUTTON,point.x,point.y,0,target,NULL);
-    PostMessageA(env.bar,WM_NULL,0,0);
-    if(command && GetWindowThreadProcessId(target,&current) && current==process)
-        PostMessageA(target,WM_SYSCOMMAND,command,0);
-    /* GetSystemMenu is borrowed from the target: never DestroyMenu it. */
+    (void)point;
+    if(!IsWindow(target) || !(GetWindowLongA(target,GWL_STYLE)&WS_SYSMENU)) return;
+    /* USER must track the menu on the window's own thread. Borrowing a foreign
+     * HMENU and passing a foreign owner to TrackPopupMenu fails on Win95.
+     * SC_KEYMENU preserves the real menu, state and application callbacks,
+     * including minimized windows, without keyboard injection or blocking us. */
+    SetForegroundWindow(target);
+    PostMessageA(target,WM_SYSCOMMAND,SC_KEYMENU,' ');
 }
+int EnvTaskCount(void) { return taskCount; }
+BOOL EnvTaskInfo(int index,TaskbarTask *task)
+{
+    if(index<0 || index>=taskCount || tasks[index].pin>=0) return FALSE;
+    task->button=tasks[index].button; task->icon=tasks[index].icon;
+    task->count=tasks[index].count; task->active=tasks[index].active; return TRUE;
+}
+void EnvTaskAction(int index) { if(index>=0 && index<taskCount) TaskAction(index); }
 BOOL EnvPinnedSystemMenu(int index,POINT point)
 {
     int i,j;
@@ -404,7 +397,7 @@ static void UpdateTasks(void)
         }
         if (selected) lastActive = active;
     }
-    { BOOL layoutChanged=FALSE; BindPinnedTasks(&layoutChanged); if(layoutChanged) EnvLayoutBar(); }
+    { BOOL layoutChanged=FALSE; BindPinnedTasks(&layoutChanged); if(TaskbarTasksChanged()) layoutChanged=TRUE; if(layoutChanged) EnvLayoutBar(); }
     TaskSwitchObserve();
 }
 void EnvShowDesktop(void)
@@ -634,11 +627,12 @@ static void AddQuickFile(const char *source)
 void EnvLayoutBar(void)
 {
     RECT rect; int width, height;
-    int i, begin, end, trayWidth, rows, columns, taskWidth, taskHeight, visible,position=0;
+    int i, begin, end, trayWidth, rows;
     BOOL changed = FALSE;
     BOOL vertical = env.options.edge == ABE_LEFT || env.options.edge == ABE_RIGHT;
     if (!env.bar || !env.tray) return;
-    visible=BindPinnedTasks(NULL);
+    BindPinnedTasks(NULL); TaskbarTasksChanged();
+    for(i=0;i<taskCount;++i) if(tasks[i].pin>=0) EnvShowControl(tasks[i].button,FALSE);
     GetClientRect(env.bar, &rect); width = rect.right; height = rect.bottom;
     if (width < 10 || height < 10) return;
     if (vertical) {
@@ -648,11 +642,6 @@ void EnvLayoutBar(void)
         end=TaskbarFoldersLayout(begin,end,width,TRUE);
         begin=TaskbarPinsLayout(begin,end,width,TRUE);
         changed |= EnvMoveControl(env.tray, 2, height - 30, width - 4, 28); TrayLayout(width - 6, 26);
-        taskHeight = visible ? (end - begin) / visible : 26; taskHeight = Clamp(taskHeight, 8, env.options.taskTiles ? 42 : 26);
-        for (i = 0; i < taskCount; ++i) {
-            changed|=EnvShowControl(tasks[i].button,tasks[i].pin<0);
-            if(tasks[i].pin<0) changed |= EnvMoveControl(tasks[i].button, 3, begin + position++ * taskHeight, env.options.taskTiles ? taskHeight-2 : width - 6, taskHeight - 2);
-        }
     } else {
         rows = env.options.rows;
         changed |= EnvMoveControl(env.startButton, 2, 3, EnvStartButtonWidth(), EnvBarButtonHeight(height, rows)); begin = EnvStartButtonWidth() + 10;
@@ -663,16 +652,6 @@ void EnvLayoutBar(void)
         end=TaskbarFoldersLayout(begin,end,height,FALSE);
         begin=TaskbarPinsLayout(begin,end,height,FALSE);
         changed |= EnvMoveControl(env.tray, width - trayWidth - 3, 3, trayWidth, height - 6); TrayLayout(trayWidth - 2, height - 8);
-        columns = visible ? (visible + rows - 1) / rows : 1;
-        taskWidth = (end - begin) / columns; taskWidth = Clamp(taskWidth, 4, env.options.taskTiles ? (height-4)/rows : env.options.taskWidth);
-        taskHeight = (height - 4) / rows;
-        for (i = 0; i < taskCount; ++i) {
-            changed|=EnvShowControl(tasks[i].button,tasks[i].pin<0);
-            if(tasks[i].pin<0) {
-                changed |= EnvMoveControl(tasks[i].button, begin + (position / rows) * taskWidth, 3 + (position % rows) * taskHeight, taskWidth - 2, taskHeight - 2);
-                ++position;
-            }
-        }
     }
     if (changed) InvalidateRect(env.bar, NULL, FALSE);
 }
@@ -818,28 +797,8 @@ static void BarMenu(HWND source)
     const char *names[] = {"Left", "Top", "Right", "Bottom"};
     GetCursorPos(&point);
     if (id >= ID_TASK && id < ID_TASK + taskCount) {
-        HWND target = tasks[id - ID_TASK].windows[0]; HMENU system = GetSystemMenu(target, FALSE);
-        if(tasks[id-ID_TASK].pin>=0) {
-            TaskSystemMenu(target,point);
-            DestroyMenu(toolbars); DestroyMenu(dock); DestroyMenu(size); DestroyMenu(menu); return;
-        }
-        if (system) {
-            char application[MAX_PATH]; int pin;
-            lstrcpyA(application,tasks[id-ID_TASK].application); pin=TaskbarPinFind(application);
-            AppendMenuA(menu,MF_STRING|(!application[0] ? MF_GRAYED : 0),ID_TASKBAR_PIN,
-                pin>=0 ? "Unpin from taskbar" : "Pin to taskbar");
-            AppendMenuA(menu,MF_SEPARATOR,0,NULL);
-            AppendMenuA(menu,MF_POPUP,(UINT_PTR)system,"Window");
-            SetForegroundWindow(env.bar);
-            command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, 0, env.bar, NULL);
-            /* The system owns this submenu. Never destroy it with our wrapper. */
-            RemoveMenu(menu,2,MF_BYPOSITION);
-            if(command==ID_TASKBAR_PIN) {
-                if(pin>=0) TaskbarUnpinApplication(application);
-                else TaskbarPinApplication(application,NULL);
-            } else if (command) PostMessageA(target, WM_SYSCOMMAND, command, 0);
-            PostMessageA(env.bar,WM_NULL,0,0);
-        }
+        HWND target = tasks[id-ID_TASK].windows[0];
+        TaskSystemMenu(target,point);
         DestroyMenu(toolbars); DestroyMenu(dock); DestroyMenu(size); DestroyMenu(menu); return;
     }
     AppendMenuA(menu, MF_POPUP, (UINT_PTR)toolbars, "Toolbars");
@@ -1451,7 +1410,7 @@ BOOL EnvDrawBarButton(const DRAWITEMSTRUCT *item)
         /* Keep Start latched while focus is inside its popup. */
         EnvPaintStartButton(item->hDC, &item->rcItem, env.options.startLabel, down || IsWindowVisible(env.start), focus);
     } else if (index >= 0 && index < taskCount) {
-        if(env.options.taskTiles) EnvPaintTaskTile(item->hDC,&item->rcItem,tasks[index].icon,tasks[index].count,down||tasks[index].active,focus);
+        if(env.options.taskTiles || env.options.hideTaskLabels) EnvPaintTaskTile(item->hDC,&item->rcItem,tasks[index].icon,tasks[index].count,down||tasks[index].active,focus);
         else EnvPaintTaskButton(item->hDC, &item->rcItem, label, tasks[index].icon, down || tasks[index].active, focus);
     } else if (item->CtlID == ID_SHOWDESKTOP || item->CtlID == ID_QUICKMORE ||
         (item->CtlID >= ID_QUICKITEM && item->CtlID < ID_QUICKITEM + (UINT)quickCount)) {

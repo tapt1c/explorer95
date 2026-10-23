@@ -56,6 +56,23 @@ static void TaskTileTests(HWND bar, const char *settings)
     SendMessageA(properties,WM_COMMAND,0x3021,0); WaitTileButtons(bar,2,TRUE);
     SendDlgItemMessageA(properties,ID_TASKTILES,BM_SETCHECK,BST_UNCHECKED,0); SendMessageA(properties,WM_COMMAND,ID_TASKTILES,0);
     SendMessageA(properties,WM_COMMAND,IDOK,0); WaitTileButtons(bar,2,FALSE);
+    properties=OpenSettings(bar);
+    SendDlgItemMessageA(properties,ID_HIDETASKLABELS,BM_SETCHECK,BST_CHECKED,0);
+    SendMessageA(properties,WM_COMMAND,ID_HIDETASKLABELS,0);
+    Check(!IsWindowEnabled(GetDlgItem(properties,ID_WIDTH)),"hiding labels disables caption width independently of Windows 7 tiles");
+    SendMessageA(properties,WM_COMMAND,0x3021,0); WaitTileButtons(bar,2,TRUE);
+    Check(GetPrivateProfileIntA("Taskbar","HideTaskLabels",0,settings)==1 && !GetPrivateProfileIntA("Taskbar","TaskTiles",1,settings),
+        "icons-only classic tasks persist without changing the Windows 7 style setting");
+    SendDlgItemMessageA(properties,ID_GROUP,BM_SETCHECK,BST_CHECKED,0); SendMessageA(properties,WM_COMMAND,0x3021,0);
+    WaitTileButtons(bar,1,TRUE); SaveScreen("build/task-icons-only.bmp");
+    SendMessageA(properties,WM_COMMAND,IDCANCEL,0); properties=OpenSettings(bar);
+    Check(SendDlgItemMessageA(properties,ID_HIDETASKLABELS,BM_GETCHECK,0,0)==BST_CHECKED,"reopening settings retains the applied hide-labels choice");
+    SendDlgItemMessageA(properties,ID_HIDETASKLABELS,BM_SETCHECK,BST_UNCHECKED,0);
+    SendMessageA(properties,WM_COMMAND,IDCANCEL,0);
+    Check(GetPrivateProfileIntA("Taskbar","HideTaskLabels",0,settings)==1,"Cancel preserves the applied hide-labels choice");
+    properties=OpenSettings(bar); SendDlgItemMessageA(properties,ID_HIDETASKLABELS,BM_SETCHECK,BST_UNCHECKED,0);
+    SendDlgItemMessageA(properties,ID_GROUP,BM_SETCHECK,BST_UNCHECKED,0); SendMessageA(properties,WM_COMMAND,IDOK,0);
+    WaitTileButtons(bar,2,FALSE);
     DestroyWindow(first); DestroyWindow(second); PumpFor(60);
 }
 static void OrderedStartGeometry(HWND bar, HWND menu, const char *screenshot)

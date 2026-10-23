@@ -1576,7 +1576,7 @@ static void EnvironmentTests(HWND bar, HWND browser, HWND childWindow, HWND menu
     RecentMembershipUiTests(bar,menu,settings);
 
     CheckStartFits(bar, menu);
-    ContextPinTest(bar, menu, settings);
+    ContextPinTest(bar, menu, settings); StartApplicationContextTests(bar,menu,settings);
     ZeroMemory(&packet, sizeof(packet));
     packet.signature = 0x34753423; packet.operation = NIM_ADD;
     packet.icon.cbSize = offsetof(NOTIFYICONDATAA, szTip) + 64;
@@ -1927,7 +1927,7 @@ void start(void)
     }
     if (group == GROUP_MENU) {
         menu = FindWindowA("Explorer95.Start", NULL);
-        CheckStartFits(bar, menu); RecentMembershipUiTests(bar,menu,settings); ContextPinTest(bar, menu, settings);
+        CheckStartFits(bar, menu); RecentMembershipUiTests(bar,menu,settings); ContextPinTest(bar, menu, settings); StartApplicationContextTests(bar,menu,settings);
         dialog = StartSettingsTests(bar, menu, settings);
         SendMessageA(dialog, WM_COMMAND, IDCANCEL, 0);
         ShutdownStyleTests(bar, settings);
@@ -2166,6 +2166,7 @@ cleanup:
     wsprintfA(path, "%s\\document.lnk", settingsDir); DeleteFileA(path);
     wsprintfA(path, "%s\\program.lnk", settingsDir); DeleteFileA(path);
     TaskbarPinsCleanup(settingsDir);
+    wsprintfA(path,"%s\\Toolbar fixture\\toolbar-child.exe",settingsDir); DeleteFileA(path);
     wsprintfA(path,"%s\\Toolbar fixture",settingsDir); RemoveDirectoryA(path);
     wsprintfA(path,"%s\\New toolbar",settingsDir); RemoveDirectoryA(path);
     wsprintfA(path, "%s\\Quick Launch", settingsDir); RemoveDirectoryA(path);

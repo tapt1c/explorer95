@@ -2,6 +2,7 @@
 #include "shell_internal.h"
 #include "program_history.h"
 #include "shell_sounds.h"
+#include "taskbar_panels.h"
 #define EX95_LOCALIZE_UI
 #include "localization.h"
 #undef GetTextExtentPoint32A
@@ -21,6 +22,12 @@ static const int rightCommands[] = {ID_DOCUMENTS, ID_RECENTDOCS, ID_COMPUTER, ID
 static char user[128];
 static HFONT userFont;
 static BOOL popupActive, classicActive;
+static IContextMenu2 *applicationContext;
+static HHOOK applicationMenuHook;
+static HMENU selectedApplicationMenu;
+static UINT selectedApplication, contextApplication;
+static POINT contextPoint;
+static void ApplicationCommandContext(int id,POINT point);
 static DWORD hoverStarted;
 static HWND openedHover;
 static FILETIME highlightEpoch;
@@ -364,13 +371,58 @@ static HMENU ProgramsMenu(BOOL documents)
     }
     return menu;
 }
+/* Win95 does not send WM_MENURBUTTONUP. Filter this thread's menu input,
+ * cancel the launch menu, then show the application's context menu after the
+ * tracking loop has unwound. Never nest TrackPopupMenu inside a hook. */
+static LRESULT CALLBACK ApplicationMenuFilter(int code,WPARAM wp,LPARAM lp)
+{
+    MSG *message=(MSG *)lp;
+    if(code==MSGF_MENU && !contextApplication) {
+        BOOL mouse=message->message==WM_RBUTTONDOWN || message->message==WM_RBUTTONUP;
+        BOOL keyboard=(message->message==WM_KEYDOWN || message->message==WM_SYSKEYDOWN) && (message->wParam==VK_APPS ||
+            (message->wParam==VK_F10 && (GetKeyState(VK_SHIFT)&0x8000)));
+        if(mouse || keyboard) {
+            UINT id=selectedApplication; POINT point=message->pt; int i; RECT rect;
+            if(mouse) {
+                id=0;
+                for(i=0;selectedApplicationMenu && i<GetMenuItemCount(selectedApplicationMenu);++i)
+                    if(GetMenuItemRect(NULL,selectedApplicationMenu,i,&rect) && PtInRect(&rect,point)) {
+                        id=GetMenuItemID(selectedApplicationMenu,i); break;
+                    }
+            } else GetCursorPos(&point);
+            if((id>=2000 && id<2000+(UINT)programCount && !programs[id-2000].folder && !programs[id-2000].pidl) ||
+                (id>=ID_PINNED && id<ID_PINNED+(UINT)startPinCount)) {
+                /* Consume both buttons; the queued release must not select
+                 * a command in the new context menu at the same position. */
+                if(message->message!=WM_RBUTTONDOWN) {
+                    contextApplication=id; contextPoint=point;
+                    PostMessageA(env.start,WM_CANCELMODE,0,0);
+                }
+                return 1;
+            }
+        }
+    }
+    return CallNextHookEx(applicationMenuHook,code,wp,lp);
+}
+static UINT TrackApplications(HMENU menu,UINT flags,int x,int y)
+{
+    UINT command,context; POINT point;
+    selectedApplication=0; selectedApplicationMenu=menu; contextApplication=0;
+    applicationMenuHook=SetWindowsHookExA(WH_MSGFILTER,ApplicationMenuFilter,NULL,GetCurrentThreadId());
+    command=TrackPopupMenu(menu,(flags&~TPM_RIGHTBUTTON)|TPM_RETURNCMD,x,y,0,env.start,NULL);
+    if(applicationMenuHook) UnhookWindowsHookEx(applicationMenuHook);
+    applicationMenuHook=NULL; selectedApplicationMenu=NULL;
+    context=contextApplication; point=contextPoint; contextApplication=0;
+    if(context) { ApplicationCommandContext(context,point); return 0; }
+    return command;
+}
 static void ProgramsPopup(BOOL documents)
 {
     HMENU menu; RECT button; int command;
     FreePrograms(); menu = ProgramsMenu(documents);
     GetWindowRect(GetDlgItem(env.start, documents ? ID_RECENTDOCS : ID_PROGRAMS), &button);
     popupActive = TRUE;
-    command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, button.right, button.top, 0, env.start, NULL);
+    command = TrackApplications(menu,0,button.right,button.top);
     popupActive = FALSE; DestroyMenu(menu);
     if (command) { StartHide(); ExecuteProgram(command); }
     FreePrograms();
@@ -635,36 +687,100 @@ static void MorePopup(BOOL pins)
     }
     GetWindowRect(GetDlgItem(env.start, pins ? ID_MOREPINS : ID_MORECOMMANDS), &rect);
     popupActive = TRUE;
-    command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, rect.right, rect.top, 0, env.start, NULL);
+    command = TrackApplications(menu,0,rect.right,rect.top);
     popupActive = FALSE; DestroyMenu(menu);
     for (i = 0; i < used; ++i) if (entries[i].icon) { DestroyIcon(entries[i].icon); entries[i].icon = NULL; }
     if (command) SendMessageA(env.start, WM_COMMAND, command, 0);
 }
-static void ProgramContext(HWND button, LPARAM coordinates)
+static IContextMenu *ApplicationShellContext(const char *path)
 {
-    int id = GetDlgCtrlID(button), index, command; BOOL pinned;
-    PinnedProgram pin; HMENU menu; POINT point;
-    if (id >= ID_PINNED && id < ID_PINNED + startPinCount) {
-        pin = startPins[id - ID_PINNED]; pinned = TRUE;
-    } else if (id >= ID_RECENT && id < ID_RECENT + RECENT_LIMIT && recent[id - ID_RECENT].path[0]) {
-        ZeroMemory(&pin, sizeof(pin)); index = id - ID_RECENT; pinned = FALSE;
-        lstrcpyA(pin.path, recent[index].path); lstrcpyA(pin.arguments, recent[index].arguments);
-        Caption(recentShortcuts[index], pin.label, sizeof(pin.label));
-    } else return;
-    if (coordinates == (LPARAM)-1) { RECT rect; GetWindowRect(button, &rect); point.x = rect.left; point.y = rect.bottom; }
-    else { point.x = (short)LOWORD(coordinates); point.y = (short)HIWORD(coordinates); }
-    menu = CreatePopupMenu();
-    if (pinned) AppendMenuA(menu, MF_STRING, ID_CONTEXT_UNPIN, "Unpin from Start menu");
-    else AppendMenuA(menu, MF_STRING | (startPinCount >= PIN_LIMIT || StartFindPin(pin.path, pin.arguments) >= 0 ? MF_GRAYED : 0),
-        ID_CONTEXT_PIN, startPinCount >= PIN_LIMIT ? "Pin to Start menu (list full)" : "Pin to Start menu");
-    popupActive = TRUE;
-    command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, 0, env.start, NULL);
-    popupActive = FALSE; DestroyMenu(menu);
-    if (command == ID_CONTEXT_PIN) StartAddPin(&pin);
-    if (command == ID_CONTEXT_UNPIN) {
-        index = StartFindPin(pin.path, pin.arguments); if (index >= 0) StartRemovePin(index);
+    IShellFolder *desktop=NULL,*parent=NULL; IContextMenu *context=NULL;
+    LPITEMIDLIST absolute=NULL; LPCITEMIDLIST child; WCHAR wide[MAX_PATH]; UINT offset=0,last=0;
+    if(!MultiByteToWideChar(CP_ACP,0,path,-1,wide,MAX_PATH) || FAILED(SHGetDesktopFolder(&desktop))) return NULL;
+    if(SUCCEEDED(IShellFolder_ParseDisplayName(desktop,env.start,NULL,wide,NULL,&absolute,NULL)) && absolute) {
+        while(((LPCITEMIDLIST)((BYTE *)absolute+offset))->mkid.cb) {
+            last=offset; offset+=((LPCITEMIDLIST)((BYTE *)absolute+offset))->mkid.cb;
+        }
+        child=(LPCITEMIDLIST)((BYTE *)absolute+last);
+        LPITEMIDLIST tail=JoinPidl(child,(LPCITEMIDLIST)"\0\0");
+        ((LPITEMIDLIST)((BYTE *)absolute+last))->mkid.cb=0;
+        if(!last) { parent=desktop; IShellFolder_AddRef(parent); }
+        else IShellFolder_BindToObject(desktop,absolute,NULL,&IID_IShellFolder,(void **)&parent);
+        if(parent && tail) IShellFolder_GetUIObjectOf(parent,env.start,1,(LPCITEMIDLIST *)&tail,&IID_IContextMenu,NULL,(void **)&context);
+        if(tail) CoTaskMemFree(tail);
     }
-    if (IsWindowVisible(env.start)) SetFocus(GetDlgItem(env.start, startPinCount ? ID_PINNED : ID_PROGRAMS));
+    if(parent) IShellFolder_Release(parent);
+    if(absolute) CoTaskMemFree(absolute);
+    IShellFolder_Release(desktop); return context;
+}
+static void ApplicationCommandContext(int id,POINT point)
+{
+    PinnedProgram pin; char source[MAX_PATH]; BOOL pinned=FALSE,wasPopup=popupActive,program;
+    IContextMenu *context=NULL; HMENU menu; UINT command; int index;
+    ZeroMemory(&pin,sizeof(pin)); source[0]=0;
+    if(id>=ID_PINNED && id<ID_PINNED+startPinCount) { pin=startPins[id-ID_PINNED]; pinned=TRUE; }
+    else if(id>=ID_RECENT && id<ID_RECENT+RECENT_LIMIT && recent[id-ID_RECENT].path[0]) {
+        index=id-ID_RECENT;
+        lstrcpyA(pin.path,recent[index].path); lstrcpyA(pin.arguments,recent[index].arguments);
+        Caption(recentShortcuts[index],pin.label,sizeof(pin.label)); lstrcpyA(source,recentShortcuts[index]);
+    } else if(id>=2000 && id<2000+programCount && !programs[id-2000].folder && !programs[id-2000].pidl) {
+        lstrcpyA(pin.path,programs[id-2000].path); Caption(pin.path,pin.label,sizeof(pin.label));
+    } else return;
+    if(!lstrcmpA(pin.path,"@explorer")) {
+        GetModuleFileNameA(NULL,source,MAX_PATH);
+    } else if(!lstrcmpA(pin.path,"@command")) {
+        char directory[MAX_PATH]; GetWindowsDirectoryA(directory,MAX_PATH); EnvJoin(source,directory,"COMMAND.COM");
+    } else if(!source[0]) lstrcpyA(source,pin.path);
+    menu=CreatePopupMenu(); if(!menu) return;
+    program=IsProgramHistoryEntry(source,NULL);
+    if(pinned) AppendMenuA(menu,MF_STRING,ID_CONTEXT_UNPIN,"Unpin from Start menu");
+    else if(program) AppendMenuA(menu,MF_STRING|(startPinCount>=PIN_LIMIT || StartFindPin(pin.path,pin.arguments)>=0 ? MF_GRAYED : 0),
+        ID_CONTEXT_PIN,startPinCount>=PIN_LIMIT ? "Pin to Start menu (list full)" : "Pin to Start menu");
+    if(program) {
+        AppendMenuA(menu,MF_STRING,ID_TASKBAR_PIN,TaskbarPinFind(source)>=0 ? "Unpin from taskbar" : "Pin to taskbar");
+    }
+    context=ApplicationShellContext(source);
+    if(context) {
+        if(GetMenuItemCount(menu)) AppendMenuA(menu,MF_SEPARATOR,0,NULL);
+        if(SUCCEEDED(IContextMenu_QueryContextMenu(context,menu,GetMenuItemCount(menu),0x4000,0x6fff,CMF_NORMAL)))
+            IContextMenu_QueryInterface(context,&IID_IContextMenu2,(void **)&applicationContext);
+    }
+    popupActive=TRUE; SetForegroundWindow(env.start);
+    command=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_RIGHTBUTTON,point.x,point.y,0,env.start,NULL);
+    popupActive=wasPopup;
+    if(applicationContext) { IContextMenu2_Release(applicationContext); applicationContext=NULL; }
+    if(command==ID_CONTEXT_PIN) StartAddPin(&pin);
+    else if(command==ID_CONTEXT_UNPIN) {
+        index=StartFindPin(pin.path,pin.arguments); if(index>=0) StartRemovePin(index);
+    } else if(command==ID_TASKBAR_PIN) {
+        if(TaskbarPinFind(source)>=0) TaskbarUnpinApplication(source);
+        else if(id>=ID_RECENT && id<ID_RECENT+RECENT_LIMIT) TaskbarPinApplication(pin.path,pin.arguments);
+        else TaskbarPinApplication(source,pin.arguments);
+    } else if(command>=0x4000 && context) {
+        char verb[80]; CMINVOKECOMMANDINFO invoke; verb[0]=0;
+        IContextMenu_GetCommandString(context,command-0x4000,GCS_VERBA,NULL,verb,sizeof(verb));
+        /* Launch through the original command to preserve recent arguments and
+         * record history; other verbs act on the real Start Menu shortcut. */
+        if(!lstrcmpiA(verb,"open")) {
+            popupActive=FALSE; StartHide(); popupActive=wasPopup;
+            if(pin.path[0]=='@') EnvCommand(!lstrcmpA(pin.path,"@explorer") ? ID_EXPLORER : ID_COMMAND);
+            else EnvironmentLaunch(env.bar,pin.path,pin.arguments,NULL);
+        } else {
+            ZeroMemory(&invoke,sizeof(invoke)); invoke.cbSize=sizeof(invoke); invoke.hwnd=env.start;
+            invoke.lpVerb=MAKEINTRESOURCEA(command-0x4000); invoke.nShow=SW_SHOWNORMAL;
+            IContextMenu_InvokeCommand(context,&invoke);
+        }
+    }
+    DestroyMenu(menu); if(context) IContextMenu_Release(context);
+    PostMessageA(env.start,WM_NULL,0,0);
+    if(IsWindowVisible(env.start)) SetFocus(GetDlgItem(env.start,startPinCount ? ID_PINNED : ID_PROGRAMS));
+}
+static void ProgramContext(HWND button,LPARAM coordinates)
+{
+    POINT point;
+    if(coordinates==(LPARAM)-1) { RECT rect; GetWindowRect(button,&rect); point.x=rect.left; point.y=rect.bottom; }
+    else { point.x=(short)LOWORD(coordinates); point.y=(short)HIWORD(coordinates); }
+    ApplicationCommandContext(GetDlgCtrlID(button),point);
 }
 
 static void LoadItemIcons(void)
@@ -684,7 +800,18 @@ static void LoadItemIcons(void)
 
 static LRESULT CALLBACK StartProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
 {
+    if(applicationContext && (message==WM_INITMENUPOPUP ||
+        (message==WM_DRAWITEM && ((DRAWITEMSTRUCT *)lp)->CtlType==ODT_MENU && ((DRAWITEMSTRUCT *)lp)->itemID>=0x4000) ||
+        (message==WM_MEASUREITEM && ((MEASUREITEMSTRUCT *)lp)->CtlType==ODT_MENU && ((MEASUREITEMSTRUCT *)lp)->itemID>=0x4000))) {
+        if(SUCCEEDED(IContextMenu2_HandleMenuMsg(applicationContext,message,wp,lp))) return message==WM_INITMENUPOPUP ? 0 : TRUE;
+    }
     switch (message) {
+    case WM_MENUSELECT:
+        if(applicationMenuHook) {
+            selectedApplicationMenu=(HMENU)lp;
+            selectedApplication=(HIWORD(wp)&(MF_POPUP|MF_SEPARATOR)) ? 0 : LOWORD(wp);
+        }
+        break;
     case WM_CREATE: {
         int i; DWORD bytes = sizeof(user); LOGFONTA font;
         if (!GetUserNameA(user, &bytes)) lstrcpyA(user, "Explorer95");
@@ -901,7 +1028,7 @@ static BOOL FolderPopup(int id)
     csidl = index == 9 ? CSIDL_FAVORITES : folders[index]; FreePrograms();
     if (env.host.specialPath(csidl, path)) menu = FolderMenu(path, 0); else menu = NamespaceMenu(csidl);
     GetWindowRect(GetDlgItem(env.start, id), &button); popupActive = TRUE;
-    command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, button.right, button.top, 0, env.start, NULL);
+    command = TrackApplications(menu,0,button.right,button.top);
     popupActive = FALSE; DestroyMenu(menu);
     if (command) { StartHide(); ExecuteProgram(command); }
     FreePrograms(); return TRUE;
@@ -948,8 +1075,8 @@ static void ClassicPopup(void)
     }
     GetWindowRect(env.startButton, &button); classicActive = popupActive = TRUE;
     SendMessageA(env.startButton, BM_SETSTATE, TRUE, 0); SetForegroundWindow(env.bar);
-    command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | (env.options.edge == ABE_BOTTOM ? TPM_BOTTOMALIGN : TPM_TOPALIGN), button.left,
-        env.options.edge == ABE_BOTTOM ? button.top : button.bottom, 0, env.start, NULL);
+    command = TrackApplications(menu,env.options.edge == ABE_BOTTOM ? TPM_BOTTOMALIGN : TPM_TOPALIGN,button.left,
+        env.options.edge == ABE_BOTTOM ? button.top : button.bottom);
     classicActive = popupActive = FALSE; SendMessageA(env.startButton, BM_SETSTATE, FALSE, 0); DestroyMenu(menu);
     for (i = 0; i < used; ++i) if (entries[i].icon) DestroyIcon(entries[i].icon);
     if (command >= 2000) ExecuteProgram(command);
