@@ -9,7 +9,7 @@
 #define RESTORE_TIMER 0x95d1
 #define POSITION_MAGIC 0x50443945UL
 typedef struct IconPosition { char name[MAX_PATH]; LONG x, y; } IconPosition;
-typedef struct DragPosition { int index; POINT point; RECT bounds; } DragPosition;
+typedef struct DragPosition { int index; POINT point; RECT bounds, visual; } DragPosition;
 typedef struct Placement { POINT from, to; RECT offset; BOOL fixed, moving; } Placement;
 struct DesktopIcons {
     HWND list;
@@ -31,6 +31,7 @@ struct DesktopIcons {
 static void EndDrag(DesktopIcons *icons, BOOL commit);
 static void MoveDrag(DesktopIcons *icons, POINT point);
 static POINT GridPoint(DesktopIcons *icons, POINT point);
+static int IconWidth(DesktopIcons *icons);
 static BOOL ResolvePositions(DesktopIcons *icons, Placement *plan, int count, BOOL grid);
 static Placement *MakePlan(DesktopIcons *icons, int *count, BOOL grid);
 static void ApplyPlan(DesktopIcons *icons, const Placement *plan, int count);
@@ -57,24 +58,38 @@ static BOOL Name(HWND list, int index, char *name)
 /* LVIR_BOUNDS can reserve the common control's entire default cell, including
  * blank label padding. Collision tests need the actual icon and wrapped text,
  * otherwise a 64px grid skips rows merely because Windows reserves 75px. */
-static BOOL ItemBounds(HWND list, int index, RECT *bounds)
+static BOOL ItemBounds(DesktopIcons *icons, int index, RECT *bounds)
 {
-    RECT icon,label,text; char name[MAX_PATH]; HDC dc; HGDIOBJ font=NULL; HFONT current;
+    HWND list=icons->list; POINT point;
+    RECT icon,label,text,cell; char name[MAX_PATH]; HDC dc; HGDIOBJ font=NULL; HFONT current;
     if(!ListView_GetItemRect(list,index,bounds,LVIR_BOUNDS)) return FALSE;
     if(!ListView_GetItemRect(list,index,&icon,LVIR_ICON) || !ListView_GetItemRect(list,index,&label,LVIR_LABEL) ||
-       !Name(list,index,name) || !(dc=GetDC(list))) return TRUE;
-    current=(HFONT)SendMessageA(list,WM_GETFONT,0,0); if(current) font=SelectObject(dc,current);
-    SetRect(&text,0,0,label.right-label.left,0);
-    if(DrawTextA(dc,name,-1,&text,DT_CALCRECT|DT_CENTER|DT_WORDBREAK|DT_NOPREFIX)) {
-        int width=Clamp(text.right-text.left,0,label.right-label.left), height=Clamp(text.bottom-text.top,0,label.bottom-label.top);
-        text.left=(label.left+label.right-width)/2; text.right=text.left+width;
-        text.top=label.top; text.bottom=text.top+height;
-        text.left=Clamp(text.left-1,label.left,label.right); text.right=Clamp(text.right+1,label.left,label.right);
-        text.top=Clamp(text.top-1,label.top,label.bottom); text.bottom=Clamp(text.bottom+1,label.top,label.bottom);
-        UnionRect(bounds,&icon,&text);
+       !ListView_GetItemPosition(list,index,&point)) return TRUE;
+    text=label;
+    if(Name(list,index,name) && (dc=GetDC(list))) {
+        RECT measured;
+        current=(HFONT)SendMessageA(list,WM_GETFONT,0,0); if(current) font=SelectObject(dc,current);
+        SetRect(&measured,0,0,label.right-label.left,0);
+        if(DrawTextA(dc,name,-1,&measured,DT_CALCRECT|DT_CENTER|DT_WORDBREAK|DT_NOPREFIX)) {
+            int width=Clamp(measured.right-measured.left,0,label.right-label.left), height=Clamp(measured.bottom-measured.top,0,label.bottom-label.top);
+            text.left=(label.left+label.right-width)/2; text.right=text.left+width;
+            text.top=label.top; text.bottom=text.top+height;
+            text.left=Clamp(text.left-1,label.left,label.right); text.right=Clamp(text.right+1,label.left,label.right);
+            text.top=Clamp(text.top-1,label.top,label.bottom); text.bottom=Clamp(text.bottom+1,label.top,label.bottom);
+        }
+        if(font) SelectObject(dc,font);
+        ReleaseDC(list,dc);
     }
-    if(font) SelectObject(dc,font);
-    ReleaseDC(list,dc); return TRUE;
+    /* Native captions can extend outside their cell, especially when focused.
+     * That transient expansion must not forbid an edge cell or evict neighbours.
+     * Keep the complete icon, but reserve caption space only in its own cell.
+     * The native foreground and the full drag image remain unchanged. */
+    cell.left=point.x-(icons->width-IconWidth(icons))/2; cell.top=point.y-4;
+    cell.right=cell.left+icons->width; cell.bottom=cell.top+icons->height;
+    text.left=Clamp(text.left,cell.left,cell.right); text.right=Clamp(text.right,cell.left,cell.right);
+    text.top=Clamp(text.top,cell.top,cell.bottom); text.bottom=Clamp(text.bottom,cell.top,cell.bottom);
+    UnionRect(bounds,&icon,&text);
+    return TRUE;
 }
 static void Load(DesktopIcons *icons)
 {
@@ -388,7 +403,7 @@ static Placement *MakePlan(DesktopIcons *icons, int *count, BOOL grid)
     for (i = 0; i < *count; ++i) {
         RECT bounds;
         if (!ListView_GetItemPosition(icons->list,i,&plan[i].from) ||
-            !(grid ? ItemBounds(icons->list,i,&bounds) : ListView_GetItemRect(icons->list,i,&bounds,LVIR_BOUNDS))) {
+            !(grid ? ItemBounds(icons,i,&bounds) : ListView_GetItemRect(icons->list,i,&bounds,LVIR_BOUNDS))) {
             HeapFree(GetProcessHeap(),0,plan); return NULL;
         }
         plan[i].to = plan[i].from;
@@ -433,18 +448,18 @@ static void ApplyPlan(DesktopIcons *icons, const Placement *plan, int count)
 static HIMAGELIST CreateGhost(DesktopIcons *icons, POINT *origin)
 {
     static const BYTE checker[16] = {0x55,0,0xaa,0,0x55,0,0xaa,0,0x55,0,0xaa,0,0x55,0,0xaa,0};
-    RECT bounds = icons->drag[0].bounds; int i, first = 0, count = icons->dragCount, width, height;
+    RECT bounds = icons->drag[0].visual; int i, first = 0, count = icons->dragCount, width, height;
     HIMAGELIST image = NULL, native = ListView_GetImageList(icons->list,LVSIL_NORMAL);
     HDC screen = NULL, colorDC = NULL, maskDC = NULL;
     HBITMAP color = NULL, mask = NULL, pattern = NULL;
     HBRUSH key = NULL, checkerBrush = NULL; HGDIOBJ oldColor = NULL, oldMask = NULL, oldBrush = NULL, oldFont = NULL;
     BOOL okay = FALSE;
-    for (i = 1; i < count; ++i) UnionRect(&bounds,&bounds,&icons->drag[i].bounds);
+    for (i = 1; i < count; ++i) UnionRect(&bounds,&bounds,&icons->drag[i].visual);
     width = bounds.right-bounds.left; height = bounds.bottom-bounds.top;
     /* Cache once per drag. Bound the temporary GDI allocation on Win95; a very
      * spread-out group can still use the grabbed icon as its visual marker. */
     if (width <= 0 || height <= 0 || width > 2048 || height > 2048 || width*height > 1024*1024) {
-        first = icons->dragAnchor; count = 1; bounds = icons->drag[first].bounds;
+        first = icons->dragAnchor; count = 1; bounds = icons->drag[first].visual;
         width = bounds.right-bounds.left; height = bounds.bottom-bounds.top;
     }
     if (!native || width <= 0 || height <= 0) goto done;
@@ -617,8 +632,8 @@ BOOL DesktopIconsBeginDrag(DesktopIcons *icons, const NMLISTVIEW *notify)
         if (index == notify->iItem) icons->dragAnchor = icons->dragCount;
         ++icons->dragCount; p->index = index;
         ListView_GetItemPosition(icons->list,index,&p->point);
-        if(icons->snap) ItemBounds(icons->list,index,&p->bounds);
-        else ListView_GetItemRect(icons->list,index,&p->bounds,LVIR_BOUNDS);
+        ListView_GetItemRect(icons->list,index,&p->visual,LVIR_BOUNDS); p->bounds=p->visual;
+        if(icons->snap) ItemBounds(icons,index,&p->bounds);
     }
     KillTimer(icons->list,RESTORE_TIMER); icons->pending = FALSE; icons->start = notify->ptAction;
     icons->delta.x = icons->delta.y = 0; icons->dragging = TRUE;

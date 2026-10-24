@@ -127,6 +127,56 @@ static void DesktopGridLabelTests(const char *directory)
         Check(DeleteFileA(layout),"remove only our shortcut grid layout fixture");
     }
 }
+static void __attribute__((noinline)) DesktopGridEdgeTests(const char *directory)
+{
+    HWND parent,list; HIMAGELIST images; char profile[MAX_PATH],layout[MAX_PATH]; int size,step,i;
+    for(size=32;size<=48;size+=16) for(step=64;step<=80;step+=16) {
+        POINT target={(step-size)/2,4},before,after,neighbours[2]; RECT visual;
+        parent=CreateWindowA("Explorer95.IconTest","Grid edge fixture",WS_POPUP|WS_VISIBLE,0,0,600,410,NULL,NULL,GetModuleHandleA(NULL),NULL);
+        list=CreateWindowA(WC_LISTVIEWA,"",WS_CHILD|WS_VISIBLE|LVS_ICON|LVS_ALIGNLEFT|LVS_SHAREIMAGELISTS,0,0,580,360,parent,NULL,GetModuleHandleA(NULL),NULL);
+        images=ImageList_Create(size,size,ILC_COLOR|ILC_MASK,1,1); ImageList_AddIcon(images,LoadIconA(NULL,IDI_APPLICATION)); ListView_SetImageList(list,images,LVSIL_NORMAL);
+        testDesktopListProc=(WNDPROC)SetWindowLongPtrA(list,GWLP_WNDPROC,(LONG_PTR)DesktopTestListProc);
+        DesktopItem(list,0,"MyComputer.exe",target.x+step*2,164);
+        DesktopItem(list,1,"Inbox",target.x+step,4); DesktopItem(list,2,"Next row",target.x,84);
+        wsprintfA(profile,"%s\\edge%d-%d.ini",directory,size,step); wsprintfA(layout,"%s.DIP",profile);
+        testDesktopIcons=DesktopIconsCreate(list,profile); DesktopIconsConfigure(testDesktopIcons,FALSE,FALSE,TRUE,step,80); DesktopPump();
+        SetFocus(list); ListView_SetItemState(list,0,LVIS_SELECTED|LVIS_FOCUSED,LVIS_SELECTED|LVIS_FOCUSED);
+        /* Complete the control's first deferred layout before establishing the
+         * empty corner and its two occupied adjacent cells. */
+        RedrawWindow(list,NULL,NULL,RDW_INVALIDATE|RDW_UPDATENOW);
+        ListView_SetItemPosition(list,0,target.x+step*2,164);
+        ListView_SetItemPosition(list,1,target.x+step,4); ListView_SetItemPosition(list,2,target.x,84);
+        for(i=0;i<2;++i) neighbours[i]=DesktopPoint(list,i+1);
+        Check(neighbours[0].x==target.x+step && neighbours[0].y==4 && neighbours[1].x==target.x && neighbours[1].y==84,
+            "the edge fixture starts with an empty corner and occupied adjacent column and row");
+        before=DesktopPoint(list,0); ListView_GetItemRect(list,0,&visual,LVIR_BOUNDS);
+        DesktopBegin(parent,list,0);
+        { int width=0,height=0; HIMAGELIST ghost=ImageList_GetDragImage(NULL,NULL);
+          Check(ghost && ImageList_GetIconSize(ghost,&width,&height) && width>=visual.right-visual.left && height>=visual.bottom-visual.top,
+              "grid placement bounds do not crop the native icon and caption in the drag image"); }
+        SendMessageA(list,WM_LBUTTONUP,0,MAKELPARAM(target.x,target.y)); after=DesktopPoint(list,0);
+        if(after.x!=target.x || after.y!=target.y) { char note[180]; wsprintfA(note,"Grid edge: size=%d step=%d from=%ld,%ld requested=%ld,%ld actual=%ld,%ld\r\n",size,step,before.x,before.y,target.x,target.y,after.x,after.y); Log(note); }
+        Check(after.x==target.x && after.y==target.y,"a long focused caption cannot prevent dropping its icon into the empty upper-left grid cell");
+        for(i=0;i<2;++i) { after=DesktopPoint(list,i+1);
+            Check(after.x==neighbours[i].x && after.y==neighbours[i].y,"a drop into an empty edge cell preserves the next column and row"); }
+        ListView_SetItemState(list,0,0,LVIS_SELECTED|LVIS_FOCUSED); SetFocus(parent);
+        DesktopIconsDestroy(testDesktopIcons); testDesktopIcons=NULL;
+        testDesktopIcons=DesktopIconsCreate(list,profile); DesktopIconsConfigure(testDesktopIcons,FALSE,FALSE,TRUE,step,80); DesktopPump();
+        after=DesktopPoint(list,0); Check(after.x==target.x && after.y==target.y,"the edge position survives deselection and reloading the saved grid");
+        /* The drop itself has priority: only the occupied neighbour moves,
+         * and its nearest free place can be the now-vacant edge cell. */
+        SetFocus(list); ListView_SetItemState(list,0,LVIS_SELECTED|LVIS_FOCUSED,LVIS_SELECTED|LVIS_FOCUSED);
+        DesktopBegin(parent,list,0); SendMessageA(list,WM_LBUTTONUP,0,MAKELPARAM(neighbours[0].x,neighbours[0].y));
+        after=DesktopPoint(list,0); Check(after.x==neighbours[0].x && after.y==neighbours[0].y,"dropping on an occupied grid cell places the dragged icon in the requested cell");
+        after=DesktopPoint(list,1);
+        if(after.x!=target.x || after.y!=target.y) { char note[160]; wsprintfA(note,"Grid neighbour: size=%d step=%d original=%ld,%ld expected=%ld,%ld actual=%ld,%ld\r\n",size,step,neighbours[0].x,neighbours[0].y,target.x,target.y,after.x,after.y); Log(note); }
+        Check(after.x==target.x && after.y==target.y,"only the obstructing neighbour moves into the vacated edge cell");
+        after=DesktopPoint(list,2); Check(after.x==neighbours[1].x && after.y==neighbours[1].y,"resolving an occupied grid drop preserves the adjacent row");
+        DesktopIconsDestroy(testDesktopIcons); testDesktopIcons=NULL;
+        SetWindowLongPtrA(list,GWLP_WNDPROC,(LONG_PTR)testDesktopListProc); DestroyWindow(parent); ImageList_Destroy(images);
+        Check(DeleteFileA(layout),"remove only our grid edge layout fixture");
+    }
+}
 static void DesktopIconTests(const char *directory)
 {
     WNDCLASSA cls; HWND parent, list; HIMAGELIST images; char profile[MAX_PATH], layout[MAX_PATH]; POINT a, b, saved; RECT bounds, area;
@@ -266,4 +316,5 @@ static void DesktopIconTests(const char *directory)
     DesktopIconsDestroy(testDesktopIcons); testDesktopIcons = NULL;
     SetWindowLongPtrA(list,GWLP_WNDPROC,(LONG_PTR)testDesktopListProc); DestroyWindow(parent); ImageList_Destroy(images); DeleteFileA(layout);
     DesktopGridLabelTests(directory);
+    DesktopGridEdgeTests(directory);
 }
