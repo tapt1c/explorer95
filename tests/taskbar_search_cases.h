@@ -14,6 +14,32 @@ static HWND SearchStatus(const char *expected)
     } while(GetTickCount()-started<4000);
     Log("Search status: "); Log(text); Log("\r\n"); return NULL;
 }
+static BOOL SearchFieldPainted(HWND bar)
+{
+    HWND combo=GetDlgItem(GetDlgItem(bar,ID_SEARCHBOX),2),edit=FindWindowExA(combo,NULL,"EDIT",NULL);
+    RECT rect; HDC dc; int x,y,samples=0; BOOL painted=IsWindowVisible(edit);
+    GetClientRect(edit,&rect); dc=GetDC(edit);
+    /* The field is empty for band-drag checks. Ignore its icon, border and caret. */
+    for(y=2;y<rect.bottom-2;y+=3) for(x=28;x<rect.right-3;x+=3) {
+        ++samples; if(GetPixel(dc,x,y)!=GetSysColor(COLOR_WINDOW)) painted=FALSE;
+    }
+    ReleaseDC(edit,dc); return painted && samples>0;
+}
+static void SearchSurfaceCheck(HWND popup)
+{
+    HWND status=GetDlgItem(popup,3); RECT rect; HDC dc; HBRUSH marker=CreateSolidBrush(RGB(251,3,239));
+    COLORREF pixel; DWORD started;
+    GetClientRect(status,&rect); rect.left=rect.right-6; rect.top=1; rect.bottom=5;
+    dc=GetDC(status); FillRect(dc,&rect,marker); GetPixel(dc,rect.left+1,2); ReleaseDC(status,dc); DeleteObject(marker);
+    RedrawWindow(popup,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_ALLCHILDREN|RDW_UPDATENOW);
+    started=GetTickCount();
+    do {
+        dc=GetDC(status); pixel=GetPixel(dc,rect.left+1,2); ReleaseDC(status,dc);
+        if(pixel==GetSysColor(COLOR_WINDOW)) break;
+        PumpFor(10);
+    } while(GetTickCount()-started<250);
+    Check(pixel==GetSysColor(COLOR_WINDOW),"search header repaint restores a clean white surface rather than a gray block or stale pixels");
+}
 static void SearchFocus(HWND bar)
 {
     HWND combo=GetDlgItem(GetDlgItem(bar,ID_SEARCHBOX),2); DWORD started=GetTickCount(),settled=0;
@@ -46,16 +72,24 @@ static void __attribute__((noinline)) TaskbarSearchTests(HWND bar,const char *di
     if(!wasEnabled) SendMessageA(bar,WM_COMMAND,ID_SEARCHBAR,0);
     host=GetDlgItem(bar,ID_SEARCHBOX);
     Check(host && IsWindowVisible(host),"the optional native combo search box appears beside Start");
+    Check(!GetDlgItem(host,1) && IsWindowVisible(GetDlgItem(FindWindowExA(GetDlgItem(host,2),NULL,"EDIT",NULL),1)),
+        "search uses an icon inside its native edit and has no separate text label");
     SearchInput(bar,"6/2"); popup=SearchStatus("3");
     Check(popup!=NULL,"typing an expression shows its result in the compact search popup");
     GetWindowRect(popup,&rect); SystemParametersInfoA(SPI_GETWORKAREA,0,&area,0);
     Check(rect.right-rect.left<=320 && rect.bottom-rect.top<=260 && rect.left>=area.left && rect.right<=area.right && rect.top>=area.top && rect.bottom<=area.bottom,
         "search results stay compact and inside the work area");
+    { RECT copy; GetWindowRect(GetDlgItem(popup,5),&copy);
+      Check(copy.right-copy.left<(rect.right-rect.left)*3/4 && !IsWindowVisible(GetDlgItem(popup,4)),
+          "a calculation uses a compact Copy button and hides the program list"); }
+    SearchSurfaceCheck(popup); SaveScreen("build/taskbar-search-calculation.bmp");
     SendMessageA(GetDlgItem(popup,5),BM_CLICK,0,0);
     { HANDLE data; const char *text;
       Check(OpenClipboard(NULL),"open only the disposable test session's calculation result"); data=GetClipboardData(CF_TEXT); text=data ? GlobalLock(data) : NULL;
       Check(text && !lstrcmpA(text,"3"),"Copy result places the calculated value on the clipboard"); if(text) GlobalUnlock(data); CloseClipboard(); }
     SearchInput(bar,"6/0"); Check(SearchStatus("Cannot divide by zero.")!=NULL,"division by zero displays an error without running a command");
+    Check(!IsWindowVisible(GetDlgItem(popup,5)) && !IsWindowVisible(GetDlgItem(popup,4)),"switching from a result to an error removes both obsolete controls");
+    SearchSurfaceCheck(popup);
     SearchEnter(bar); Check(SendMessageA(bar,WM_NULL,0,0)==0,"the shell remains responsive after Enter on division by zero");
     { HWND external=CreateWindowA("STATIC","Search activation fixture",WS_OVERLAPPEDWINDOW|WS_VISIBLE,100,100,160,80,NULL,NULL,GetModuleHandleA(NULL),NULL);
       SetForegroundWindow(external); started=GetTickCount();
@@ -77,6 +111,7 @@ static void __attribute__((noinline)) TaskbarSearchTests(HWND bar,const char *di
     do { PumpFor(20); popup=FindWindowA("Explorer95.TaskbarSearchResults",NULL); }
     while((!IsWindowVisible(popup) || SendDlgItemMessageA(popup,4,LB_GETCOUNT,0,0)<2) && GetTickCount()-started<5000);
     Check(IsWindowVisible(popup) && SendDlgItemMessageA(popup,4,LB_GETCOUNT,0,0)>=2,"search discovers an actual nested All Programs shortcut by its visible label");
+    SearchSurfaceCheck(popup);
     SendMessageA(popup,WM_NULL,0,0); PumpFor(200);
     SaveScreen("build/taskbar-search-programs.bmp"); SearchEnter(bar);
     launched=WaitFor("Explorer95.SmokeChild","Explorer95 smoke child");

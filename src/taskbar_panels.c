@@ -556,12 +556,12 @@ static void LayoutContents(FolderPanel *panel)
     }
     Tooltips(panel,FALSE); InvalidateRect(panel->window,NULL,FALSE);
 }
-static void Place(FolderPanel *panel,int begin,int extent,int cross,BOOL vertical)
+static void Place(FolderPanel *panel,int begin,int extent,int cross,BOOL vertical,int origin)
 {
     BOOL moved; RECT previous;
     GetClientRect(panel->window,&previous);
     panel->vertical=vertical; panel->extent=extent;
-    moved=EnvMoveControl(panel->window,vertical ? 3 : begin,vertical ? begin : 3,vertical ? cross-6 : extent,vertical ? extent : cross-6);
+    moved=EnvMoveControl(panel->window,vertical ? origin+3 : begin,vertical ? begin : origin+3,vertical ? cross-6 : extent,vertical ? extent : cross-6);
     EnvShowControl(panel->window,extent>0);
     /* WM_SIZE covers resizing. A position-only move must also move the
      * ordinary BUTTON siblings, whose coordinates belong to env.bar. */
@@ -583,7 +583,7 @@ int TaskbarFoldersLayout(int begin,int end,int cross,BOOL vertical)
         if(available<0) available=0;
         available/=remaining; --remaining;
         size=panel->config.size; if(size>available) size=available; if(size<24) size=0;
-        if(size) { end-=size; Place(panel,end,size,cross,vertical); end-=3; }
+        if(size) { end-=size; Place(panel,end,size,cross,vertical,0); end-=3; }
         else EnvShowControl(panel->window,FALSE);
     }
     return end;
@@ -603,7 +603,7 @@ int TaskbarPinsLayout(int begin,int end,int cross,BOOL vertical)
     /* The shared strip needs both arrows and one complete icon when crowded. */
     if(size>available) size=available;
     if(size<20 || (size<DesiredPins(cross-6,vertical) && size<minimum)) size=0;
-    Place(&panels[0],begin,size,cross,vertical); return begin+(size ? size+4 : 0);
+    Place(&panels[0],begin,size,cross,vertical,0); return begin+(size ? size+4 : 0);
 }
 static BandPosition Position(int band)
 {
@@ -663,16 +663,15 @@ BOOL TaskbarBandsLayout(int begin,int end,int cross,BOOL vertical)
             else SetRect(rect,along,row*cell+3,along+size,row*cell+contentCross-3);
             if(id<0) EnvQuickBandLayout(along,along+size,contentCross,vertical,row*cell);
             else {
-                FolderPanel *panel=&panels[id]; int grip=!id && !env.options.locked ? 8 : 0; POINT offset;
+                FolderPanel *panel=&panels[id]; int grip=!id && !env.options.locked ? 8 : 0;
                 if(!id) {
                     panel->singleRow=TRUE; EnvShowControl(taskGrip,grip!=0 && size>=8);
                     if(grip) EnvMoveControl(taskGrip,rect->left,rect->top,vertical ? rect->right-rect->left : 8,vertical ? 8 : rect->bottom-rect->top);
                 }
-                if(size<24+grip) { Place(panel,along,0,contentCross,vertical); continue; }
-                Place(panel,along+grip,size-grip,contentCross,vertical);
-                offset.x=vertical ? row*cell+3 : along+grip; offset.y=vertical ? along+grip : row*cell+3;
-                EnvMoveControl(panel->window,offset.x,offset.y,vertical ? contentCross-6 : size-grip,vertical ? size-grip : contentCross-6);
-                LayoutContents(panel);
+                /* Place directly in the destination row. An intermediate move
+                 * through row zero damages Start/search on old USER32 and also
+                 * lays out borrowed task BUTTONs at the wrong screen origin. */
+                Place(panel,along+grip,size<24+grip ? 0 : size-grip,contentCross,vertical,row*cell);
             }
             along+=size+3;
         }

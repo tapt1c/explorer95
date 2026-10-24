@@ -216,8 +216,10 @@ static void PreviewTaskbar(HDC dc, const RECT *bounds, BOOL sampleTasks)
     if(Checked(env.properties,ID_SEARCHBAR)) {
         SetRect(&part,begin,bounds->top+4,begin+112,bounds->top+23);
         FillRect(dc,&part,(HBRUSH)(COLOR_WINDOW+1)); DrawEdge(dc,&part,EDGE_SUNKEN,BF_RECT);
-        part.left+=4; SetTextColor(dc,GetSysColor(COLOR_GRAYTEXT)); SetBkMode(dc,TRANSPARENT);
-        DrawTextA(dc,"Search:",-1,&part,DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX); begin+=116;
+        { HICON searchIcon=EnvSystemIcon(23);
+          if(searchIcon) { DrawIconEx(dc,part.left+3,part.top+1,searchIcon,16,16,0,NULL,DI_NORMAL); DestroyIcon(searchIcon); } }
+        part.left=part.right-17; DrawFrameControl(dc,&part,DFC_SCROLL,DFCS_SCROLLCOMBOBOX);
+        begin+=116;
     }
     if (quick) {
         HICON icon = EnvSystemIcon(35);

@@ -333,6 +333,15 @@ static void LanguageRestartTests(const char *directory,const char *executable)
         SendMessageA(dialog,WM_COMMAND,IDCANCEL,0); /* Cleanup only; never select a power command. */
     }
     {
+        HWND popup; RECT button,frame;
+        SearchInput(bar,"2+4"); popup=SearchStatus("6");
+        Check(popup!=NULL,"the Russian taskbar shows the compact calculation result");
+        SearchSurfaceCheck(popup); GetWindowRect(popup,&frame); GetWindowRect(GetDlgItem(popup,5),&button);
+        Check(button.right<=frame.right-4 && button.left>frame.left && button.right-button.left<(frame.right-frame.left)*3/4,
+            "the translated Copy result button fits its compact footer");
+        SaveScreen("build/taskbar-search-ru.bmp"); SearchInput(bar,""); PumpFor(50);
+    }
+    {
         HWND browser=WaitFor(BROWSER_CLASS,NULL); Check(browser!=NULL,"the Russian shell opens its own filesystem browser"); PumpFor(400);
         Check(LanguageWideEqual(GetDlgItem(browser,ID_GO),L"\u041f\u0435\u0440\u0435\u0445\u043e\u0434"),"the Explorer address bar uses Russian commands");
         BrowserToolbarGeometry(browser,process.hProcess,16);

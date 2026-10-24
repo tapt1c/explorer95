@@ -3,6 +3,7 @@ static void BandDragTo(HWND grip,POINT destination,BOOL cancel)
     RECT rect; GetWindowRect(grip,&rect); SetCursorPos(rect.left+4,(rect.top+rect.bottom)/2); PumpFor(60);
     mouse_event(MOUSEEVENTF_LEFTDOWN,0,0,0,0); PumpFor(40);
     SetCursorPos(destination.x,destination.y); PumpFor(120);
+    Check(SearchFieldPainted(GetParent(grip)),"the search edit stays fully painted while a toolbar grip is held in its new row");
     if(cancel) { keybd_event(VK_ESCAPE,0,0,0); keybd_event(VK_ESCAPE,0,KEYEVENTF_KEYUP,0); PumpFor(80); }
     mouse_event(MOUSEEVENTF_LEFTUP,0,0,0,0); PumpFor(120);
 }
@@ -22,9 +23,12 @@ static void __attribute__((noinline)) TaskbarBandsTests(HWND bar,const char *set
 {
     BOOL locked=GetPrivateProfileIntA("Taskbar","Locked",TRUE,settings),quick=GetPrivateProfileIntA("Taskbar","QuickLaunch",FALSE,settings);
     BOOL firstEnabled=GetPrivateProfileIntA("TaskbarToolbars","Enabled0",TRUE,settings),secondEnabled=GetPrivateProfileIntA("TaskbarToolbars","Enabled1",TRUE,settings);
+    BOOL searchEnabled=GetPrivateProfileIntA("Taskbar","SearchBox",TRUE,settings);
     int rows=GetPrivateProfileIntA("Taskbar","Rows",1,settings); UINT order; RECT bounds,first,second,before; POINT destination;
     HWND panel=GetDlgItem(bar,ID_TASKBAR_FOLDER),other=GetDlgItem(bar,ID_TASKBAR_FOLDER+1),grip=GetDlgItem(bar,ID_TASKBAR_TASKGRIP);
     if(locked) SendMessageA(bar,WM_COMMAND,ID_LOCK,0);
+    if(!searchEnabled) SendMessageA(bar,WM_COMMAND,ID_SEARCHBAR,0);
+    SearchInput(bar,"");
     SendMessageA(bar,WM_COMMAND,ID_ROWS_MENU+2,0);
     if(!firstEnabled) SendMessageA(bar,WM_COMMAND,ID_TOOLBAR_TOGGLE,0);
     if(!secondEnabled) SendMessageA(bar,WM_COMMAND,ID_TOOLBAR_TOGGLE+1,0);
@@ -47,9 +51,16 @@ static void __attribute__((noinline)) TaskbarBandsTests(HWND bar,const char *set
     BandDragTo(grip,destination,FALSE);
     Check(GetPrivateProfileIntA("TaskbarToolbars","TasksRow",99,settings)==0,"the task and pin strip has its own movable grip and saved row");
     if(!quick) SendMessageA(bar,WM_COMMAND,ID_QUICK,0);
+    /* At 640px the enabled search plus two wide folder bands can hide the
+     * Quick Launch grip. Reserve room for real input, keeping search visible. */
+    SendMessageA(bar,WM_COMMAND,ID_TOOLBAR_TOGGLE,0);
+    SendMessageA(bar,WM_COMMAND,ID_TOOLBAR_TOGGLE+1,0);
+    Check(IsWindowVisible(GetDlgItem(bar,ID_QUICKGRIP)),"Quick Launch has a visible grip before its real drag with search enabled");
     destination.x=bounds.left+72; destination.y=bounds.top+40;
     BandDragTo(GetDlgItem(bar,ID_QUICKGRIP),destination,FALSE);
     Check(GetPrivateProfileIntA("TaskbarToolbars","QuickRow",99,settings)==1,"Quick Launch participates in the same drag and row arrangement");
+    SendMessageA(bar,WM_COMMAND,ID_TOOLBAR_TOGGLE,0);
+    SendMessageA(bar,WM_COMMAND,ID_TOOLBAR_TOGGLE+1,0);
     SaveScreen("build/taskbar-bands.bmp");
     SendMessageA(bar,WM_COMMAND,ID_LOCK,0); GetWindowRect(panel,&before); BandDragTo(panel,destination,FALSE); GetWindowRect(panel,&first);
     Check(EqualRect(&before,&first),"locking the taskbar blocks toolbar rearrangement");
@@ -60,6 +71,7 @@ static void __attribute__((noinline)) TaskbarBandsTests(HWND bar,const char *set
     if(!firstEnabled) SendMessageA(bar,WM_COMMAND,ID_TOOLBAR_TOGGLE,0);
     if(!secondEnabled) SendMessageA(bar,WM_COMMAND,ID_TOOLBAR_TOGGLE+1,0);
     SendMessageA(bar,WM_COMMAND,ID_ROWS_MENU+rows,0);
+    if(!searchEnabled) SendMessageA(bar,WM_COMMAND,ID_SEARCHBAR,0);
     if(locked) SendMessageA(bar,WM_COMMAND,ID_LOCK,0);
 }
 static int bandRestartRows,bandRestartEdge;

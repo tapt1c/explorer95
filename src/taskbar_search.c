@@ -4,13 +4,17 @@
 #include "taskbar_query.h"
 #include "render_trace.h"
 #include "localization.h"
+#include "paint.h"
 
 #define RESULT_LIMIT 8
 #define WALK_LIMIT 16
 typedef struct SearchResult { char path[MAX_PATH],arguments[512],label[MAX_PATH]; HICON icon; } SearchResult;
 typedef struct SearchWalk { char directory[MAX_PATH]; HANDLE find; } SearchWalk;
 static struct {
-    HWND host,label,combo,edit,popup,status,list,copy;
+    HWND host,combo,edit,icon,popup,status,list,copy;
+    HICON searchIcon;
+    HFONT answerFont;
+    PaintBuffer hostPaint,popupPaint,rowPaint;
     WNDPROC original;
     SearchResult results[RESULT_LIMIT]; int count,calculation,depth,visited,root;
     SearchWalk walk[WALK_LIMIT]; char roots[2][MAX_PATH],query[512],answer[64];
@@ -112,7 +116,9 @@ static void BeginSearch(void)
 }
 static void ShowResults(void)
 {
-    RECT field,area; int width=310,height=search.calculation==QUERY_COMMAND ? 66+(search.count+1)*24 : 98,x,y,i,selected;
+    RECT field,area,client; SIZE text; HDC dc; HGDIOBJ old;
+    BOOL visible=IsWindowVisible(search.popup),command=search.calculation==QUERY_COMMAND;
+    int width=command ? 300 : 248,height=command ? 34+(search.count+1)*24 : search.calculation==QUERY_VALUE ? 88 : 60,x,y,i,selected;
     const char *status=search.calculation==QUERY_VALUE ? search.answer : search.calculation==QUERY_ZERO ? UiText("Cannot divide by zero.") :
         search.calculation==QUERY_RANGE ? UiText("Number is too large.") : search.calculation==QUERY_INVALID ? UiText("Invalid expression.") :
         UiText(search.scanning ? "Searching Start menu..." : search.count ? "Programs" : "Run a command or open an address");
@@ -127,18 +133,32 @@ static void ShowResults(void)
     if(x<area.left) x=area.left;
     if(y+height>area.bottom) y=area.bottom-height;
     if(y<area.top) y=area.top;
-    SetWindowPos(search.popup,HWND_TOPMOST,x,y,width,height,SWP_NOACTIVATE);
-    UiSetWindowTextA(search.status,status); MoveWindow(search.status,8,8,width-20,30,TRUE);
+    /* Keep the old complete frame until geometry, text and list data agree.
+     * Win95 may paint native children synchronously during these operations. */
+    if(visible) SendMessageA(search.popup,WM_SETREDRAW,FALSE,0);
+    SetWindowPos(search.popup,HWND_TOPMOST,x,y,width,height,SWP_NOACTIVATE|SWP_NOCOPYBITS);
+    GetClientRect(search.popup,&client);
+    UiSetWindowTextA(search.status,status);
+    EnvMoveControl(search.status,6,4,client.right-12,command ? 22 : 46);
     selected=(int)SendMessageA(search.list,LB_GETCURSEL,0,0);
     SendMessageA(search.list,WM_SETREDRAW,FALSE,0); SendMessageA(search.list,LB_RESETCONTENT,0,0);
-    SendMessageA(search.list,LB_ADDSTRING,0,(LPARAM)0);
-    for(i=0;i<search.count;++i) SendMessageA(search.list,LB_ADDSTRING,0,(LPARAM)(i+1));
-    if(selected<0 || (selected==0 && search.count && !search.navigated)) selected=search.count ? 1 : 0;
+    if(command) {
+        SendMessageA(search.list,LB_ADDSTRING,0,(LPARAM)0);
+        for(i=0;i<search.count;++i) SendMessageA(search.list,LB_ADDSTRING,0,(LPARAM)(i+1));
+    }
+    if(!search.navigated || selected<0 || selected>search.count) selected=search.count ? 1 : 0;
     SendMessageA(search.list,LB_SETCURSEL,selected,0); SendMessageA(search.list,WM_SETREDRAW,TRUE,0);
-    MoveWindow(search.list,6,40,width-16,height-48,TRUE);
-    ShowWindow(search.list,search.calculation==QUERY_COMMAND ? SW_SHOWNA : SW_HIDE);
-    MoveWindow(search.copy,8,48,width-20,26,TRUE); ShowWindow(search.copy,search.calculation==QUERY_VALUE ? SW_SHOWNA : SW_HIDE);
-    ShowWindow(search.popup,SW_SHOWNOACTIVATE); InvalidateRect(search.list,NULL,FALSE);
+    EnvMoveControl(search.list,4,28,client.right-8,(search.count+1)*24);
+    EnvShowControl(search.list,command);
+    dc=GetDC(search.copy); old=SelectObject(dc,UiFont(env.host.font));
+    UiGetTextExtentPoint32A(dc,UiText("Copy result"),lstrlenA(UiText("Copy result")),&text);
+    SelectObject(dc,old); ReleaseDC(search.copy,dc);
+    if(text.cx>client.right-40) text.cx=client.right-40;
+    EnvMoveControl(search.copy,client.right-text.cx-28,58,text.cx+20,22);
+    EnvShowControl(search.copy,search.calculation==QUERY_VALUE);
+    if(visible) SendMessageA(search.popup,WM_SETREDRAW,TRUE,0);
+    else ShowWindow(search.popup,SW_SHOWNOACTIVATE);
+    RedrawWindow(search.popup,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_FRAME|RDW_ALLCHILDREN|RDW_UPDATENOW);
 }
 static void CopyAnswer(void)
 {
@@ -214,8 +234,47 @@ static BOOL Key(UINT key)
     }
     return FALSE;
 }
+static void LayoutEditIcon(void)
+{
+    RECT rect; int top;
+    if(!search.icon) return;
+    GetClientRect(search.edit,&rect);
+    top=(rect.bottom-16)/2; if(top<0) top=0;
+    EnvMoveControl(search.icon,1,top,18,16);
+    SendMessageA(search.edit,EM_SETMARGINS,EC_LEFTMARGIN,MAKELPARAM(22,0));
+}
+static void DrawStatus(const DRAWITEMSTRUCT *item)
+{
+    RECT rect=item->rcItem,text=rect; char status[160]; HGDIOBJ old;
+    HDC dc=PaintBufferBegin(&search.rowPaint,item->hDC,&rect);
+    FillRect(dc,&rect,(HBRUSH)(COLOR_WINDOW+1)); SetBkMode(dc,TRANSPARENT);
+    old=SelectObject(dc,env.host.font); SetTextColor(dc,GetSysColor(COLOR_WINDOWTEXT));
+    if(search.calculation==QUERY_VALUE) {
+        text.left+=4; text.right-=4; text.bottom=text.top+16;
+        UiDrawNativeTextA(dc,search.query,-1,&text,DT_SINGLELINE|DT_NOPREFIX|DT_END_ELLIPSIS);
+        text.top=text.bottom+2; text.bottom=rect.bottom;
+        if(search.answerFont) SelectObject(dc,search.answerFont);
+        DrawTextA(dc,search.answer,-1,&text,DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX|DT_END_ELLIPSIS);
+    } else {
+        if(search.searchIcon) DrawIconEx(dc,rect.left+2,rect.top+3,search.searchIcon,16,16,0,NULL,DI_NORMAL);
+        text.left+=24; text.right-=2;
+        UiGetWindowTextA(search.status,status,sizeof(status));
+        UiDrawTextA(dc,status,-1,&text,search.calculation==QUERY_COMMAND ? DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX|DT_END_ELLIPSIS : DT_WORDBREAK|DT_NOPREFIX);
+    }
+    SelectObject(dc,old); PaintBufferEnd(&search.rowPaint,item->hDC,&rect);
+}
 static LRESULT CALLBACK EditProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
 {
+    if(message==WM_DRAWITEM && ((DRAWITEMSTRUCT *)lp)->hwndItem==search.icon) {
+        DRAWITEMSTRUCT *item=(DRAWITEMSTRUCT *)lp;
+        FillRect(item->hDC,&item->rcItem,(HBRUSH)(COLOR_WINDOW+1));
+        if(search.searchIcon) DrawIconEx(item->hDC,1,0,search.searchIcon,16,16,0,NULL,DI_NORMAL);
+        return TRUE;
+    }
+    if(message==WM_COMMAND && (HWND)lp==search.icon) { SetFocus(window); return 0; }
+    if(message==WM_SIZE || message==WM_SETFONT) {
+        LRESULT result=CallWindowProcA(search.original,window,message,wp,lp); LayoutEditIcon(); return result;
+    }
     if(message==WM_KEYDOWN && wp==VK_RETURN && (lp&(1UL<<30))) return 0;
     if(message==WM_KEYDOWN && Key((UINT)wp)) return 0;
     if(message==WM_CHAR && (wp==VK_RETURN || wp==VK_ESCAPE)) return 0;
@@ -241,73 +300,102 @@ static LRESULT CALLBACK SearchProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
     case WM_ACTIVATE:
         if(window==search.popup && LOWORD(wp)==WA_INACTIVE && (HWND)lp!=env.bar) TaskbarSearchHide();
         break;
+    case WM_ERASEBKGND: return TRUE;
+    case WM_PAINT: {
+        PAINTSTRUCT paint; RECT rect,line; HDC target=BeginPaint(window,&paint),dc;
+        BOOL popup=window==search.popup;
+        GetClientRect(window,&rect);
+        dc=PaintBufferBegin(popup ? &search.popupPaint : &search.hostPaint,target,&rect);
+        FillRect(dc,&rect,(HBRUSH)(INT_PTR)((popup ? COLOR_WINDOW : COLOR_BTNFACE)+1));
+        if(popup) {
+            DrawEdge(dc,&rect,BDR_RAISEDINNER,BF_RECT);
+            line=rect; line.left+=6; line.right-=6;
+            line.top=search.calculation==QUERY_COMMAND ? 26 : 54; line.bottom=line.top+2;
+            if(search.calculation==QUERY_COMMAND || search.calculation==QUERY_VALUE) DrawEdge(dc,&line,EDGE_ETCHED,BF_TOP);
+        }
+        PaintBufferEnd(popup ? &search.popupPaint : &search.hostPaint,target,&rect); EndPaint(window,&paint); return 0;
+    }
     case WM_MEASUREITEM: ((MEASUREITEMSTRUCT *)lp)->itemHeight=24; return TRUE;
     case WM_DRAWITEM: {
         DRAWITEMSTRUCT *item=(DRAWITEMSTRUCT *)lp; RECT rect=item->rcItem; SearchResult *result=NULL;
-        BOOL selected=!!(item->itemState&ODS_SELECTED); HGDIOBJ old;
+        BOOL selected=!!(item->itemState&ODS_SELECTED); HGDIOBJ old; HDC dc;
+        if(item->CtlID==3) { DrawStatus(item); return TRUE; }
         if(item->itemID==(UINT)-1) return TRUE;
         if(item->itemID>0 && item->itemID<=(UINT)search.count) result=&search.results[item->itemID-1];
-        FillRect(item->hDC,&rect,(HBRUSH)(INT_PTR)((selected ? COLOR_HIGHLIGHT : COLOR_WINDOW)+1));
-        if(result && result->icon) DrawIconEx(item->hDC,rect.left+4,rect.top+4,result->icon,16,16,0,NULL,DI_NORMAL);
+        dc=PaintBufferBegin(&search.rowPaint,item->hDC,&rect);
+        FillRect(dc,&rect,(HBRUSH)(INT_PTR)((selected ? COLOR_HIGHLIGHT : COLOR_WINDOW)+1));
+        if(result && result->icon) DrawIconEx(dc,rect.left+4,rect.top+4,result->icon,16,16,0,NULL,DI_NORMAL);
+        if(!result && search.searchIcon) DrawIconEx(dc,rect.left+4,rect.top+4,search.searchIcon,16,16,0,NULL,DI_NORMAL);
         rect.left+=26; rect.right-=4;
-        old=SelectObject(item->hDC,result ? env.host.font : UiFont(env.host.font));
-        SetBkMode(item->hDC,TRANSPARENT); SetTextColor(item->hDC,GetSysColor(selected ? COLOR_HIGHLIGHTTEXT : COLOR_WINDOWTEXT));
-        if(result) UiDrawNativeTextA(item->hDC,result->label,-1,&rect,DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX|DT_END_ELLIPSIS);
-        else DrawTextA(item->hDC,UiText("Run entered command"),-1,&rect,DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX);
-        SelectObject(item->hDC,old); return TRUE;
+        old=SelectObject(dc,result ? env.host.font : UiFont(env.host.font));
+        SetBkMode(dc,TRANSPARENT); SetTextColor(dc,GetSysColor(selected ? COLOR_HIGHLIGHTTEXT : COLOR_WINDOWTEXT));
+        if(result) UiDrawNativeTextA(dc,result->label,-1,&rect,DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX|DT_END_ELLIPSIS);
+        else UiDrawTextA(dc,UiText("Run entered command"),-1,&rect,DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX|DT_END_ELLIPSIS);
+        SelectObject(dc,old); PaintBufferEnd(&search.rowPaint,item->hDC,&item->rcItem); return TRUE;
     }
-    case WM_SYSCOLORCHANGE: InvalidateRect(window,NULL,TRUE); break;
+    case WM_SYSCOLORCHANGE: RedrawWindow(window,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_ALLCHILDREN); break;
     }
     return DefWindowProcA(window,message,wp,lp);
 }
 BOOL TaskbarSearchCreate(void)
 {
+    LOGFONTA font;
     if(!EnvRegister("Explorer95.SearchBox",SearchProc,(HBRUSH)(COLOR_BTNFACE+1),0) ||
        !EnvRegister("Explorer95.TaskbarSearchResults",SearchProc,(HBRUSH)(COLOR_WINDOW+1),0)) {
         RenderTraceShell("search.register",E_FAIL,GetLastError(),0); return FALSE;
     }
-    search.host=EnvControl(env.bar,"Explorer95.SearchBox","",WS_CLIPCHILDREN,ID_SEARCHBOX);
-    search.label=EnvControl(search.host,"STATIC","Search:",SS_CENTERIMAGE,1);
-    search.combo=EnvControl(search.host,"COMBOBOX","",WS_TABSTOP|CBS_DROPDOWN|CBS_AUTOHSCROLL,2);
-    search.edit=GetWindow(search.combo,GW_CHILD);
+    search.host=EnvControl(env.bar,"Explorer95.SearchBox","",WS_CLIPCHILDREN|WS_CLIPSIBLINGS,ID_SEARCHBOX);
+    search.combo=EnvControl(search.host,"COMBOBOX","",WS_TABSTOP|WS_CLIPCHILDREN|WS_CLIPSIBLINGS|CBS_DROPDOWN|CBS_AUTOHSCROLL,2);
+    search.edit=FindWindowExA(search.combo,NULL,"EDIT",NULL);
     search.popup=CreateWindowExA(WS_EX_TOOLWINDOW|WS_EX_TOPMOST,"Explorer95.TaskbarSearchResults","",WS_POPUP|WS_BORDER|WS_CLIPCHILDREN,0,0,310,200,env.bar,NULL,env.host.instance,NULL);
-    search.status=EnvControl(search.popup,"STATIC","",0,3);
-    search.list=EnvControl(search.popup,"LISTBOX","",WS_TABSTOP|LBS_NOTIFY|LBS_OWNERDRAWFIXED|WS_VSCROLL,4);
+    search.status=EnvControl(search.popup,"STATIC","",SS_OWNERDRAW,3);
+    search.list=EnvControl(search.popup,"LISTBOX","",WS_TABSTOP|LBS_NOTIFY|LBS_OWNERDRAWFIXED|LBS_NOINTEGRALHEIGHT|WS_VSCROLL,4);
     search.copy=EnvControl(search.popup,"BUTTON","Copy result",WS_TABSTOP,5);
-    if(!search.host || !search.combo || !search.edit || !search.popup || !search.list) {
+    if(!search.host || !search.combo || !search.edit || !search.popup || !search.status || !search.list || !search.copy) {
         RenderTraceShell("search.create",E_FAIL,GetLastError(),(search.host ? 1 : 0)|(search.combo ? 2 : 0)|(search.edit ? 4 : 0)|(search.popup ? 8 : 0)|(search.list ? 16 : 0));
         return FALSE;
     }
     SendMessageA(search.combo,CB_LIMITTEXT,sizeof(search.query)-1,0);
     search.original=(WNDPROC)SetWindowLongPtrA(search.edit,GWLP_WNDPROC,(LONG_PTR)EditProc);
+    if(!search.original) return FALSE;
+    SetWindowLongA(search.edit,GWL_STYLE,GetWindowLongA(search.edit,GWL_STYLE)|WS_CLIPCHILDREN);
+    search.searchIcon=EnvSystemIcon(23);
+    search.icon=EnvControl(search.edit,"STATIC","",SS_OWNERDRAW|SS_NOTIFY,1);
+    if(!search.icon) return FALSE;
+    ZeroMemory(&font,sizeof(font)); GetObjectA(env.host.font,sizeof(font),&font);
+    font.lfHeight=-20; font.lfWeight=FW_BOLD; search.answerFont=CreateFontIndirectA(&font);
+    LayoutEditIcon();
     return TRUE;
 }
 int TaskbarSearchLayout(int begin,int end,int cross,BOOL vertical)
 {
-    int size=end-begin-70,label=vertical ? 0 : 44,height=22;
+    int size=end-begin-70,height=22; BOOL changed;
     int rowHeight=vertical ? 26 : EnvBarButtonHeight(cross,env.options.rows),hostHeight,top; RECT combo; POINT origin;
-    if(size>190) size=190;
+    if(size>160) size=160;
     if(!env.options.searchBox || size<90) { EnvShowControl(search.host,FALSE); TaskbarSearchHide(); return begin; }
     EnvShowControl(search.host,TRUE);
     if(vertical) size=cross-6;
-    if(size<144) label=0;
     /* A native ComboBox chooses its collapsed height from its font/borders;
      * the requested window height is the drop-list preference, not this field. */
     GetWindowRect(search.combo,&combo);
     if(combo.right==combo.left || combo.bottom<=combo.top) {
-        EnvMoveControl(search.combo,label,0,size-label,height+180); GetWindowRect(search.combo,&combo);
+        EnvMoveControl(search.combo,0,0,size,height+180); GetWindowRect(search.combo,&combo);
     }
     height=combo.bottom-combo.top;
     if(height<1 || height>64) height=22;
     hostHeight=height>rowHeight ? height : rowHeight;
-    if(vertical) EnvMoveControl(search.host,3,begin,size,hostHeight);
-    else EnvMoveControl(search.host,begin,3+(rowHeight-hostHeight)/2,size,hostHeight);
+    if(vertical) changed=EnvMoveControl(search.host,3,begin,size,hostHeight);
+    else changed=EnvMoveControl(search.host,begin,3+(rowHeight-hostHeight)/2,size,hostHeight);
     top=(hostHeight-height)/2;
-    EnvShowControl(search.label,label!=0); EnvMoveControl(search.label,0,top+(height-20)/2,label,20);
     GetWindowRect(search.combo,&combo); origin.x=combo.left; origin.y=combo.top; ScreenToClient(search.host,&origin);
-    if(origin.x!=label || origin.y!=top || combo.right-combo.left!=size-label)
-        EnvMoveControl(search.combo,label,top,size-label,height+180);
-    return begin+(vertical ? 30 : size+4);
+    if(origin.x!=0 || origin.y!=top || combo.right-combo.left!=size)
+        changed|=EnvMoveControl(search.combo,0,top,size,height+180);
+    if(changed) {
+        LayoutEditIcon();
+        RedrawWindow(search.host,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_ALLCHILDREN|RDW_UPDATENOW);
+        if(TaskbarSearchActive()) ShowResults();
+    }
+    return begin+(vertical ? hostHeight+4 : size+4);
 }
 BOOL TaskbarSearchTranslate(MSG *message)
 {
@@ -320,8 +408,12 @@ BOOL TaskbarSearchTranslate(MSG *message)
 void TaskbarSearchDestroy(void)
 {
     TaskbarSearchHide(); ClearResults();
+    if(search.icon) DestroyWindow(search.icon);
     if(search.edit && search.original) SetWindowLongPtrA(search.edit,GWLP_WNDPROC,(LONG_PTR)search.original);
     if(search.popup) DestroyWindow(search.popup);
     if(search.host) DestroyWindow(search.host);
+    if(search.searchIcon) DestroyIcon(search.searchIcon);
+    if(search.answerFont) DeleteObject(search.answerFont);
+    PaintBufferFree(&search.hostPaint); PaintBufferFree(&search.popupPaint); PaintBufferFree(&search.rowPaint);
     ZeroMemory(&search,sizeof(search));
 }
