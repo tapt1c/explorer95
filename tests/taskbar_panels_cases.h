@@ -243,9 +243,62 @@ static void OversizedPanelTest(HWND bar,const char *settings)
     if(locked) SendMessageA(bar,WM_COMMAND,ID_LOCK,0);
     SendMessageA(bar,WM_COMMAND,ID_TOOLBAR_TOGGLE,0);
 }
+static BOOL PanelTreeLabel(HWND tree,HTREEITEM item,void *remote,char text[MAX_PATH])
+{
+    struct { TVITEMA item; char text[MAX_PATH]; } query;
+    ZeroMemory(&query,sizeof(query)); query.item.mask=TVIF_HANDLE|TVIF_TEXT; query.item.hItem=item;
+    query.item.pszText=(char *)remote+sizeof(query.item); query.item.cchTextMax=MAX_PATH;
+    if(!item || !WriteProcessMemory(process.hProcess,remote,&query,sizeof(query),NULL) ||
+        !SendMessageA(tree,TVM_GETITEMA,0,(LPARAM)remote)) return FALSE;
+    return ReadProcessMemory(process.hProcess,(char *)remote+sizeof(query.item),text,MAX_PATH,NULL);
+}
+static HTREEITEM PanelTreeChild(HWND tree,HTREEITEM parent,const char *name,const char *display,void *remote)
+{
+    HTREEITEM item; char label[MAX_PATH]; int count=0;
+    if(parent) SendMessageA(tree,TVM_EXPAND,TVE_EXPAND,(LPARAM)parent);
+    item=(HTREEITEM)SendMessageA(tree,TVM_GETNEXTITEM,parent ? TVGN_CHILD : TVGN_ROOT,(LPARAM)parent);
+    while(item && count++<4096) {
+        if(PanelTreeLabel(tree,item,remote,label) && (!lstrcmpiA(label,name) || (display && !lstrcmpiA(label,display)))) return item;
+        item=(HTREEITEM)SendMessageA(tree,TVM_GETNEXTITEM,TVGN_NEXT,(LPARAM)item);
+    }
+    return NULL;
+}
+static HTREEITEM PanelTreeFolder(HWND tree,const char *folder,void *remote)
+{
+    SHFILEINFOA info; LPITEMIDLIST computer; HTREEITEM root,parent; char path[MAX_PATH],name[MAX_PATH]; const char *next;
+    int length;
+    Check(folder[0] && folder[1]==':' && folder[2]=='\\',"the native chooser fixture uses our absolute filesystem path");
+    Check(SUCCEEDED(SHGetSpecialFolderLocation(NULL,CSIDL_DRIVES,&computer)),"obtain the native Computer display name for tree navigation");
+    ZeroMemory(&info,sizeof(info));
+    Check(SHGetFileInfoA((LPCSTR)computer,0,&info,sizeof(info),SHGFI_PIDL|SHGFI_DISPLAYNAME)!=0,"read Computer's public shell display name");
+    CoTaskMemFree(computer);
+    root=(HTREEITEM)SendMessageA(tree,TVM_GETNEXTITEM,TVGN_ROOT,0);
+    parent=PanelTreeChild(tree,NULL,info.szDisplayName,NULL,remote);
+    if(!parent) parent=PanelTreeChild(tree,root,info.szDisplayName,NULL,remote);
+    Check(parent!=NULL,"find Computer through public native tree labels");
+    path[0]=folder[0]; path[1]=':'; path[2]='\\'; path[3]=0; name[0]=folder[0]; name[1]=':'; name[2]=0;
+    ZeroMemory(&info,sizeof(info)); SHGetFileInfoA(path,0,&info,sizeof(info),SHGFI_DISPLAYNAME);
+    parent=PanelTreeChild(tree,parent,name,info.szDisplayName,remote);
+    Check(parent!=NULL,"expand only the fixture's filesystem drive in the native chooser");
+    next=folder+3;
+    while(*next) {
+        length=0; while(next[length] && next[length]!='\\') ++length;
+        Check(length>0 && length<MAX_PATH && lstrlenA(path)+length+1<MAX_PATH,"the next requested chooser path component fits its bounded buffer");
+        CopyMemory(name,next,length); name[length]=0;
+        lstrcatA(path,name); ZeroMemory(&info,sizeof(info)); SHGetFileInfoA(path,0,&info,sizeof(info),SHGFI_DISPLAYNAME);
+        parent=PanelTreeChild(tree,parent,name,info.szDisplayName,remote);
+        if(!parent) { Log("FAIL: native chooser cannot find the public path component: "); Log(name); Log("\r\n"); }
+        Check(parent!=NULL,"navigate the actual native tree one public folder component at a time");
+        next+=length; if(*next=='\\') { ++next; lstrcatA(path,"\\"); }
+    }
+    SendMessageA(tree,TVM_ENSUREVISIBLE,0,(LPARAM)parent);
+    Check(SendMessageA(tree,TVM_SELECTITEM,TVGN_CARET,(LPARAM)parent),"select the requested native tree item without comparing cached PIDL bytes");
+    return parent;
+}
 static void PanelChooseFolder(HWND bar,const char *folder)
 {
     HWND picker,tree=NULL; void *remote; DWORD started,settled; int previous=-1;
+    HTREEITEM requested;
     struct { TVITEMA item; char text[MAX_PATH]; } selection;
     const char *expected=folder,*p;
     for(p=folder;*p;++p) if(*p=='\\' || *p=='/') expected=p+1;
@@ -261,11 +314,13 @@ static void PanelChooseFolder(HWND bar,const char *folder)
         previous=count;
     } while(GetTickCount()-started<3000);
     Check(tree && previous>0 && GetTickCount()-settled>=200,"the native directory tree settles before selecting a folder");
-    /* BFFM_* and TVM_GETITEM are above WM_USER: marshal into OUR child,
-     * never pass local pointers or interpret Shell32's private tree data. */
+    /* Tree messages above WM_USER are marshalled into OUR child only.
+     * Wine's BFFM_SETSELECTION uses a byte comparison of cached PIDLs, including
+     * changing directory metadata. Navigate the same public nodes a user sees;
+     * never read Shell32-private TVIF_PARAM data or repeat a failed selection. */
     remote=VirtualAllocEx(process.hProcess,NULL,sizeof(selection),MEM_COMMIT|MEM_RESERVE,PAGE_READWRITE);
-    Check(remote && WriteProcessMemory(process.hProcess,remote,folder,lstrlenA(folder)+1,NULL),"marshal only our own folder selection into the child chooser");
-    SendMessageA(picker,BFFM_SETSELECTIONA,TRUE,(LPARAM)remote);
+    Check(remote!=NULL,"allocate the public native tree request in our own child process");
+    requested=PanelTreeFolder(tree,folder,remote);
     started=GetTickCount(); settled=0;
     do {
         PumpFor(20); ZeroMemory(&selection,sizeof(selection));
@@ -279,11 +334,15 @@ static void PanelChooseFolder(HWND bar,const char *folder)
         if(!selection.item.hItem || !SendMessageA(tree,TVM_GETITEMA,0,(LPARAM)remote)) { settled=0; continue; }
         Check(ReadProcessMemory(process.hProcess,(char *)remote+sizeof(selection.item),selection.text,MAX_PATH,NULL),
             "read only the selected native folder's public label");
-        if(lstrcmpiA(selection.text,expected)) settled=0;
+        if(selection.item.hItem!=requested || lstrcmpiA(selection.text,expected)) settled=0;
         else if(!settled) settled=GetTickCount();
         else if(GetTickCount()-settled>=200) break;
     } while(GetTickCount()-started<3000);
     VirtualFreeEx(process.hProcess,remote,0,MEM_RELEASE);
+    if(!settled || GetTickCount()-settled<200) {
+        char note[512]; wsprintfA(note,"FAIL: picker requested=%p current=%p items=%ld expected=%s actual=%s\r\n",
+            requested,selection.item.hItem,(LONG)SendMessageA(tree,TVM_GETCOUNT,0,0),expected,selection.text); Log(note);
+    }
     Check(settled && GetTickCount()-settled>=200,"the requested folder remains selected before accepting the native chooser");
     Check(IsWindowEnabled(GetDlgItem(picker,IDOK)),"the native chooser accepts our existing filesystem folder");
     PostMessageA(picker,WM_COMMAND,IDOK,0); started=GetTickCount();
@@ -335,6 +394,17 @@ static void __attribute__((noinline)) TaskbarPanelsTests(HWND bar,const char *di
             Check(movedTask.left-button.left==movedStrip.left-strip.left && movedTask.top==movedStrip.top,
                 "a position-only Quick Launch layout change moves ordinary tasks with the shared strip");
             SendMessageA(bar,WM_COMMAND,ID_QUICK,0);
+        }
+        {
+            HDC dc; int x,edge=0; RECT host;
+            GetWindowRect(pins,&host); SetCursorPos(host.left+11,(host.top+host.bottom)/2); PumpFor(100);
+            dc=GetDC(pins);
+            for(x=3;x<19;++x) {
+                COLORREF color=GetPixel(dc,x,0);
+                if(color!=CLR_INVALID && color!=GetSysColor(COLOR_BTNFACE)) ++edge;
+            }
+            ReleaseDC(pins,dc);
+            Check(edge>=10,"an inactive pin's hover frame stays aligned with the running task's top edge");
         }
         PanelNativeCommand(task,launched,SC_MINIMIZE); Check(IsIconic(launched),"right-click on an ordinary task opens its native Minimize command");
         PanelNativeCommand(task,launched,SC_RESTORE); Check(!IsIconic(launched),"the ordinary task's native menu restores its window");
@@ -426,12 +496,28 @@ static void __attribute__((noinline)) TaskbarPanelsTests(HWND bar,const char *di
     SendMessageA(bar,WM_COMMAND,ID_TOOLBAR_TOGGLE,0);
     Check(!IsWindowVisible(toolbar) && !GetPrivateProfileIntA("TaskbarToolbars","Enabled0",TRUE,settings),"the Toolbars menu hides a custom panel and persists its visibility");
     SendMessageA(bar,WM_COMMAND,ID_TOOLBAR_TOGGLE,0); Check(IsWindowVisible(toolbar),"the same configured folder panel can be shown again");
-    PostMessageA(bar,WM_COMMAND,ID_NEWTOOLBAR,0); Check(WaitFor("#32770",NULL)!=NULL,"New Toolbar uses the native Windows folder picker");
-    keybd_event(VK_ESCAPE,0,0,0); keybd_event(VK_ESCAPE,0,KEYEVENTF_KEYUP,0); PumpFor(150);
+    {
+        HWND picker; DWORD settled=0;
+        PostMessageA(bar,WM_COMMAND,ID_NEWTOOLBAR,0); picker=WaitFor("#32770",NULL);
+        Check(picker!=NULL,"New Toolbar uses the native Windows folder picker"); started=GetTickCount();
+        do {
+            PumpFor(20);
+            if(GetForegroundWindow()!=picker) settled=0;
+            else if(!settled) settled=GetTickCount();
+        } while((!settled || GetTickCount()-settled<200) && GetTickCount()-started<3000);
+        Check(settled && GetTickCount()-settled>=200,"the native picker owns settled foreground before cancellation");
+        keybd_event(VK_ESCAPE,0,0,0); keybd_event(VK_ESCAPE,0,KEYEVENTF_KEYUP,0); started=GetTickCount();
+        while(IsWindow(picker) && GetTickCount()-started<3000) PumpFor(20);
+        Check(!IsWindow(picker) && IsWindowEnabled(bar),"Escape closes the native picker and re-enables the taskbar before the next selection");
+    }
     Check(GetPrivateProfileIntA("TaskbarToolbars","Count",0,settings)==1,"cancelling the native picker adds no empty panel");
     wsprintfA(path,"%s\\New toolbar",directory); Check(CreateDirectoryA(path,NULL),"create only our second selectable toolbar directory");
     PanelChooseFolder(bar,path);
     Check(GetPrivateProfileIntA("TaskbarToolbars","Count",0,settings)==2 && IsWindowVisible(GetDlgItem(bar,ID_TASKBAR_FOLDER+1)),"selecting a folder creates and immediately shows a second independent toolbar");
+    {
+        char chosen[MAX_PATH]; GetPrivateProfileStringA("TaskbarToolbars","Folder1","",chosen,sizeof(chosen),settings);
+        Check(TaskbarSameApplication(chosen,path),"the native chooser saves the exact requested full directory path");
+    }
     wsprintfA(path,"%s\\Toolbar fixture",directory); PanelChooseFolder(bar,path);
     {
         DWORD started=GetTickCount(); UINT count;

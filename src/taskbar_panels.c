@@ -367,15 +367,16 @@ static int Hit(FolderPanel *panel,POINT point)
 }
 typedef struct PinLayout {
     int rows,cell,columns,width[TASKBAR_ENTRIES],desired;
-    BOOL expanded;
+    BOOL captions;
 } PinLayout;
 static void MeasurePins(FolderPanel *panel,int cross,BOOL vertical,PinLayout *layout)
 {
     int i,ordinal=0,slot=env.options.taskTiles ? 38 : 22;
     ZeroMemory(layout,sizeof(*layout));
-    if(!env.options.taskTiles && !env.options.hideTaskLabels) for(i=0;i<panel->count;++i)
-        if(panel->items[i].valid && panel->items[i].running) { layout->expanded=TRUE; break; }
-    if(layout->expanded) {
+    /* Use the selected task rows even when every launcher is idle, so opening
+     * the first window does not change the launchers' row grid or spacing. */
+    layout->captions=!env.options.taskTiles && !env.options.hideTaskLabels;
+    if(layout->captions) {
         layout->rows=vertical ? 1 : env.options.rows;
         layout->cell=vertical ? 26 : (cross+2)/layout->rows;
         if(layout->cell<22) layout->cell=22;
@@ -385,7 +386,7 @@ static void MeasurePins(FolderPanel *panel,int cross,BOOL vertical,PinLayout *la
     }
     for(i=0;i<panel->count;++i) if(panel->items[i].valid) {
         int column=ordinal++/layout->rows;
-        int width=vertical ? layout->cell : layout->expanded && panel->items[i].running ? env.options.taskWidth : slot;
+        int width=vertical ? layout->cell : layout->captions && panel->items[i].running ? env.options.taskWidth : slot;
         if(width>layout->width[column]) layout->width[column]=width;
     }
     layout->columns=(ordinal+layout->rows-1)/layout->rows;
@@ -436,12 +437,15 @@ static void LayoutPins(FolderPanel *panel)
         if(itemColumn<panel->scroll || itemColumn>=last) continue;
         while(column<itemColumn) along+=layout.width[column++];
         other=(cross-layout.rows*layout.cell)/2+row*layout.cell;
-        if(layout.expanded) {
+        if(layout.captions) {
+            /* Center launchers within the painted button, excluding the 2px
+             * inter-row gap; using the full cell puts them one pixel lower. */
+            int button=layout.cell-2;
             if(panel->vertical) {
-                if(item->running) SetRect(&item->rect,0,along,cross,along+layout.cell-2);
-                else SetRect(&item->rect,(cross-size)/2,along+(layout.cell-size)/2,(cross+size)/2,along+(layout.cell+size)/2);
-            } else if(item->running) SetRect(&item->rect,along,row*layout.cell,along+layout.width[itemColumn]-2,row*layout.cell+layout.cell-2);
-            else SetRect(&item->rect,along,row*layout.cell+(layout.cell-size)/2,along+size,row*layout.cell+(layout.cell+size)/2);
+                if(item->running) SetRect(&item->rect,0,along,cross,along+button);
+                else SetRect(&item->rect,(cross-size)/2,along+(button-size)/2,(cross+size)/2,along+(button+size)/2);
+            } else if(item->running) SetRect(&item->rect,along,row*layout.cell,along+layout.width[itemColumn]-2,row*layout.cell+button);
+            else SetRect(&item->rect,along,row*layout.cell+(button-size)/2,along+size,row*layout.cell+(button+size)/2);
         } else if(panel->vertical) SetRect(&item->rect,other,along,other+size,along+size);
         else SetRect(&item->rect,along,other,along+size,other+size);
         ++panel->shown;
