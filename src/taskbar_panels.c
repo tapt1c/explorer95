@@ -827,6 +827,11 @@ static LRESULT CALLBACK PanelProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
             InvalidateRect(window,NULL,FALSE); return 0;
         }
         break;
+    case WM_RBUTTONDOWN: case WM_RBUTTONDBLCLK: return 0;
+    case WM_RBUTTONUP: {
+        POINT point={(short)LOWORD(lp),(short)HIWORD(lp)};
+        ClientToScreen(window,&point); Context(panel,point); return 0;
+    }
     case WM_CONTEXTMENU: {
         POINT point={(short)LOWORD(lp),(short)HIWORD(lp)}; Context(panel,point); return 0;
     }

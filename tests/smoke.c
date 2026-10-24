@@ -213,16 +213,20 @@ static LRESULT CALLBACK ChildProc(HWND window, UINT message, WPARAM wParam, LPAR
         int length = lstrlenA(command);
         return length >= 9 && !lstrcmpA(command + length - 9, "\"--child\"");
     }
+    if(message==WM_APP+39) { SetPropA(window,"Explorer95.RejectKeyMenu",(HANDLE)1); return 0; }
+    if(message==WM_SYSCOMMAND && (wParam&0xfff0)==SC_KEYMENU && GetPropA(window,"Explorer95.RejectKeyMenu")) {
+        SetPropA(window,"Explorer95.KeyMenuRejected",(HANDLE)1); return 0;
+    }
     if(message==WM_APP+38) {
-        /* Inspect only this disposable child's own HMENU: Wine does not let
-         * the controller inspect another process's menu handles. */
+        /* Locate the OS command order in this child's original system menu.
+         * The taskbar now tracks an independent copy on its own thread. */
         HMENU menu=GetSystemMenu(window,FALSE); int i,steps=1;
-        if(menu!=(HMENU)wParam || GetMenuState(menu,SC_CLOSE,MF_BYCOMMAND)==(UINT)-1 ||
+        if(GetMenuState(menu,SC_CLOSE,MF_BYCOMMAND)==(UINT)-1 ||
            GetMenuState(menu,SC_MINIMIZE,MF_BYCOMMAND)==(UINT)-1) return 0;
         for(i=0;i<GetMenuItemCount(menu);++i) {
             UINT state=GetMenuState(menu,i,MF_BYPOSITION);
             if(state&MF_SEPARATOR) continue;
-            if(GetMenuItemID(menu,i)==(UINT)lParam) return state&(MF_DISABLED|MF_GRAYED) ? 0 : steps;
+            if(GetMenuItemID(menu,i)==(UINT)lParam) return steps;
             ++steps;
         }
         return 0;
@@ -1077,6 +1081,7 @@ static void PumpFor(DWORD duration)
     } while (GetTickCount() - started < duration);
 }
 #include "taskbar_panels_cases.h"
+#include "task_menu_cases.h"
 #include "quick_launch_cases.h"
 #include "backlog_menu_cases.h"
 #include "shutdown_dos_cases.h"
@@ -1863,7 +1868,7 @@ void start(void)
     if (group == GROUP_FULL || group == GROUP_CORE || group == GROUP_MENU) ShutdownDosTests(settingsDir);
     if (group != GROUP_BROWSER) { LayoutTests(); HistoryTests(settingsDir, module, settings); ShellFeatureTests(); }
     if (group == GROUP_FULL || group == GROUP_CORE) { PaintTests(); ConfigTests(settingsDir); DesktopIconTests(settingsDir); LanguageTests(settingsDir); NativeRunTests(); FolderHandlerTests(module,settings); FolderSelectionTests(); DragDataTests(); NativeViewMessageTests(); TrayMirrorTests(); TrayMirrorCrossProcessTests(); }
-    if(group==GROUP_FULL || group==GROUP_MENU || group==GROUP_CORE) TaskbarLinksTests(settingsDir,module);
+    if(group==GROUP_FULL || group==GROUP_MENU || group==GROUP_CORE) { TaskbarLinksTests(settingsDir,module); TaskMenuNativeTests(); }
     if (group == GROUP_CORE) goto cleanup;
     if (group == GROUP_MENU) NativeDesktopIconSizeTests();
     if(group==GROUP_MENU || group==GROUP_FULL) WritePrivateProfileStringA("Desktop","IconSize","16",settings);

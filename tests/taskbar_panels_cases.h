@@ -117,12 +117,14 @@ static void RevealTaskButton(HWND bar,HWND button)
 static void PanelNativeCommand(HWND panel,HWND child,UINT command)
 {
     RECT rect; HWND popup; HMENU menu; int i,steps;
+    SendMessageA(child,WM_APP+39,0,0); /* Reproduce an app that declines SC_KEYMENU. */
     GetWindowRect(panel,&rect); SetCursorPos(rect.right-11,(rect.top+rect.bottom)/2); PumpFor(40);
     mouse_event(MOUSEEVENTF_RIGHTDOWN,0,0,0,0); mouse_event(MOUSEEVENTF_RIGHTUP,0,0,0,0);
     popup=WaitFor("#32768",NULL); Check(popup!=NULL,"a running pin opens the actual window system menu"); PumpFor(100);
     menu=(HMENU)SendMessageA(popup,0x01e1,0,0); /* MN_GETHMENU: test-only popup inspection. */
     steps=(int)SendMessageA(child,WM_APP+38,(WPARAM)menu,command);
-    Check(steps>0,"the popup is the target's own system menu and the native command is enabled directly");
+    Check(steps>0,"the popup uses the operating system's native command order");
+    Check(!GetPropA(child,"Explorer95.KeyMenuRejected"),"opening the task popup never asks the application to track SC_KEYMENU");
     --steps;
     keybd_event(VK_HOME,0,0,0); keybd_event(VK_HOME,0,KEYEVENTF_KEYUP,0);
     for(i=0;i<steps;++i) { keybd_event(VK_DOWN,0,0,0); keybd_event(VK_DOWN,0,KEYEVENTF_KEYUP,0); }

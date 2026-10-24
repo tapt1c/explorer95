@@ -6,6 +6,7 @@
 #include "task_groups.h"
 #include "taskbar_panels.h"
 #include "taskbar_links.h"
+#include "task_menu.h"
 #include "task_switch.h"
 #include "shell_sounds.h"
 #define EX95_LOCALIZE_UI
@@ -36,6 +37,7 @@ static BOOL changingDesktopColors;
 static FolderRequest folderRequests[16];
 static UINT folderHead, folderCount;
 static void QuickTip(HWND button, const char *text, BOOL remove);
+static LRESULT CALLBACK TaskButtonProc(HWND window,UINT message,WPARAM wp,LPARAM lp);
 
 BOOL EnvRefreshStartItems(void)
 {
@@ -306,14 +308,7 @@ BOOL EnvActivatePinnedTask(int index)
 }
 static void TaskSystemMenu(HWND target,POINT point)
 {
-    (void)point;
-    if(!IsWindow(target) || !(GetWindowLongA(target,GWL_STYLE)&WS_SYSMENU)) return;
-    /* USER must track the menu on the window's own thread. Borrowing a foreign
-     * HMENU and passing a foreign owner to TrackPopupMenu fails on Win95.
-     * SC_KEYMENU preserves the real menu, state and application callbacks,
-     * including minimized windows, without keyboard injection or blocking us. */
-    SetForegroundWindow(target);
-    PostMessageA(target,WM_SYSCOMMAND,SC_KEYMENU,' ');
+    StartHide(); TaskMenuShow(env.bar,target,point);
 }
 int EnvTaskCount(void) { return taskCount; }
 BOOL EnvTaskInfo(int index,TaskbarTask *task)
@@ -384,6 +379,11 @@ static void UpdateTasks(void)
                 }
                 if(!tasks[group].button) {
                     tasks[group].button=EnvControl(env.bar,"BUTTON","",BS_OWNERDRAW,ID_TASK+taskCount);
+                    if(tasks[group].button) {
+                        WNDPROC original=(WNDPROC)(void *)GetWindowLongPtrA(tasks[group].button,GWLP_WNDPROC);
+                        if(SetPropA(tasks[group].button,"Explorer95.TaskButtonProc",(HANDLE)(void *)original))
+                            SetWindowLongPtrA(tasks[group].button,GWLP_WNDPROC,(LONG_PTR)TaskButtonProc);
+                    }
                     QuickTip(tasks[group].button,LPSTR_TEXTCALLBACKA,FALSE);
                 }
                 ++taskCount;
@@ -809,6 +809,18 @@ void EnvironmentToggleDesktopIcons(void)
     InvalidateRect(env.desktop, NULL, FALSE);
 }
 
+static LRESULT CALLBACK TaskButtonProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
+{
+    WNDPROC original=(WNDPROC)(void *)GetPropA(window,"Explorer95.TaskButtonProc");
+    if(message==WM_RBUTTONDOWN || message==WM_RBUTTONDBLCLK) return 0;
+    if(message==WM_RBUTTONUP) {
+        POINT point={(short)LOWORD(lp),(short)HIWORD(lp)}; ClientToScreen(window,&point);
+        return SendMessageA(GetParent(window),WM_CONTEXTMENU,(WPARAM)window,MAKELPARAM(point.x,point.y));
+    }
+    if(message==WM_CONTEXTMENU) return SendMessageA(GetParent(window),message,(WPARAM)window,lp);
+    if(message==WM_NCDESTROY) RemovePropA(window,"Explorer95.TaskButtonProc");
+    return original ? CallWindowProcA(original,window,message,wp,lp) : DefWindowProcA(window,message,wp,lp);
+}
 static void BarMenu(HWND source)
 {
     HMENU menu = CreatePopupMenu(), toolbars = TaskbarPanelsMenu(), dock = CreatePopupMenu(), size = CreatePopupMenu();
@@ -1002,6 +1014,8 @@ static PaintBuffer barBuffer, barButtonBuffer;
 
 static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
 {
+    LRESULT menuResult;
+    if(TaskMenuMessage(window,message,wp,lp,&menuResult)) return menuResult;
     if(message==NATIVE_GETSHELLBROWSER) return env.closing ? 0 : (LRESULT)NativeViewShellBrowser(env.desktopView);
     if(message==TASK_SWITCH_MESSAGE) return TaskSwitchMessage(wp,lp);
     RenderTraceEvent("taskbar", window, message, wp, lp);

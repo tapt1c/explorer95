@@ -64,6 +64,7 @@ Explorer95 — любительская нативная оболочка для
 | `src/environment.c` | Общее состояние, панель задач, группировка окон, Quick Launch, часы, appbar, горячие клавиши и выполнение команд. |
 | `src/shell_features.c`, `src/shell_features.h` | Доступность сетевой команды и Log Off по метрике установленной сети, профилям/провайдеру входа и ограничениям Explorer; без обращения к сети. |
 | `src/taskbar_panels.c/.h`, `tests/taskbar_panels_cases.h` | Папки-панели, их меню/resize/overflow, отдельная папка Taskbar Pins, уведомления и привязка к запущенным задачам. |
+| `src/task_menu.c/.h`, `tests/task_menu_cases.h` | Снимок системного меню окна, локальный popup и native fallback без SC_KEYMENU. |
 | `src/taskbar_links.c/.h` | Проверяемое чтение/запись ANSI ShellLink без Resolve, сохранение аргументов/рабочей папки и полная идентичность цели. |
 | `src/task_groups.c/.h`, `tests/task_groups_cases.h` | Полный путь EXE через Toolhelp Win95/NT, группировка отдельных процессов и проверка трёх настоящих процессов, включая копию с тем же именем в другой папке. |
 | `src/shell_internal.h` | Внутренние структуры, ID команд и контролов, общие лимиты и интерфейсы модулей оболочки. |
@@ -1519,11 +1520,24 @@ Rename со скрытым расширением, системные Properties
   TaskbarLinkIcon читает GetIconLocation/ExtractIconExA с сохранением индекса,
   запасной значок берётся у target, а не у .lnk: overlay стрелки не нужен.
   Custom folder panels и значки рабочего стола сохраняют прежние overlays.
-- ПКМ любой работающей задачи передаёт самому окну WM_SYSCOMMAND/SC_KEYMENU
-  с пробелом. USER отслеживает его настоящее системное меню в потоке приложения,
-  включая подготовку/owner-draw/состояния и выполнение команд. Меню открывается
-  у окна. Не возвращайте TrackPopupMenu с чужим HWND/HMENU: на настоящей Win95
-  alpha.68 не показывала меню, хотя Wine проходил отдельный fallback.
+- ПКМ taskbar обрабатывается явно на WM_RBUTTONUP: собственная панель и
+  subclass реального task BUTTON не зависят от старого DefWindowProc. Keyboard
+  WM_CONTEXTMENU сохранён. Не обрабатывайте тот же mouse-up повторно через default.
+- `task_menu.c/.h` владеет popup в потоке taskbar. Читается снимок GetSystemMenu
+  приложения; исходный HMENU, bitmap и opaque item data не уничтожаются.
+  MENUITEMINFO использует исходный Win95 cbSize до hbmpItem. Собственные подменю
+  ограничены по глубине/числу; WM_INITMENU/WM_INITMENUPOPUP и owner-draw callbacks
+  целевого окна ограничены SendMessageTimeout. Callback рисования получает
+  исходный HMENU; itemData чужого приложения нельзя разыменовывать в оболочке.
+- При недоступном foreign HMENU используется системное меню невидимой локальной
+  рамки: это настоящие строки USER32 на языке ОС, без собственного списка переводов.
+  Состояния стандартных команд вычисляются по стилям/сворачиванию/разворачиванию
+  целевого окна; disabled Close исходного меню сохраняется. Перед dispatch
+  WM_SYSCOMMAND проверяются живой HWND и прежний PID. Сам popup принадлежит env.bar.
+  Alpha.68 с чужим TrackPopupMenu owner и alpha.69 с SC_KEYMENU не показывали меню
+  на Win95 пользователя. Не возвращайте эти способы на основании одного Wine.
+  Регрессия намеренно запрещает SC_KEYMENU у приложения и проверяет реальные
+  Minimize/Restore/Close, а также отдельный native custom owner-draw пункт.
 - Закрепления и обычные задачи используют одну раскладку и общий scroll range
   `taskbar_panels`; отдельного резерва 52px/второй полосы задач больше нет.
   До 32 файловых pins владеют значками; до 64 добавленных task entries заимствуют
