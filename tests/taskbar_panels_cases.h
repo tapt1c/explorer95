@@ -362,16 +362,24 @@ static void __attribute__((noinline)) TaskbarPanelsTests(HWND bar,const char *di
     PanelGuiFixture(module,target);
     Check(pins && toolbar && IsWindowVisible(pins) && IsWindowVisible(toolbar),"the shell loads pinned applications and a persisted custom folder panel");
     Check(!IsWindowVisible(GetDlgItem(bar,ID_QUICKGRIP)) && !GetPrivateProfileIntA("Taskbar","QuickLaunch",TRUE,settings),"Quick Launch is disabled for a fresh profile while pinned applications remain visible");
+    /* UpdateTasks runs every 400ms. A closed switcher fixture can still own
+     * a grouped "First application (2)" button until that update. Do not
+     * include it in the idle width used by the exact +160px assertion. */
+    { DWORD settled=GetTickCount(); int previous=-1; BOOL pending;
     started=GetTickCount();
-    for(;;) {
-        BOOL pending=FALSE;
+    do {
+        int width=PanelWidth(pins); pending=FALSE;
         for(i=0;i<TASK_LIMIT;++i) {
-            char caption[100]={0}; GetWindowTextA(GetDlgItem(bar,ID_TASK+i),caption,sizeof(caption));
-            if(!lstrcmpA(caption,"First application") || !lstrcmpA(caption,"Second application")) pending=TRUE;
+            char caption[100]={0},prefix[19]; GetWindowTextA(GetDlgItem(bar,ID_TASK+i),caption,sizeof(caption));
+            lstrcpynA(prefix,caption,18); if(!lstrcmpA(prefix,"First application")) pending=TRUE;
+            lstrcpynA(prefix,caption,19); if(!lstrcmpA(prefix,"Second application")) pending=TRUE;
         }
-        if(!pending || GetTickCount()-started>=2500) break;
+        if(pending || width!=previous) settled=GetTickCount();
+        previous=width;
+        if(!pending && GetTickCount()-settled>=500) break;
         PumpFor(30);
-    }
+    } while(GetTickCount()-started<3500);
+    Check(!pending && GetTickCount()-settled>=500,"closed switcher tasks, including grouped captions, leave a stable idle strip before its width is measured"); }
     initial=PanelWidth(pins);
     {
         HWND task=NULL; RECT strip,button; DWORD deadline=GetTickCount();
