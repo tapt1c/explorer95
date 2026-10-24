@@ -96,6 +96,24 @@ static void PanelClick(HWND panel,int x)
     RECT rect; GetWindowRect(panel,&rect); SetCursorPos(rect.left+x,(rect.top+rect.bottom)/2); PumpFor(30);
     mouse_event(MOUSEEVENTF_LEFTDOWN,0,0,0,0); mouse_event(MOUSEEVENTF_LEFTUP,0,0,0,0); PumpFor(80);
 }
+/* Task buttons outside the common scroll viewport intentionally have no
+ * visible rectangle. Reveal one through the same navigation as a user before
+ * sending input; BM_CLICK on a zero-sized hidden BUTTON is not a click. */
+static void RevealTaskButton(HWND bar,HWND button)
+{
+    HWND strip=GetDlgItem(bar,ID_TASKBAR_PINS); RECT bounds,viewport; int step=0;
+    Check(IsWindow(button) && strip,"the task and its shared scrolling strip exist");
+    if(!IsWindowVisible(button)) {
+        SendMessageA(strip,WM_KEYDOWN,VK_HOME,0); PumpFor(40);
+        while(!IsWindowVisible(button) && step++<TASK_LIMIT+TASKBAR_FOLDER_ITEMS) {
+            SendMessageA(strip,WM_KEYDOWN,VK_NEXT,0); PumpFor(40);
+        }
+    }
+    GetWindowRect(button,&bounds); GetWindowRect(strip,&viewport);
+    Check(IsWindowVisible(button) && bounds.right>bounds.left && bounds.bottom>bounds.top &&
+        bounds.left>=viewport.left && bounds.top>=viewport.top && bounds.right<=viewport.right && bounds.bottom<=viewport.bottom,
+        "scrolling reveals the real task button inside the common viewport before activation");
+}
 static void PanelNativeCommand(HWND panel,HWND child,UINT command)
 {
     RECT rect; HWND popup; HMENU menu; int i,steps;

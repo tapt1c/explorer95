@@ -2032,6 +2032,7 @@ void start(void)
     Check(task != NULL, "taskbar discovers newly launched window");
     ShowWindow(child, SW_MINIMIZE);
     Check(IsIconic(child), "fixture window minimized");
+    RevealTaskButton(bar,task);
     SendMessageA(task, BM_CLICK, 0, 0);
     started = GetTickCount(); while (IsIconic(child) && GetTickCount() - started < 3000) Sleep(50);
     Check(!IsIconic(child), "task button restores minimized window");
