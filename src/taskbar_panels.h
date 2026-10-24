@@ -9,6 +9,8 @@
 #define ID_TASKBAR_PINFOLDER 11001
 #define ID_TOOLBAR_TOGGLE 11010
 #define ID_TASKBAR_PIN 11100
+#define ID_TASKBAR_TASKGRIP 11101
+#define ID_TOOLBAR_RESET 11102
 
 BOOL TaskbarPanelsCreate(void);
 void TaskbarPanelsDestroy(void);
@@ -18,6 +20,14 @@ BOOL TaskbarPanelsTranslate(MSG *message);
 void TaskbarPanelsCancelResize(void);
 HMENU TaskbarPanelsMenu(void);
 BOOL TaskbarPanelsCommand(UINT command);
+BOOL TaskbarBandsLayout(int begin,int end,int cross,BOOL vertical);
+BOOL TaskbarBandBegin(int band,HWND capture,POINT point);
+BOOL TaskbarBandMove(POINT point);
+void TaskbarBandEnd(BOOL commit);
+void TaskbarBandMenu(int band,POINT point);
+int EnvQuickBandSize(void);
+void EnvQuickBandLayout(int begin,int end,int cross,BOOL vertical,int origin);
+BOOL EnvQuickBandRect(RECT *rect);
 /* Folder panels reserve the end; pins and tasks share one scrolling strip. */
 BOOL TaskbarFoldersLargeIcons(void);
 int TaskbarFoldersLayout(int begin,int end,int cross,BOOL vertical);

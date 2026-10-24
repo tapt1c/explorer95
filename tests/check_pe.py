@@ -37,7 +37,7 @@ ALLOWED = {
         GetDiskFreeSpaceA GetVolumeInformationA WideCharToMultiByte WritePrivateProfileSectionA
         CreateMutexA ReleaseMutex CreateToolhelp32Snapshot Process32First Process32Next GetSystemTimeAsFileTime GetTempFileNameA GetTempPathA MoveFileA
         DeviceIoControl
-        CompareFileTime FileTimeToLocalFileTime FileTimeToSystemTime GetDateFormatA
+        CompareFileTime CompareStringA FileTimeToLocalFileTime FileTimeToSystemTime GetDateFormatA
         GetFileSize ReadFile WriteFile GlobalAlloc GlobalFree GlobalLock GlobalSize GlobalUnlock
         CloseHandle CopyFileA CreateDirectoryA CreateFileA ExitProcess ExpandEnvironmentStringsA FindClose FindFirstFileA
         FindNextFileA FindFirstChangeNotificationA FindNextChangeNotification FindCloseChangeNotification WaitForSingleObject FormatMessageA GetFileAttributesA GetFullPathNameA

@@ -46,6 +46,7 @@
 #define ID_QUICKGRIP 612
 #define ID_QUICKMORE 613
 #define ID_TASKMANAGER 614
+#define ID_SEARCHBAR 615
 #define ID_EDGE 620
 #define ID_ROWS 621
 #define ID_WIDTH 622
@@ -83,7 +84,7 @@
 
 typedef struct ShellOptions {
     int edge, rows, taskWidth, recentCount, quickSize;
-    BOOL locked, autoHide, topmost, clock, quick, largeIcons, largeStartIcons, group, hideInactive, taskTiles, hideTaskLabels;
+    BOOL locked, autoHide, topmost, clock, quick, largeIcons, largeStartIcons, group, hideInactive, taskTiles, hideTaskLabels, searchBox;
     BOOL classicStart, hoverMenus, allowDrop, highlightNew, desktopIcons, autoArrange, classicShutdown;
     BOOL lockDesktopIcons, snapDesktopIcons;
     int desktopGridX, desktopGridY, desktopIconSize, language;
@@ -106,6 +107,7 @@ typedef struct ShellState {
 typedef struct PinnedProgram { char path[MAX_PATH], arguments[512], label[80]; int client; } PinnedProgram;
 extern PinnedProgram startPins[PIN_LIMIT];
 extern int startPinCount;
+BOOL StartSearchRecent(int index,PinnedProgram *entry);
 void StartLoadPins(void);
 int StartFindPin(const char *path, const char *arguments);
 BOOL StartAddPin(const PinnedProgram *pin);
@@ -169,6 +171,7 @@ LRESULT TrayMirrorCopyData(HWND source, const COPYDATASTRUCT *copy);
 void TrayMirrorResync(HWND source);
 void TrayDestroy(void);
 void PropertiesOpen(void);
+void PropertiesTaskbarRowsChanged(void);
 void PropertiesSelectPage(int page);
 void PropertiesDesktopLayoutChanged(void);
 void PropertiesQuickLayoutChanged(void);

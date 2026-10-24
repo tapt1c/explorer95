@@ -5,6 +5,7 @@
 #include "tray_mirror.h"
 #include "task_groups.h"
 #include "taskbar_panels.h"
+#include "taskbar_search.h"
 #include "taskbar_links.h"
 #include "task_menu.h"
 #include "task_switch.h"
@@ -24,6 +25,8 @@ static int quickShown, quickExtent;
 static BOOL quickResizing;
 static int quickResizeSaved, quickResizeStart, quickResizeExtent;
 static PaintBuffer gripBuffer;
+static int quickOrigin;
+static RECT quickBandRect;
 static int taskCount, windowCount, savedCount, quickCount;
 static BOOL previousGrouping, previousTaskTiles;
 static BOOL quickLarge;
@@ -156,6 +159,7 @@ static BOOL SettingsPath(void)
     env.options.locked = !!Option("Locked", TRUE); env.options.autoHide = !!Option("AutoHide", FALSE);
     env.options.topmost = !!Option("AlwaysOnTop", TRUE); env.options.clock = !!Option("Clock", TRUE);
     env.options.quick = !!Option("QuickLaunch", FALSE); env.options.largeIcons = !!Option("LargeIcons", FALSE);
+    env.options.searchBox = !!Option("SearchBox", TRUE);
     env.options.quickSize = Clamp(Option("QuickLaunchSize", 0), 0, 4096);
     env.options.group = !!Option("GroupTasks", FALSE); env.options.hideInactive = !!Option("HideInactive", FALSE);
     env.options.classicStart = !!GetPrivateProfileIntA("Start", "Classic", FALSE, env.ini);
@@ -191,7 +195,7 @@ BOOL EnvironmentLaunch(HWND owner, const char *path, const char *arguments, cons
     }
     result = ShellExecuteA(owner, "open", path, arguments && *arguments ? arguments : NULL, directory, SW_SHOWNORMAL);
     if ((INT_PTR)result <= 32) {
-        char text[384]; wsprintfA(text, "Windows could not open:\r\n%s\r\n\r\nShell error %ld.", path, (LONG)(INT_PTR)result);
+        char text[896]; wsprintfA(text, "Windows could not open:\r\n%s\r\n\r\nShell error %ld.", path, (LONG)(INT_PTR)result);
         EnvFree(shortcut); MessageBoxA(owner, text, "Explorer95", MB_OK | MB_ICONEXCLAMATION); return FALSE;
     }
     EnvironmentRecordLaunch(shortcut ? shortcut->target : path, shortcut ? shortcut->arguments : arguments);
@@ -493,18 +497,21 @@ static LRESULT CALLBACK QuickGripProc(HWND window, UINT message, WPARAM wp, LPAR
         POINT point;
         if (env.options.locked) return 0;
         StartHide(); GetCursorPos(&point);
+        if(TaskbarBandBegin(-1,window,point)) return 0;
         quickResizeStart = VerticalBar() ? point.y : point.x; quickResizeExtent = quickExtent;
         quickResizeSaved = env.options.quickSize; quickResizing = TRUE; SetCapture(window); return 0;
     }
     case WM_MOUSEMOVE:
+        { POINT point; GetCursorPos(&point); if(TaskbarBandMove(point)) return 0; }
         if (quickResizing) {
             POINT point; int value; GetCursorPos(&point);
             value = quickResizeExtent + (VerticalBar() ? point.y : point.x) - quickResizeStart;
             env.options.quickSize = Clamp(value, 28, 4096); EnvLayoutBar();
         }
         return 0;
-    case WM_LBUTTONUP: EndQuickResize(TRUE); return 0;
-    case WM_CANCELMODE: case WM_CAPTURECHANGED: case WM_RBUTTONDOWN: EndQuickResize(FALSE); return 0;
+    case WM_LBUTTONUP: TaskbarBandEnd(TRUE); EndQuickResize(TRUE); return 0;
+    case WM_CANCELMODE: case WM_CAPTURECHANGED: case WM_RBUTTONDOWN: TaskbarBandEnd(FALSE); EndQuickResize(FALSE); return 0;
+    case WM_CONTEXTMENU: { POINT point={(short)LOWORD(lp),(short)HIWORD(lp)}; TaskbarBandMenu(-1,point); return 0; }
     }
     return DefWindowProcA(window, message, wp, lp);
 }
@@ -532,20 +539,28 @@ static int LayoutQuick(int begin, int end, int crossSize, BOOL vertical)
         changed |= EnvShowControl(button, show);
         if (show) {
             int axis = begin + (i / cross) * slot, across = (crossSize - cross * slot) / 2 + (i % cross) * slot;
-            changed |= EnvMoveControl(button, vertical ? across : axis, vertical ? axis : across, slot, slot);
+            changed |= EnvMoveControl(button, vertical ? across+quickOrigin : axis, vertical ? axis : across+quickOrigin, slot, slot);
         }
     }
     changed |= EnvShowControl(quickGrip, env.options.quick && quickExtent >= 28);
     changed |= EnvShowControl(quickMore, env.options.quick && quickExtent >= 28 && overflow);
     if (env.options.quick && quickExtent >= 28) {
         int grip = begin + quickExtent - 9;
-        changed |= EnvMoveControl(quickGrip, vertical ? 4 : grip, vertical ? grip : 4, vertical ? crossSize - 8 : 8, vertical ? 8 : crossSize - 7);
+        changed |= EnvMoveControl(quickGrip, vertical ? 4+quickOrigin : grip, vertical ? grip : 4+quickOrigin, vertical ? crossSize - 8 : 8, vertical ? 8 : crossSize - 7);
         if (overflow) changed |= EnvMoveControl(quickMore, vertical ? 3 : begin + content - 16, vertical ? begin + content - 16 : 3,
             vertical ? crossSize - 6 : 16, vertical ? 16 : crossSize - 6);
+        if(overflow && quickOrigin) { RECT r; GetWindowRect(quickMore,&r); ScreenToClient(env.bar,(POINT *)&r); ScreenToClient(env.bar,(POINT *)&r+1); EnvMoveControl(quickMore,r.left+(vertical ? quickOrigin : 0),r.top+(vertical ? 0 : quickOrigin),r.right-r.left,r.bottom-r.top); }
     }
+    if(vertical) SetRect(&quickBandRect,quickOrigin+3,begin,quickOrigin+crossSize-3,begin+(env.options.quick ? quickExtent : 0));
+    else SetRect(&quickBandRect,begin,quickOrigin+3,begin+(env.options.quick ? quickExtent : 0),quickOrigin+crossSize-3);
     if (changed) InvalidateRect(env.bar, NULL, FALSE);
     return begin + (env.options.quick && quickExtent >= 28 ? quickExtent + 3 : 0);
 }
+int EnvQuickBandSize(void)
+{ return env.options.quickSize ? env.options.quickSize : (quickCount+1)*(env.options.largeIcons ? 36 : 22)+12; }
+BOOL EnvQuickBandRect(RECT *rect) { *rect=quickBandRect; return env.options.quick && !IsRectEmpty(rect); }
+void EnvQuickBandLayout(int begin,int end,int cross,BOOL vertical,int origin)
+{ quickOrigin=origin; LayoutQuick(begin,end+(vertical ? 52 : 80),cross,vertical); quickOrigin=0; }
 static void QuickLabel(int id, char *label)
 {
     const char *name, *p; int length;
@@ -657,9 +672,12 @@ void EnvLayoutBar(void)
     if (vertical) {
         changed |= EnvMoveControl(env.startButton, 3, 3, width - 6, 26);
         end = height - 36;
-        begin = LayoutQuick(34, end, width, TRUE);
-        end=TaskbarFoldersLayout(begin,end,width,TRUE);
-        begin=TaskbarPinsLayout(begin,end,width,TRUE);
+        begin = TaskbarSearchLayout(34,end,width,TRUE);
+        if(!TaskbarBandsLayout(begin,end,width,TRUE)) {
+            begin = LayoutQuick(begin, end, width, TRUE);
+            end=TaskbarFoldersLayout(begin,end,width,TRUE);
+            begin=TaskbarPinsLayout(begin,end,width,TRUE);
+        }
         changed |= EnvMoveControl(env.tray, 2, height - 30, width - 4, 28); TrayLayout(width - 6, 26);
     } else {
         rows = env.options.rows;
@@ -667,9 +685,12 @@ void EnvLayoutBar(void)
         trayWidth = TrayWidth(height - 8);
         if (trayWidth > width / 2) trayWidth = width / 2;
         end = width - trayWidth - 8;
-        begin = LayoutQuick(begin, end, height, FALSE);
-        end=TaskbarFoldersLayout(begin,end,height,FALSE);
-        begin=TaskbarPinsLayout(begin,end,height,FALSE);
+        begin = TaskbarSearchLayout(begin,end,height,FALSE);
+        if(!TaskbarBandsLayout(begin,end,height,FALSE)) {
+            begin = LayoutQuick(begin, end, height, FALSE);
+            end=TaskbarFoldersLayout(begin,end,height,FALSE);
+            begin=TaskbarPinsLayout(begin,end,height,FALSE);
+        }
         changed |= EnvMoveControl(env.tray, width - trayWidth - 3, 3, trayWidth, height - 6); TrayLayout(trayWidth - 2, height - 8);
     }
     if (changed) InvalidateRect(env.bar, NULL, FALSE);
@@ -917,9 +938,12 @@ void EnvCommand(int id)
     case ID_PROPERTIES: PropertiesOpen(); break;
     case ID_SHOWDESKTOP: EnvShowDesktop(); break;
     case ID_QUICKFOLDER: env.host.openFolder(env.quickDir); break;
-    case ID_LOCK: env.options.locked = !env.options.locked; EnvSaveOptions(); EnvApplyOptions(); break;
+    case ID_LOCK:
+        TaskbarPanelsCancelResize(); EndQuickResize(FALSE);
+        env.options.locked = !env.options.locked; EnvSaveOptions(); EnvApplyOptions(); break;
     case ID_AUTOHIDE: env.options.autoHide = !env.options.autoHide; EnvSaveOptions(); EnvApplyOptions(); break;
     case ID_QUICK: env.options.quick = !env.options.quick; EnvSaveOptions(); EnvApplyOptions(); break;
+    case ID_SEARCHBAR: env.options.searchBox=!env.options.searchBox; EnvSaveOptions(); EnvApplyOptions(); break;
     case ID_EXIT:
         if (!env.primary || MessageBoxA(env.bar, "Exit the active shell?\r\nTo return to the previous desktop, select Restore previous shell\r\nin Taskbar Properties and restart Windows instead.",
             "Explorer95", MB_YESNO | MB_DEFBUTTON2 | MB_ICONQUESTION) == IDYES) PostMessageA(env.bar, WM_CLOSE, 0, 0);
@@ -1001,7 +1025,7 @@ static void AutoHideTick(void)
     POINT point; RECT rect; BOOL inside;
     if (!env.options.autoHide) return;
     GetCursorPos(&point); GetWindowRect(env.bar, &rect); inside = PtInRect(&rect, point);
-    if (inside || IsWindowVisible(env.start) || env.dragging || GetCapture() || env.properties) {
+    if (inside || IsWindowVisible(env.start) || TaskbarSearchActive() || env.dragging || GetCapture() || env.properties) {
         awaySince = 0;
         if (env.hidden) { env.hidden = FALSE; EnvPositionBar(); }
     } else {
@@ -1022,6 +1046,7 @@ static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
     if (NativeViewMenuMessage(env.desktopView, message, wp, lp)) return 0;
     if (ShutdownActive() && (message == WM_COMMAND || message == WM_HOTKEY || message == WM_CONTEXTMENU)) { ShutdownFocus(); return 0; }
     switch (message) {
+    case WM_ACTIVATE: if(LOWORD(wp)==WA_INACTIVE) TaskbarSearchDeactivate((HWND)lp); break;
     case WM_SIZE: EnvLayoutBar(); return 0;
     case WM_ERASEBKGND: return TRUE;
     case WM_PAINT: {
@@ -1227,7 +1252,7 @@ HWND EnvironmentCreate(const EnvironmentHost *callbacks)
         CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, env.bar, NULL, env.host.instance, NULL);
     QuickTip(desktopButton, "Show / Restore Desktop", FALSE);
     QuickTip(quickMore, "More Quick Launch programs", FALSE);
-    QuickTip(quickGrip, "Drag to resize Quick Launch (unlock the taskbar first)", FALSE);
+    QuickTip(quickGrip, "Drag along the bar to resize; drag across rows to move", FALSE);
     if (!TrayCreate() || !StartCreate()) return NULL;
     env.desktopView = NativeViewCreate(env.desktop, NULL, TRUE);
     if (!env.desktopView) {
@@ -1242,7 +1267,8 @@ HWND EnvironmentCreate(const EnvironmentHost *callbacks)
         ZeroMemory(&data, sizeof(data)); data.cbSize = sizeof(data); data.hWnd = env.bar; data.uCallbackMessage = WM_APPBAR;
         env.appbar = (BOOL)SHAppBarMessage(ABM_NEW, &data);
     }
-    if(!TaskbarPanelsCreate()) { EnvironmentShutdown(); return NULL; }
+    if(!TaskbarPanelsCreate()) { RenderTraceShell("bands.create",E_FAIL,GetLastError(),0); EnvironmentShutdown(); return NULL; }
+    if(!TaskbarSearchCreate()) { EnvironmentShutdown(); return NULL; }
     RefreshQuick(); EnvApplyOptions(); ShowWindow(env.desktop, SW_SHOWNOACTIVATE);
     SetWindowPos(env.desktop, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     TaskSwitchCreate();
@@ -1256,7 +1282,7 @@ HWND EnvironmentCreate(const EnvironmentHost *callbacks)
 }
 BOOL EnvironmentTranslate(MSG *message)
 {
-    if(TaskbarPanelsTranslate(message) || TaskSwitchTranslate(message)) return TRUE;
+    if(TaskbarPanelsTranslate(message) || TaskbarSearchTranslate(message) || TaskSwitchTranslate(message)) return TRUE;
     if (quickResizing && message->message == WM_KEYDOWN && message->wParam == VK_ESCAPE) {
         EndQuickResize(FALSE); return TRUE;
     }
@@ -1277,7 +1303,7 @@ void EnvironmentShutdown(void)
     TaskSwitchDestroy();
     RenderTraceShutdown("exit.begin",S_OK,0);
     folderHead = folderCount = 0;
-    ShutdownClose(); EndQuickResize(FALSE); QuickHover(NULL); TaskbarPanelsDestroy();
+    ShutdownClose(); EndQuickResize(FALSE); QuickHover(NULL); TaskbarSearchDestroy(); TaskbarPanelsDestroy();
     KillTimer(env.bar, 1); KillTimer(env.bar, 2); winPending = FALSE; DragAcceptFiles(env.bar, FALSE);
     if (hotkeyDesktop) UnregisterHotKey(env.bar, 1);
     if (hotkeyStart) UnregisterHotKey(env.bar, 2);

@@ -104,6 +104,7 @@ static BOOL WriteOptions(const char *ini, const ShellOptions *o)
     SAVE("Taskbar", "Locked", locked); SAVE("Taskbar", "AutoHide", autoHide); SAVE("Taskbar", "AlwaysOnTop", topmost);
     SAVE("Taskbar", "Clock", clock); SAVE("Taskbar", "QuickLaunch", quick); SAVE("Taskbar", "LargeIcons", largeIcons);
     SAVE("Taskbar", "QuickLaunchSize", quickSize);
+    SAVE("Taskbar", "SearchBox", searchBox);
     SAVE("Taskbar", "GroupTasks", group); SAVE("Taskbar", "HideInactive", hideInactive); SAVE("Taskbar", "InactiveSeconds", traySeconds);
     SAVE("Start", "VisibleItems", startItems); SAVE("Start", "FolderMenus", startMenus); SAVE("Start", "LargeIcons", largeStartIcons);
     SAVE("Start", "RecentCount", recentCount); SAVE("Start", "Classic", classicStart); SAVE("Start", "HoverMenus", hoverMenus);
@@ -169,6 +170,10 @@ void PropertiesQuickLayoutChanged(void)
     InvalidateRect(GetDlgItem(env.properties, ID_PREVIEW_TASKBAR), NULL, FALSE);
     InvalidateRect(GetDlgItem(env.properties, ID_PREVIEW_DESKTOP), NULL, FALSE);
 }
+void PropertiesTaskbarRowsChanged(void)
+{
+    if(env.properties) SendDlgItemMessageA(env.properties,ID_ROWS,CB_SETCURSEL,env.options.rows-1,0);
+}
 void PropertiesDesktopLayoutChanged(void)
 {
     BOOL wasLoading = loading;
@@ -190,6 +195,7 @@ int SettingsRecentMaximum(HWND window, int pins, BOOL large)
     options.largeIcons = Checked(window, ID_LARGE); options.largeStartIcons = large;
     options.taskTiles=Checked(window,ID_TASKTILES);
     options.hideTaskLabels=Checked(window,ID_HIDETASKLABELS);
+    options.searchBox=Checked(window,ID_SEARCHBAR);
     return StartMaximumRecentOptions(pins, &options);
 }
 static void PreviewTaskbar(HDC dc, const RECT *bounds, BOOL sampleTasks)
@@ -207,6 +213,12 @@ static void PreviewTaskbar(HDC dc, const RECT *bounds, BOOL sampleTasks)
     SetRect(&part, bounds->left + 2, bounds->top + 3, bounds->left + 2 + startWidth, bounds->top + 3 + buttonHeight);
     EnvPaintStartButton(dc, &part, label, FALSE, FALSE);
     begin = bounds->left + startWidth + 10; end = bounds->right - 8;
+    if(Checked(env.properties,ID_SEARCHBAR)) {
+        SetRect(&part,begin,bounds->top+4,begin+112,bounds->top+23);
+        FillRect(dc,&part,(HBRUSH)(COLOR_WINDOW+1)); DrawEdge(dc,&part,EDGE_SUNKEN,BF_RECT);
+        part.left+=4; SetTextColor(dc,GetSysColor(COLOR_GRAYTEXT)); SetBkMode(dc,TRANSPARENT);
+        DrawTextA(dc,"Search:",-1,&part,DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX); begin+=116;
+    }
     if (quick) {
         HICON icon = EnvSystemIcon(35);
         int extent = env.options.quickSize ? env.options.quickSize : slot + 12;
@@ -330,6 +342,7 @@ static BOOL Apply(HWND window)
     options.taskTiles=Checked(window,ID_TASKTILES);
     options.hideTaskLabels=Checked(window,ID_HIDETASKLABELS);
     options.group = Checked(window, ID_GROUP); options.hideInactive = Checked(window, ID_INACTIVE);
+    options.searchBox=Checked(window,ID_SEARCHBAR);
     options.desktopIcons = Checked(window, ID_DESKTOPICONS); options.autoArrange = Checked(window, ID_AUTOARRANGE);
     options.desktopIconSize = SendDlgItemMessageA(window, ID_DESKTOPSIZE, CB_GETCURSEL, 0, 0) == 1 ? 48 : 32;
     options.lockDesktopIcons = Checked(window, ID_LOCKICONS); options.snapDesktopIcons = Checked(window, ID_SNAPICONS);
@@ -368,6 +381,7 @@ static LRESULT CALLBACK PropertiesProc(HWND window, UINT message, WPARAM wp, LPA
         Checkbox(window, SETTINGS_TASKBAR, "Large Quick Launch icons", ID_LARGE, env.options.largeIcons, 266, 152, 222);
         Control(window, SETTINGS_TASKBAR, "BUTTON", "Open Quick Launch folder", WS_TABSTOP, ID_QUICKFOLDER, 266, 188, 218, 26);
         Control(window, SETTINGS_TASKBAR, "BUTTON", "Customize notification area...", WS_TABSTOP, ID_CUSTOMTRAY, 266, 224, 218, 26);
+        Checkbox(window, SETTINGS_TASKBAR, "Show search and run box", ID_SEARCHBAR, env.options.searchBox, 266, 258, 222);
         Control(window, SETTINGS_TASKBAR, "STATIC", "Dock:", 0, 0, 32, 290, 40, 20);
         control = Control(window, SETTINGS_TASKBAR, "COMBOBOX", "", WS_TABSTOP | CBS_DROPDOWNLIST, ID_EDGE, 76, 286, 104, 130);
         for (i = 0; i < 4; ++i) { SendMessageA(control, CB_ADDSTRING, 0, (LPARAM)edges[i]); } SendMessageA(control, CB_SETCURSEL, env.options.edge, 0);

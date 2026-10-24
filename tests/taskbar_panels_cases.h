@@ -68,6 +68,7 @@ static void PanelGuiFixture(const char *source,const char *destination)
 static void __attribute__((noinline)) TaskbarPanelsPrepare(const char *directory,const char *settings,const char *module)
 {
     char folder[MAX_PATH],path[MAX_PATH]; TaskbarLink link;
+    Check(WritePrivateProfileStringA("Taskbar","SearchBox","0",settings),"reserve deterministic width for the existing pin overflow fixtures; search has separate UI coverage");
     wsprintfA(folder,"%s\\Toolbar fixture",directory); Check(CreateDirectoryA(folder,NULL),"create only our custom toolbar directory");
     wsprintfA(path,"%s\\toolbar-child.exe",folder); PanelGuiFixture(module,path);
     Check(SetFileAttributesA(path,FILE_ATTRIBUTE_HIDDEN),"keep the owned GUI fixture out of the toolbar's directory listing");

@@ -87,6 +87,13 @@ static void SaveRecent(void)
     }
     WritePrivateProfileStringA("Recent", "Format", "2", env.ini);
 }
+BOOL StartSearchRecent(int index,PinnedProgram *entry)
+{
+    if(index<0 || index>=RECENT_LIMIT) return FALSE;
+    ZeroMemory(entry,sizeof(*entry));
+    lstrcpyA(entry->path,recent[index].path); lstrcpyA(entry->arguments,recent[index].arguments);
+    return TRUE;
+}
 static HICON PathIcon(const char *path, BOOL large)
 {
     SHFILEINFOA info;

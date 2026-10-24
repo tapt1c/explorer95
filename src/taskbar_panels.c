@@ -25,14 +25,14 @@ typedef struct PanelItem {
     BOOL valid,active; int running,task; HWND button;
 } PanelItem;
 typedef struct PanelConfig {
-    char path[MAX_PATH]; int size; BOOL enabled,text,title,large;
+    char path[MAX_PATH]; int size,row,order; BOOL enabled,text,title,large;
 } PanelConfig;
 typedef struct FolderPanel {
     PanelConfig config;
     HWND window; HANDLE watch; PaintBuffer buffer;
     PanelItem *items;
     int count,pinCount,shown,hot,pressed,focus,extent,resizeSaved,resizeStart,resizeExtent;
-    BOOL pins,dirty,vertical,resizing,overflow; RECT more,grip,title,previous,next;
+    BOOL pins,dirty,vertical,resizing,overflow,singleRow; RECT more,grip,title,previous,next;
     int scroll,scrollMax,lastColumn;
 } FolderPanel;
 static FolderPanel *panels;
@@ -41,6 +41,15 @@ static HWND tips;
 static DWORD lastProbe;
 static BOOL finishing;
 static BOOL pinsLarge;
+typedef struct BandPosition { int row,order; } BandPosition;
+static BandPosition quickPosition={-1,0},taskPosition={-1,1};
+static HWND taskGrip;
+static struct {
+    BOOL active,moving; int band,size,extent,rows; HWND capture; POINT start;
+    PanelConfig saved[TASKBAR_FOLDER_LIMIT+1]; BandPosition quick,task;
+} bandDrag;
+static RECT bandRects[TASKBAR_FOLDER_LIMIT+2];
+static int BandIndex(int band) { return band+1; }
 
 static const char *BaseName(const char *path)
 {
@@ -166,6 +175,12 @@ static BOOL WritePanels(const char *ini,const void *unused)
     (void)unused;
     wsprintfA(value,"%d",panelCount);
     if(!WritePrivateProfileStringA("TaskbarToolbars","Count",value,ini)) return FALSE;
+    wsprintfA(value,"%d",quickPosition.row); if(!WritePrivateProfileStringA("TaskbarToolbars","QuickRow",value,ini)) return FALSE;
+    wsprintfA(value,"%d",quickPosition.order); if(!WritePrivateProfileStringA("TaskbarToolbars","QuickOrder",value,ini)) return FALSE;
+    wsprintfA(value,"%d",taskPosition.row); if(!WritePrivateProfileStringA("TaskbarToolbars","TasksRow",value,ini)) return FALSE;
+    wsprintfA(value,"%d",taskPosition.order); if(!WritePrivateProfileStringA("TaskbarToolbars","TasksOrder",value,ini)) return FALSE;
+    wsprintfA(value,"%d",env.options.quickSize); if(!WritePrivateProfileStringA("Taskbar","QuickLaunchSize",value,ini)) return FALSE;
+    wsprintfA(value,"%d",env.options.rows); if(!WritePrivateProfileStringA("Taskbar","Rows",value,ini)) return FALSE;
     for(i=0;i<panelCount;++i) {
         const PanelConfig *config=&panels[i+1].config;
         wsprintfA(key,"Folder%d",i);
@@ -173,6 +188,7 @@ static BOOL WritePanels(const char *ini,const void *unused)
 #define SAVE_PANEL(name,field) wsprintfA(key,name "%d",i); wsprintfA(value,"%d",config->field); if(!WritePrivateProfileStringA("TaskbarToolbars",key,value,ini)) return FALSE
         SAVE_PANEL("Size",size); SAVE_PANEL("Enabled",enabled); SAVE_PANEL("Text",text);
         SAVE_PANEL("Title",title); SAVE_PANEL("Large",large);
+        SAVE_PANEL("Row",row); SAVE_PANEL("Order",order);
 #undef SAVE_PANEL
     }
     return TRUE;
@@ -377,7 +393,7 @@ static void MeasurePins(FolderPanel *panel,int cross,BOOL vertical,PinLayout *la
      * the first window does not change the launchers' row grid or spacing. */
     layout->captions=!env.options.taskTiles && !env.options.hideTaskLabels;
     if(layout->captions) {
-        layout->rows=vertical ? 1 : env.options.rows;
+        layout->rows=vertical || panel->singleRow ? 1 : env.options.rows;
         layout->cell=vertical ? 26 : (cross+2)/layout->rows;
         if(layout->cell<22) layout->cell=22;
     } else {
@@ -576,12 +592,233 @@ int TaskbarPinsLayout(int begin,int end,int cross,BOOL vertical)
 {
     int size,available,minimum=32+(env.options.taskTiles ? 38 : 22);
     if(!panels) return begin;
+    panels[0].singleRow=FALSE;
+    EnvShowControl(taskGrip,!env.options.locked);
+    if(!env.options.locked) {
+        EnvMoveControl(taskGrip,vertical ? 3 : begin,vertical ? begin : 3,vertical ? cross-6 : 8,vertical ? 8 : cross-6);
+        begin+=8;
+    }
     size=DesiredPins(cross-6,vertical);
     available=end-begin; if(available<0) available=0;
     /* The shared strip needs both arrows and one complete icon when crowded. */
     if(size>available) size=available;
     if(size<20 || (size<DesiredPins(cross-6,vertical) && size<minimum)) size=0;
     Place(&panels[0],begin,size,cross,vertical); return begin+(size ? size+4 : 0);
+}
+static BandPosition Position(int band)
+{
+    BandPosition position;
+    if(band<0) return quickPosition;
+    if(!band) return taskPosition;
+    position.row=panels[band].config.row; position.order=panels[band].config.order; return position;
+}
+static void SetPosition(int band,int row,int order)
+{
+    if(band<0) { quickPosition.row=row; quickPosition.order=order; }
+    else if(!band) { taskPosition.row=row; taskPosition.order=order; }
+    else { panels[band].config.row=row; panels[band].config.order=order; }
+}
+static BOOL BandVisible(int band)
+{ return band<0 ? env.options.quick : !band || panels[band].config.enabled; }
+static int Row(int band)
+{
+    BandPosition position=Position(band); int row=position.row;
+    if(row<0) row=band==0 ? env.options.rows-1 : 0;
+    return row<env.options.rows ? row : env.options.rows-1;
+}
+static void PromoteBands(void)
+{
+    int i;
+    for(i=-1;i<=panelCount;++i) { BandPosition position=Position(i); if(position.row<0) SetPosition(i,Row(i),position.order); }
+}
+BOOL TaskbarBandsLayout(int begin,int end,int cross,BOOL vertical)
+{
+    int row,i,j,count,ids[TASKBAR_FOLDER_LIMIT+2],rows=env.options.rows,cell=cross/rows;
+    int contentCross=EnvBarButtonHeight(cross,rows)+6;
+    BOOL advanced=quickPosition.row>=0 || taskPosition.row>=0;
+    if(!panels) return FALSE;
+    for(i=1;i<=panelCount;++i) if(panels[i].config.row>=0) advanced=TRUE;
+    if(!advanced) return FALSE;
+    ZeroMemory(bandRects,sizeof(bandRects));
+    for(i=1;i<=panelCount;++i) if(!panels[i].config.enabled) EnvShowControl(panels[i].window,FALSE);
+    if(!env.options.quick) EnvQuickBandLayout(0,0,contentCross,vertical,0);
+    for(row=0;row<rows;++row) {
+        int start=row==0 ? begin : 3,available=end-start,fixed=0,task=-1,remaining,along;
+        count=0;
+        for(i=-1;i<=panelCount;++i) if(BandVisible(i) && Row(i)==row) ids[count++]=i;
+        for(i=1;i<count;++i) for(j=i;j>0 && Position(ids[j-1]).order>Position(ids[j]).order;--j) { int swap=ids[j-1]; ids[j-1]=ids[j]; ids[j]=swap; }
+        for(i=0;i<count;++i) {
+            if(!ids[i]) task=i;
+            else fixed+=ids[i]<0 ? EnvQuickBandSize() : panels[ids[i]].config.size;
+        }
+        available-=count*3; if(available<0) available=0;
+        remaining=available-(task>=0 ? 72 : 0); if(remaining<0) remaining=0;
+        along=start;
+        for(i=0;i<count;++i) {
+            int id=ids[i],size=id<0 ? EnvQuickBandSize() : id ? panels[id].config.size : available-(fixed>remaining ? remaining : fixed);
+            RECT *rect=&bandRects[BandIndex(id)];
+            if(id && fixed>remaining) size=size*remaining/fixed;
+            if(size<0) size=0;
+            if(vertical) SetRect(rect,row*cell+3,along,row*cell+contentCross-3,along+size);
+            else SetRect(rect,along,row*cell+3,along+size,row*cell+contentCross-3);
+            if(id<0) EnvQuickBandLayout(along,along+size,contentCross,vertical,row*cell);
+            else {
+                FolderPanel *panel=&panels[id]; int grip=!id && !env.options.locked ? 8 : 0; POINT offset;
+                if(!id) {
+                    panel->singleRow=TRUE; EnvShowControl(taskGrip,grip!=0 && size>=8);
+                    if(grip) EnvMoveControl(taskGrip,rect->left,rect->top,vertical ? rect->right-rect->left : 8,vertical ? 8 : rect->bottom-rect->top);
+                }
+                if(size<24+grip) { Place(panel,along,0,contentCross,vertical); continue; }
+                Place(panel,along+grip,size-grip,contentCross,vertical);
+                offset.x=vertical ? row*cell+3 : along+grip; offset.y=vertical ? along+grip : row*cell+3;
+                EnvMoveControl(panel->window,offset.x,offset.y,vertical ? contentCross-6 : size-grip,vertical ? size-grip : contentCross-6);
+                LayoutContents(panel);
+            }
+            along+=size+3;
+        }
+    }
+    return TRUE;
+}
+static BOOL BandRect(int band,RECT *rect)
+{
+    BOOL vertical=env.options.edge==ABE_LEFT || env.options.edge==ABE_RIGHT;
+    if(Position(band).row>=0) { *rect=bandRects[BandIndex(band)]; return !IsRectEmpty(rect); }
+    if(band<0) return EnvQuickBandRect(rect);
+    GetWindowRect(panels[band].window,rect); ScreenToClient(env.bar,(POINT *)rect); ScreenToClient(env.bar,(POINT *)rect+1);
+    if(!band && !env.options.locked) { if(vertical) rect->top-=8; else rect->left-=8; }
+    return IsWindowVisible(panels[band].window);
+}
+BOOL TaskbarBandBegin(int band,HWND capture,POINT point)
+{
+    int i; RECT rect; BOOL vertical=env.options.edge==ABE_LEFT || env.options.edge==ABE_RIGHT;
+    if(!panels || env.options.locked || bandDrag.active || band< -1 || band>panelCount) return FALSE;
+    bandDrag.active=TRUE; bandDrag.moving=band==0; bandDrag.band=band; bandDrag.capture=capture; bandDrag.start=point;
+    bandDrag.size=env.options.quickSize; bandDrag.rows=env.options.rows;
+    bandDrag.extent=0;
+    if(BandRect(band,&rect)) bandDrag.extent=vertical ? rect.bottom-rect.top : rect.right-rect.left;
+    bandDrag.quick=quickPosition; bandDrag.task=taskPosition;
+    for(i=0;i<=panelCount;++i) bandDrag.saved[i]=panels[i].config;
+    if(capture) SetCapture(capture);
+    return TRUE;
+}
+static void MoveBand(int band,int row,int insertion)
+{
+    int ids[TASKBAR_FOLDER_LIMIT+2],count=0,i,j,ordinal=0;
+    PromoteBands();
+    for(i=-1;i<=panelCount;++i) if(i!=band && BandVisible(i) && Row(i)==row) ids[count++]=i;
+    for(i=1;i<count;++i) for(j=i;j>0 && Position(ids[j-1]).order>Position(ids[j]).order;--j) { int swap=ids[j-1]; ids[j-1]=ids[j]; ids[j]=swap; }
+    if(insertion>count) insertion=count;
+    for(i=0;i<count;++i) { if(i==insertion) ++ordinal; SetPosition(ids[i],row,ordinal++*10); }
+    SetPosition(band,row,insertion*10);
+}
+BOOL TaskbarBandMove(POINT point)
+{
+    BOOL vertical=env.options.edge==ABE_LEFT || env.options.edge==ABE_RIGHT;
+    RECT bar,rect; POINT local=point; int band=bandDrag.band,cross,axis,cell,row,insertion=0,i;
+    if(!bandDrag.active) return FALSE;
+    GetClientRect(env.bar,&bar); ScreenToClient(env.bar,&local);
+    cross=vertical ? local.x : local.y; axis=vertical ? local.y : local.x;
+    cell=(vertical ? bar.right : bar.bottom)/env.options.rows; if(cell<1) cell=1;
+    if(env.options.rows<3 && (cross< -cell/2 || cross>(vertical ? bar.right : bar.bottom)+cell/2)) {
+        ++env.options.rows; bandDrag.moving=TRUE; EnvPositionBar();
+        GetClientRect(env.bar,&bar); local=point; ScreenToClient(env.bar,&local);
+        cross=vertical ? local.x : local.y; axis=vertical ? local.y : local.x;
+        cell=(vertical ? bar.right : bar.bottom)/env.options.rows; if(cell<1) cell=1;
+    }
+    row=cross/cell; if(cross<0) row=0; if(row>=env.options.rows) row=env.options.rows-1;
+    if((vertical ? point.x-bandDrag.start.x : point.y-bandDrag.start.y)>6 ||
+       (vertical ? bandDrag.start.x-point.x : bandDrag.start.y-point.y)>6) bandDrag.moving=TRUE;
+    for(i=-1;i<=panelCount;++i) if(i!=band && BandVisible(i) && Row(i)==row && BandRect(i,&rect)) {
+        int middle=vertical ? (rect.top+rect.bottom)/2 : (rect.left+rect.right)/2;
+        if(axis>middle) ++insertion;
+    }
+    if(bandDrag.moving) MoveBand(band,row,insertion);
+    else {
+        int change=vertical ? point.y-bandDrag.start.y : point.x-bandDrag.start.x;
+        if(band<0) {
+            env.options.quickSize=bandDrag.extent+change;
+            if(env.options.quickSize<28) env.options.quickSize=28;
+            if(env.options.quickSize>4096) env.options.quickSize=4096;
+        } else {
+            int size=bandDrag.extent-change;
+            if(size<32) size=32;
+            if(size>4096) size=4096;
+            panels[band].config.size=size;
+        }
+    }
+    EnvLayoutBar(); return TRUE;
+}
+void TaskbarBandEnd(BOOL commit)
+{
+    int i; HWND capture;
+    if(!bandDrag.active) return;
+    capture=bandDrag.capture; bandDrag.active=FALSE;
+    if(capture && GetCapture()==capture) ReleaseCapture();
+    if(!commit || !SavePanels()) {
+        quickPosition=bandDrag.quick; taskPosition=bandDrag.task; env.options.quickSize=bandDrag.size; env.options.rows=bandDrag.rows;
+        for(i=0;i<=panelCount;++i) panels[i].config=bandDrag.saved[i];
+    }
+    EnvPositionBar(); EnvLayoutBar(); PropertiesQuickLayoutChanged();
+    if(env.options.rows!=bandDrag.rows) PropertiesTaskbarRowsChanged();
+}
+#define BAND_LEFT 12200
+#define BAND_RIGHT 12201
+#define BAND_ROW 12210
+static HMENU BandMenu(int band)
+{
+    HMENU menu=CreatePopupMenu(); int i; const char *rows[]={"First row","Second row","Third row"};
+    AppendMenuA(menu,MF_STRING,BAND_LEFT,"Move left / up"); AppendMenuA(menu,MF_STRING,BAND_RIGHT,"Move right / down");
+    AppendMenuA(menu,MF_SEPARATOR,0,NULL);
+    for(i=0;i<3;++i) AppendMenuA(menu,MF_STRING|(Row(band)==i ? MF_CHECKED : 0),BAND_ROW+i,rows[i]);
+    return menu;
+}
+static BOOL BandCommand(int band,int command)
+{
+    POINT point={0,0}; int row=Row(band),order=Position(band).order;
+    if(command!=BAND_LEFT && command!=BAND_RIGHT && (command<BAND_ROW || command>=BAND_ROW+3)) return FALSE;
+    if(!TaskbarBandBegin(band,NULL,point)) return TRUE;
+    PromoteBands();
+    if(command>=BAND_ROW) {
+        row=command-BAND_ROW;
+        if(row>=env.options.rows) env.options.rows=row+1;
+        MoveBand(band,row,99);
+    } else {
+        int i,nearest=0,found=FALSE; BandPosition other;
+        for(i=-1;i<=panelCount;++i) if(i!=band && BandVisible(i) && Row(i)==row) {
+            other=Position(i);
+            if((command==BAND_LEFT ? other.order<order && (!found || other.order>nearest) : other.order>order && (!found || other.order<nearest))) { nearest=other.order; found=TRUE; }
+        }
+        if(found) for(i=-1;i<=panelCount;++i) if(i!=band && Row(i)==row && Position(i).order==nearest) SetPosition(i,row,order);
+        SetPosition(band,row,found ? nearest : order);
+    }
+    TaskbarBandEnd(TRUE); return TRUE;
+}
+void TaskbarBandMenu(int band,POINT point)
+{
+    HMENU menu=CreatePopupMenu(); int command;
+    if(point.x==-1 && point.y==-1) GetCursorPos(&point);
+    AppendMenuA(menu,MF_POPUP|(env.options.locked ? MF_GRAYED : 0),(UINT_PTR)BandMenu(band),"Toolbar position");
+    AppendMenuA(menu,MF_POPUP,(UINT_PTR)TaskbarPanelsMenu(),"Toolbars");
+    AppendMenuA(menu,MF_STRING,ID_PROPERTIES,"Properties");
+    SetForegroundWindow(env.bar); ++busy;
+    command=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_RIGHTBUTTON,point.x,point.y,0,env.bar,NULL);
+    DestroyMenu(menu); --busy;
+    if(command && !BandCommand(band,command)) EnvCommand(command);
+}
+static LRESULT CALLBACK TaskGripProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
+{
+    POINT point; BOOL vertical=env.options.edge==ABE_LEFT || env.options.edge==ABE_RIGHT;
+    switch(message) {
+    case WM_ERASEBKGND: return 1;
+    case WM_PAINT: { PAINTSTRUCT paint; RECT rect; HDC dc=BeginPaint(window,&paint); GetClientRect(window,&rect); FillRect(dc,&rect,(HBRUSH)(COLOR_BTNFACE+1)); EnvPaintQuickGrip(dc,&rect,vertical,env.options.locked); EndPaint(window,&paint); return 0; }
+    case WM_SETCURSOR: SetCursor(LoadCursorA(NULL,env.options.locked ? IDC_ARROW : IDC_SIZEALL)); return TRUE;
+    case WM_LBUTTONDOWN: case WM_LBUTTONDBLCLK: GetCursorPos(&point); StartHide(); TaskbarBandBegin(0,window,point); return 0;
+    case WM_MOUSEMOVE: GetCursorPos(&point); TaskbarBandMove(point); return 0;
+    case WM_LBUTTONUP: TaskbarBandEnd(TRUE); return 0;
+    case WM_CAPTURECHANGED: case WM_CANCELMODE: case WM_RBUTTONDOWN: TaskbarBandEnd(FALSE); return 0;
+    case WM_CONTEXTMENU: point.x=(short)LOWORD(lp); point.y=(short)HIWORD(lp); TaskbarBandMenu(0,point); return 0;
+    }
+    return DefWindowProcA(window,message,wp,lp);
 }
 static void Activate(FolderPanel *panel,int index)
 {
@@ -638,6 +875,7 @@ static void Context(FolderPanel *panel,POINT point)
         AppendMenuA(menu,MF_STRING|(panel->config.text ? MF_CHECKED : 0),PANEL_TEXT,"Show Text");
         AppendMenuA(menu,MF_STRING|(panel->config.title ? MF_CHECKED : 0),PANEL_TITLE,"Show Title");
         AppendMenuA(menu,MF_STRING,PANEL_CLOSE,"Close Toolbar");
+        AppendMenuA(menu,MF_POPUP|(env.options.locked ? MF_GRAYED : 0),(UINT_PTR)BandMenu((int)(panel-panels)),"Toolbar position");
     }
     AppendMenuA(menu,MF_SEPARATOR,0,NULL); AppendMenuA(menu,MF_POPUP,(UINT_PTR)TaskbarPanelsMenu(),"Toolbars");
     AppendMenuA(menu,MF_STRING,ID_SHOWDESKTOP,"Show / Restore Desktop");
@@ -660,7 +898,7 @@ static void Context(FolderPanel *panel,POINT point)
     case PANEL_SMALL: panel->config.large=FALSE; break;
     case PANEL_LARGE: panel->config.large=TRUE; break;
     case PANEL_CLOSE: panel->config.enabled=FALSE; break;
-    default: if(command && !TaskbarPanelsCommand(command)) EnvCommand(command); break;
+    default: if(command && !BandCommand((int)(panel-panels),command) && !TaskbarPanelsCommand(command)) EnvCommand(command); break;
     }
     if(command==PANEL_TEXT || command==PANEL_TITLE || command==PANEL_SMALL || command==PANEL_LARGE || command==PANEL_CLOSE) {
         if(!SavePanels()) panel->config=saved;
@@ -679,10 +917,11 @@ static void FinishResize(FolderPanel *panel,BOOL commit)
     EnvLayoutBar();
 }
 void TaskbarPanelsCancelResize(void)
-{ int i; if(panels) for(i=1;i<=panelCount;++i) FinishResize(&panels[i],FALSE); }
+{ int i; TaskbarBandEnd(FALSE); if(panels) for(i=1;i<=panelCount;++i) FinishResize(&panels[i],FALSE); }
 BOOL TaskbarPanelsTranslate(MSG *message)
 {
     int i;
+    if(bandDrag.active && message->message==WM_KEYDOWN && message->wParam==VK_ESCAPE) { TaskbarBandEnd(FALSE); return TRUE; }
     if(panels && message->message==WM_KEYDOWN && message->wParam==VK_ESCAPE)
         for(i=1;i<=panelCount;++i) if(panels[i].resizing) { FinishResize(&panels[i],FALSE); return TRUE; }
     return FALSE;
@@ -761,6 +1000,7 @@ static LRESULT CALLBACK PanelProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
     case WM_MOUSEMOVE: {
         POINT point; int hit;
         GetCursorPos(&point);
+        if(TaskbarBandMove(point)) return 0;
         if(panel->resizing) {
             int change=panel->resizeStart-(panel->vertical ? point.y : point.x),size=panel->resizeExtent+change;
             if(size<32) size=32;
@@ -787,6 +1027,7 @@ static LRESULT CALLBACK PanelProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
     case WM_LBUTTONDOWN: case WM_LBUTTONDBLCLK: {
         POINT point; int hit; GetCursorPos(&point); ScreenToClient(window,&point); hit=Hit(panel,point); StartHide();
         if(hit==PANEL_GRIP && !env.options.locked) {
+            GetCursorPos(&point); if(TaskbarBandBegin((int)(panel-panels),window,point)) return 0;
             GetCursorPos(&point); panel->resizing=TRUE; panel->resizeSaved=panel->config.size; panel->resizeExtent=panel->extent;
             panel->resizeStart=panel->vertical ? point.y : point.x; SetCapture(window); return 0;
         }
@@ -797,6 +1038,7 @@ static LRESULT CALLBACK PanelProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
     }
     case WM_LBUTTONUP: {
         POINT point; int hit,pressed=panel->pressed;
+        if(bandDrag.active) { TaskbarBandEnd(TRUE); return 0; }
         if(panel->resizing) { FinishResize(panel,TRUE); return 0; }
         GetCursorPos(&point); ScreenToClient(window,&point); hit=Hit(panel,point); panel->pressed=-1;
         if(GetCapture()==window) ReleaseCapture();
@@ -808,6 +1050,7 @@ static LRESULT CALLBACK PanelProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
         return 0;
     }
     case WM_CANCELMODE: case WM_CAPTURECHANGED:
+        TaskbarBandEnd(FALSE);
         FinishResize(panel,FALSE); panel->pressed=-1; InvalidateRect(window,NULL,FALSE); return 0;
     case WM_SETFOCUS:
         if(panel->focus<0) { int i; for(i=0;i<panel->count;++i) if(panel->items[i].valid) { panel->focus=i; break; } }
@@ -831,7 +1074,7 @@ static LRESULT CALLBACK PanelProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
             InvalidateRect(window,NULL,FALSE); return 0;
         }
         break;
-    case WM_RBUTTONDOWN: case WM_RBUTTONDBLCLK: return 0;
+    case WM_RBUTTONDOWN: case WM_RBUTTONDBLCLK: TaskbarBandEnd(FALSE); return 0;
     case WM_RBUTTONUP: {
         POINT point={(short)LOWORD(lp),(short)HIWORD(lp)};
         ClientToScreen(window,&point); Context(panel,point); return 0;
@@ -886,11 +1129,13 @@ HMENU TaskbarPanelsMenu(void)
 {
     HMENU menu=CreatePopupMenu(); int i;
     AppendMenuA(menu,MF_STRING|(env.options.quick ? MF_CHECKED : 0),ID_QUICK,"Quick Launch");
+    AppendMenuA(menu,MF_STRING|(env.options.searchBox ? MF_CHECKED : 0),ID_SEARCHBAR,"Search and run");
     AppendMenuA(menu,MF_STRING,ID_QUICKFOLDER,"Open Quick Launch Folder");
     if(panels) for(i=1;i<=panelCount;++i)
         UiAppendLiteralMenuA(menu,MF_STRING|(panels[i].config.enabled ? MF_CHECKED : 0),ID_TOOLBAR_TOGGLE+i-1,BaseName(panels[i].config.path));
     AppendMenuA(menu,MF_SEPARATOR,0,NULL);
     AppendMenuA(menu,MF_STRING,ID_NEWTOOLBAR,"New Toolbar...");
+    AppendMenuA(menu,MF_STRING|(env.options.locked ? MF_GRAYED : 0),ID_TOOLBAR_RESET,"Reset toolbar positions");
     AppendMenuA(menu,MF_STRING,ID_TASKBAR_PINFOLDER,"Open pinned shortcuts folder");
     return menu;
 }
@@ -915,6 +1160,8 @@ static void NewToolbar(void)
     if(lstrcmpiA(saved.path,path)) {
         ZeroMemory(&panels[index].config,sizeof(PanelConfig)); lstrcpyA(panels[index].config.path,path);
         panels[index].config.size=160; panels[index].config.text=panels[index].config.title=TRUE;
+        panels[index].config.row=-1; panels[index].config.order=10;
+        for(i=-1;i<=panelCount;++i) if(i!=index && Position(i).order>=panels[index].config.order) panels[index].config.order=Position(i).order+10;
     }
     panels[index].config.enabled=TRUE;
     if(!SavePanels()) { panels[index].config=saved; panelCount=oldCount; --busy; return; }
@@ -925,6 +1172,14 @@ BOOL TaskbarPanelsCommand(UINT command)
 {
     if(command==ID_TASKBAR_PINFOLDER) { PinDirectory(); return TRUE; }
     if(command==ID_NEWTOOLBAR) { NewToolbar(); return TRUE; }
+    if(command==ID_TOOLBAR_RESET) {
+        POINT point={0,0}; int i;
+        if(TaskbarBandBegin(0,NULL,point)) {
+            for(i=-1;i<=panelCount;++i) SetPosition(i,-1,i+1);
+            TaskbarBandEnd(TRUE);
+        }
+        return TRUE;
+    }
     if(command>=ID_TOOLBAR_TOGGLE && command<ID_TOOLBAR_TOGGLE+(UINT)panelCount) {
         FolderPanel *panel=&panels[1+command-ID_TOOLBAR_TOGGLE];
         ++busy; panel->config.enabled=!panel->config.enabled;
@@ -941,6 +1196,16 @@ BOOL TaskbarPanelsCreate(void)
     panelCount=GetPrivateProfileIntA("TaskbarToolbars","Count",0,env.ini);
     if(panelCount<0) panelCount=0;
     if(panelCount>TASKBAR_FOLDER_LIMIT) panelCount=TASKBAR_FOLDER_LIMIT;
+    quickPosition.row=(int)GetPrivateProfileIntA("TaskbarToolbars","QuickRow",-1,env.ini);
+    quickPosition.order=GetPrivateProfileIntA("TaskbarToolbars","QuickOrder",0,env.ini);
+    taskPosition.row=(int)GetPrivateProfileIntA("TaskbarToolbars","TasksRow",-1,env.ini);
+    taskPosition.order=GetPrivateProfileIntA("TaskbarToolbars","TasksOrder",1,env.ini);
+    if(quickPosition.row< -1 || quickPosition.row>2) quickPosition.row=-1;
+    if(taskPosition.row< -1 || taskPosition.row>2) taskPosition.row=-1;
+    if(quickPosition.order<0 || quickPosition.order>1000) quickPosition.order=0;
+    if(taskPosition.order<0 || taskPosition.order>1000) taskPosition.order=1;
+    if(!EnvRegister("Explorer95.TaskBandGrip",TaskGripProc,NULL,CS_DBLCLKS)) return FALSE;
+    taskGrip=EnvControl(env.bar,"Explorer95.TaskBandGrip","",0,ID_TASKBAR_TASKGRIP);
     if(!EnvRegister("Explorer95.FolderToolbar",PanelProc,NULL,CS_DBLCLKS)) return FALSE;
     tips=CreateWindowExA(WS_EX_TOPMOST,TOOLTIPS_CLASSA,NULL,WS_POPUP|TTS_ALWAYSTIP,CW_USEDEFAULT,CW_USEDEFAULT,CW_USEDEFAULT,CW_USEDEFAULT,env.bar,NULL,env.host.instance,NULL);
     EnvJoin(panels[0].config.path,env.dataDir,"Taskbar Pins"); CreateDirectoryA(panels[0].config.path,NULL);
@@ -954,9 +1219,12 @@ BOOL TaskbarPanelsCreate(void)
 #define LOAD_PANEL(name,field,defaultValue) wsprintfA(key,name "%d",i-1); config->field=GetPrivateProfileIntA("TaskbarToolbars",key,defaultValue,env.ini)
             LOAD_PANEL("Size",size,160); LOAD_PANEL("Enabled",enabled,TRUE); LOAD_PANEL("Text",text,TRUE);
             LOAD_PANEL("Title",title,TRUE); LOAD_PANEL("Large",large,FALSE);
+            LOAD_PANEL("Row",row,-1); LOAD_PANEL("Order",order,i+1);
 #undef LOAD_PANEL
             if(config->size<32) config->size=32;
             if(config->size>4096) config->size=4096;
+            if(config->row< -1 || config->row>2) config->row=-1;
+            if(config->order<0 || config->order>1000) config->order=i+1;
             if(!config->path[0]) config->enabled=FALSE;
         }
         panel->window=CreateWindowExA(0,"Explorer95.FolderToolbar",NULL,WS_CHILD|WS_TABSTOP|WS_CLIPSIBLINGS,0,0,0,0,env.bar,
@@ -1004,5 +1272,7 @@ void TaskbarPanelsDestroy(void)
         PaintBufferFree(&panels[i].buffer);
     }
     if(tips) DestroyWindow(tips);
+    if(taskGrip) DestroyWindow(taskGrip);
+    taskGrip=NULL;
     EnvFree(panels); panels=NULL; tips=NULL; panelCount=0;
 }

@@ -1081,6 +1081,9 @@ static void PumpFor(DWORD duration)
     } while (GetTickCount() - started < duration);
 }
 #include "taskbar_panels_cases.h"
+#include "taskbar_query_cases.h"
+#include "taskbar_search_cases.h"
+#include "taskbar_bands_cases.h"
 #include "task_menu_cases.h"
 #include "quick_launch_cases.h"
 #include "backlog_menu_cases.h"
@@ -1868,7 +1871,7 @@ void start(void)
     if (group == GROUP_FULL || group == GROUP_CORE || group == GROUP_MENU) ShutdownDosTests(settingsDir);
     if (group != GROUP_BROWSER) { LayoutTests(); HistoryTests(settingsDir, module, settings); ShellFeatureTests(); }
     if (group == GROUP_FULL || group == GROUP_CORE) { PaintTests(); ConfigTests(settingsDir); DesktopIconTests(settingsDir); LanguageTests(settingsDir); NativeRunTests(); FolderHandlerTests(module,settings); FolderSelectionTests(); DragDataTests(); NativeViewMessageTests(); TrayMirrorTests(); TrayMirrorCrossProcessTests(); }
-    if(group==GROUP_FULL || group==GROUP_MENU || group==GROUP_CORE) { TaskbarLinksTests(settingsDir,module); TaskMenuNativeTests(); }
+    if(group==GROUP_FULL || group==GROUP_MENU || group==GROUP_CORE) { TaskbarQueryTests(settingsDir,module); TaskbarLinksTests(settingsDir,module); TaskMenuNativeTests(); }
     if (group == GROUP_CORE) goto cleanup;
     if (group == GROUP_MENU) NativeDesktopIconSizeTests();
     if(group==GROUP_MENU || group==GROUP_FULL) WritePrivateProfileStringA("Desktop","IconSize","16",settings);
@@ -1924,7 +1927,7 @@ void start(void)
     /* Finish the cold-start folder activation check before deliberately
      * moving foreground among independent Alt+Tab fixture processes. */
     if(group==GROUP_MENU || group==GROUP_FULL) TaskSwitchTests(bar);
-    if(group==GROUP_FULL || group==GROUP_MENU) { TaskbarPanelsTests(bar,settingsDir,settings); SendMessageA(bar,WM_COMMAND,ID_QUICK,0); }
+    if(group==GROUP_FULL || group==GROUP_MENU) { TaskbarPanelsTests(bar,settingsDir,settings); TaskbarSearchTests(bar,settingsDir,settings,module); TaskbarBandsTests(bar,settings); SendMessageA(bar,WM_COMMAND,ID_QUICK,0); }
     if (group != GROUP_BROWSER) { QuickLaunchTests(bar, settings); TaskTileTests(bar,settings); TaskGroupProcessesTests(bar,settingsDir); TaskManagerMenuTests(bar); StartOrderTests(bar,FindWindowA("Explorer95.Start",NULL),settings); }
     if (group != GROUP_MENU) {
         FolderForwardTests(executable,settings,fixture,bar); DesktopRefreshTests(desktop);
@@ -2063,6 +2066,7 @@ shutdown:
         char caption[32]; RECT button;
         GetPrivateProfileStringA("Start","ButtonLabel","Start",caption,sizeof(caption),settings);
         Check(WritePrivateProfileStringA("Start","ButtonLabel","",settings),"save an explicitly blank Start caption before a real restart");
+        TaskbarBandsRestartSettings(settings,FALSE);
         wsprintfA(command,"\"%s\" --settings=\"%s\"",executable,settings);
         Check(CreateProcessA(NULL,command,NULL,NULL,FALSE,0,NULL,NULL,&startup,&process),"restart the shell with an icon-only Start profile");
         bar = WaitFor("Explorer95.Taskbar",NULL); GetWindowRect(GetDlgItem(bar,100),&button);
@@ -2072,6 +2076,7 @@ shutdown:
               !IsWindowVisible(GetDlgItem(bar,ID_TASKBAR_FOLDER)),"custom folder panels retain their size and hidden state after real restart and unrelated settings edits");
         SendMessageA(bar,WM_COMMAND,ID_TOOLBAR_TOGGLE,0);
         Check(IsWindowVisible(GetDlgItem(bar,ID_TASKBAR_FOLDER)),"a restarted custom panel can be restored from the Toolbars menu");
+        TaskbarBandsRestartCheck(bar);
         SendMessageA(bar,WM_COMMAND,ID_TOOLBAR_TOGGLE,0);
         {
             HWND desktopList=NULL,desktopWindow; DWORD ready=GetTickCount();
@@ -2086,6 +2091,7 @@ shutdown:
         Check(WaitForGuiProcess(process.hProcess,5000) == WAIT_OBJECT_0,"icon-only restart exits cleanly");
         CloseHandle(process.hThread); CloseHandle(process.hProcess);
         WritePrivateProfileStringA("Start","ButtonLabel",caption,settings);
+        TaskbarBandsRestartSettings(settings,TRUE);
     }
     if (group != GROUP_FULL) goto cleanup;
     Check(WritePrivateProfileStringA("TaskbarToolbars","Size0","4096",settings) &&
@@ -2172,6 +2178,8 @@ cleanup:
     wsprintfA(path, "%s\\document.lnk", settingsDir); DeleteFileA(path);
     wsprintfA(path, "%s\\program.lnk", settingsDir); DeleteFileA(path);
     TaskbarPinsCleanup(settingsDir);
+    wsprintfA(path,"%s\\query-child.exe",settingsDir);
+    if(group==GROUP_FULL || group==GROUP_MENU) Check(DeleteFileA(path),"remove only the owned search executable after all shell processes exit");
     wsprintfA(path,"%s\\Toolbar fixture\\toolbar-child.exe",settingsDir); DeleteFileA(path);
     wsprintfA(path,"%s\\Toolbar fixture",settingsDir); RemoveDirectoryA(path);
     wsprintfA(path,"%s\\New toolbar",settingsDir); RemoveDirectoryA(path);
