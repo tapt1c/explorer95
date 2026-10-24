@@ -333,12 +333,15 @@ static void LanguageRestartTests(const char *directory,const char *executable)
         SendMessageA(dialog,WM_COMMAND,IDCANCEL,0); /* Cleanup only; never select a power command. */
     }
     {
-        HWND popup; RECT button,frame;
+        HWND popup; RECT button,frame,files;
         SearchInput(bar,"2+4"); popup=SearchStatus("6");
         Check(popup!=NULL,"the Russian taskbar shows the compact calculation result");
         SearchSurfaceCheck(popup); GetWindowRect(popup,&frame); GetWindowRect(GetDlgItem(popup,5),&button);
         Check(button.right<=frame.right-4 && button.left>frame.left && button.right-button.left<(frame.right-frame.left)*3/4,
             "the translated Copy result button fits its compact footer");
+        GetWindowRect(GetDlgItem(popup,6),&files);
+        Check(files.left>=frame.left+4 && files.right+4<=button.left && files.top==button.top,
+            "translated file-search and Copy result buttons fit without overlapping");
         SaveScreen("build/taskbar-search-ru.bmp"); SearchInput(bar,""); PumpFor(50);
     }
     {

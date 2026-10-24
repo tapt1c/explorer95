@@ -19,6 +19,31 @@ static void BandSecondRow(HWND panel)
     for(i=0;i<3;++i) { keybd_event(VK_DOWN,0,0,0); keybd_event(VK_DOWN,0,KEYEVENTF_KEYUP,0); }
     keybd_event(VK_RETURN,0,0,0); keybd_event(VK_RETURN,0,KEYEVENTF_KEYUP,0); PumpFor(150);
 }
+static void DockFromBand(HWND bar,UINT edge)
+{
+    HWND strip=GetDlgItem(bar,ID_TASKBAR_PINS); RECT rect; POINT point,target;
+    GetWindowRect(strip,&rect);
+    if(rect.right-rect.left>rect.bottom-rect.top) { point.x=rect.right-6; point.y=(rect.top+rect.bottom)/2; }
+    else { point.x=(rect.left+rect.right)/2; point.y=rect.bottom-6; }
+    Check(WindowFromPoint(point)==strip,"dock dragging starts on empty space owned by the task band");
+    target.x=edge==ABE_LEFT ? 1 : edge==ABE_RIGHT ? GetSystemMetrics(SM_CXSCREEN)-2 : GetSystemMetrics(SM_CXSCREEN)/2;
+    target.y=edge==ABE_TOP ? 1 : edge==ABE_BOTTOM ? GetSystemMetrics(SM_CYSCREEN)-2 : GetSystemMetrics(SM_CYSCREEN)/2;
+    SetCursorPos(point.x,point.y); PumpFor(40);
+    mouse_event(MOUSEEVENTF_LEFTDOWN,0,0,0,0); PumpFor(50);
+    SetCursorPos(target.x,target.y); PumpFor(120);
+    mouse_event(MOUSEEVENTF_LEFTUP,0,0,0,0); PumpFor(120);
+}
+static void DockBandTests(HWND bar,const char *settings)
+{
+    UINT edge,original=GetPrivateProfileIntA("Taskbar","Edge",ABE_BOTTOM,settings);
+    for(edge=ABE_LEFT;edge<=ABE_BOTTOM;++edge) {
+        DockFromBand(bar,edge);
+        Check(GetPrivateProfileIntA("Taskbar","Edge",99,settings)==edge,"dragging empty task-band space docks the whole taskbar at the requested screen edge and persists it");
+    }
+    SendMessageA(bar,WM_COMMAND,ID_LOCK,0); DockFromBand(bar,ABE_TOP);
+    Check(GetPrivateProfileIntA("Taskbar","Edge",99,settings)==ABE_BOTTOM,"locking the taskbar also blocks docking from band background");
+    SendMessageA(bar,WM_COMMAND,ID_LOCK,0); SendMessageA(bar,WM_COMMAND,ID_EDGE_MENU+original,0);
+}
 static void __attribute__((noinline)) TaskbarBandsTests(HWND bar,const char *settings)
 {
     BOOL locked=GetPrivateProfileIntA("Taskbar","Locked",TRUE,settings),quick=GetPrivateProfileIntA("Taskbar","QuickLaunch",FALSE,settings);
@@ -59,6 +84,7 @@ static void __attribute__((noinline)) TaskbarBandsTests(HWND bar,const char *set
     destination.x=bounds.left+72; destination.y=bounds.top+40;
     BandDragTo(GetDlgItem(bar,ID_QUICKGRIP),destination,FALSE);
     Check(GetPrivateProfileIntA("TaskbarToolbars","QuickRow",99,settings)==1,"Quick Launch participates in the same drag and row arrangement");
+    DockBandTests(bar,settings);
     SendMessageA(bar,WM_COMMAND,ID_TOOLBAR_TOGGLE,0);
     SendMessageA(bar,WM_COMMAND,ID_TOOLBAR_TOGGLE+1,0);
     SaveScreen("build/taskbar-bands.bmp");

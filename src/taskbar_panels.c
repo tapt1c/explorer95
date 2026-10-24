@@ -1032,6 +1032,11 @@ static LRESULT CALLBACK PanelProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
         }
         if(hit>=0 && (hit<=PANEL_MORE || (panel->pins && hit==PANEL_NEXT))) {
             panel->pressed=hit; panel->focus=hit; SetFocus(window); SetCapture(window); InvalidateRect(window,NULL,FALSE);
+        } else if(hit<0) {
+            /* Empty band space belongs to the taskbar's dock gesture. Grips,
+             * icons, arrows and real task BUTTONs retain their own actions. */
+            ClientToScreen(window,&point); ScreenToClient(env.bar,&point);
+            SendMessageA(env.bar,WM_LBUTTONDOWN,wp,MAKELPARAM(point.x,point.y));
         }
         return 0;
     }

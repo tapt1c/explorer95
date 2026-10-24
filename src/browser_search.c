@@ -17,7 +17,7 @@ struct BrowserSearch {
     SearchResult *found;
     int count, depth, skipped;
     BOOL active, descend, limited;
-    char pattern[MAX_PATH];
+    char pattern[BROWSER_SEARCH_QUERY_SIZE+2];
 };
 static BOOL Matches(const char *pattern, const char *filename)
 {
@@ -80,7 +80,7 @@ static void ClearResults(BrowserSearch *search)
 }
 static void StartSearch(Browser *browser)
 {
-    BrowserSearch *search = browser->search; char scope[MAX_PATH] = {0}, full[MAX_PATH], query[120] = {0}; DWORD length, attributes;
+    BrowserSearch *search = browser->search; char scope[MAX_PATH] = {0}, full[MAX_PATH], query[BROWSER_SEARCH_QUERY_SIZE] = {0}; DWORD length, attributes;
     GetWindowTextA(search->scope, scope, MAX_PATH); GetWindowTextA(search->name, query, sizeof(query));
     length = GetFullPathNameA(scope, MAX_PATH, full, NULL);
     if (!scope[0] || !length || length >= MAX_PATH) { BrowserError(browser->window, "Choose a valid search folder.", ERROR_BAD_PATHNAME); return; }
@@ -265,7 +265,7 @@ BOOL BrowserSearchCreate(Browser *browser, HWND parent)
     browser->search = search; search->parent = parent; search->browser = browser;
     search->nameLabel = BrowserControl(parent, "STATIC", "All or part of the file name:", 0, 0);
     search->name = BrowserControl(parent, "EDIT", "", WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL, ID_SEARCH_NAME);
-    SendMessageA(search->name, EM_LIMITTEXT, 110, 0);
+    SendMessageA(search->name, EM_LIMITTEXT, BROWSER_SEARCH_QUERY_SIZE-1, 0);
     search->scopeLabel = BrowserControl(parent, "STATIC", "Look in:", 0, 0);
     search->scope = BrowserControl(parent, "EDIT", browser->path, WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL, ID_SEARCH_SCOPE);
     SendMessageA(search->scope, EM_LIMITTEXT, MAX_PATH - 1, 0);
@@ -311,4 +311,17 @@ void BrowserSearchDestroy(Browser *browser)
     controls[4] = s->recursive; controls[5] = s->start; controls[6] = s->stop; controls[7] = s->status; controls[8] = s->show;
     for (i = 0; i < 9; ++i) if (controls[i]) DestroyWindow(controls[i]);
     EnvFree(s); browser->search = NULL;
+}
+HWND BrowserFindFiles(const char *query)
+{
+    char root[MAX_PATH]; HWND window; Browser *browser;
+    if(!query || !query[0] || lstrlenA(query)>=BROWSER_SEARCH_QUERY_SIZE) return NULL;
+    if(!GetWindowsDirectoryA(root,MAX_PATH)) return NULL;
+    if(root[1]==':') root[3]=0;
+    window=BrowserOpen(root); if(!window) return NULL;
+    browser=(Browser *)GetWindowLongPtrA(window,GWLP_USERDATA);
+    BrowserSetPane(browser,BROWSER_PANE_SEARCH);
+    if(!browser->search) { DestroyWindow(window); return NULL; }
+    UiSetLiteralWindowTextA(browser->search->name,query);
+    StartSearch(browser); return window;
 }

@@ -1,4 +1,6 @@
 #include "../src/taskbar_search.h"
+static HWND PaneControl(HWND parent,int id);
+static void WaitSearch(HWND browser);
 static void SearchInput(HWND bar,const char *text)
 {
     HWND host=GetDlgItem(bar,ID_SEARCHBOX),combo=GetDlgItem(host,2);
@@ -63,6 +65,65 @@ static void SearchCloseChild(HWND window)
     SendMessageA(window,WM_CLOSE,0,0);
     Check(WaitForSingleObject(process,4000)==WAIT_OBJECT_0,"the launched search fixture exits before the next execution"); CloseHandle(process);
 }
+static void SearchFilesTest(HWND bar,const char *directory)
+{
+    HWND popup,browser,results; char text[512],path[MAX_PATH]; HANDLE file; DWORD started;
+    wsprintfA(path,"%s\\taskbar-file-result.txt",directory);
+    file=CreateFileA(path,GENERIC_WRITE,0,NULL,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL);
+    Check(file!=INVALID_HANDLE_VALUE,"create only our filename-search result fixture"); CloseHandle(file);
+    SearchFocus(bar); SearchInput(bar,"taskbar-file-*.txt"); started=GetTickCount();
+    do { PumpFor(20); popup=FindWindowA("Explorer95.TaskbarSearchResults",NULL); }
+    while(!IsWindowVisible(GetDlgItem(popup,6)) && GetTickCount()-started<4000);
+    Check(IsWindowVisible(GetDlgItem(popup,6)),"file search has its own visible action beside the command results");
+    SendMessageA(GetDlgItem(popup,6),BM_CLICK,0,0);
+    browser=WaitFor(BROWSER_CLASS,NULL); results=WaitFor(BROWSER_SEARCH_CLASS,NULL);
+    Check(browser && results && IsWindowVisible(results) && !IsWindowVisible(popup),"Find files opens Explorer95's visual search results and dismisses the taskbar popup");
+    SendMessageA(PaneControl(browser,ID_SEARCH_NAME),WM_GETTEXT,sizeof(text),(LPARAM)text);
+    Check(!lstrcmpA(text,"taskbar-file-*.txt"),"file search receives the exact entered query as a filename pattern");
+    SendMessageA(PaneControl(browser,ID_SEARCH_STOP),BM_CLICK,0,0);
+    SetWindowTextA(PaneControl(browser,ID_SEARCH_SCOPE),directory);
+    SendMessageA(PaneControl(browser,ID_SEARCH_START),BM_CLICK,0,0); WaitSearch(browser);
+    Check(SendDlgItemMessageA(results,ID_SEARCH_RESULTS,LVM_GETITEMCOUNT,0,0)==1,"the transferred query finds its actual file in the selected scope");
+    SendMessageA(browser,WM_COMMAND,ID_FOLDERS_CLOSE,0); SendMessageA(browser,WM_CLOSE,0,0);
+    Check(!IsWindow(results) && DeleteFileA(path),"closing file search releases its results and permits removing only our fixture");
+}
+static BOOL SearchControlLabel(char *label)
+{
+    IShellFolder *desktop=NULL,*folder=NULL; IEnumIDList *items=NULL; LPITEMIDLIST root=NULL,child;
+    int i; label[0]=0;
+    if(SUCCEEDED(SHGetSpecialFolderLocation(NULL,CSIDL_CONTROLS,&root)) && SUCCEEDED(SHGetDesktopFolder(&desktop)) &&
+       SUCCEEDED(IShellFolder_BindToObject(desktop,root,NULL,&IID_IShellFolder,(void **)&folder)) &&
+       SUCCEEDED(IShellFolder_EnumObjects(folder,NULL,SHCONTF_NONFOLDERS,&items))) {
+        for(i=0;i<64 && !label[0] && IEnumIDList_Next(items,1,&child,NULL)==S_OK;++i) {
+            STRRET name;
+            if(SUCCEEDED(IShellFolder_GetDisplayNameOf(folder,child,SHGDN_NORMAL,&name))) {
+                if(name.uType==STRRET_CSTR) lstrcpynA(label,name.cStr,MAX_PATH);
+                else if(name.uType==STRRET_WSTR) { WideCharToMultiByte(CP_ACP,0,name.pOleStr,-1,label,MAX_PATH,NULL,NULL); CoTaskMemFree(name.pOleStr); }
+            }
+            CoTaskMemFree(child);
+        }
+    }
+    if(items) IEnumIDList_Release(items);
+    if(folder) IShellFolder_Release(folder);
+    if(desktop) IShellFolder_Release(desktop);
+    CoTaskMemFree(root); return label[0]!=0;
+}
+static void SearchSystemTests(HWND bar)
+{
+    HWND popup,opened; DWORD started; char label[MAX_PATH];
+    SearchFocus(bar); SearchInput(bar,"My Computer"); PumpFor(250); started=GetTickCount();
+    do { PumpFor(20); popup=FindWindowA("Explorer95.TaskbarSearchResults",NULL); }
+    while(SendDlgItemMessageA(popup,4,LB_GETCOUNT,0,0)<2 && GetTickCount()-started<4000);
+    Check(SendDlgItemMessageA(popup,4,LB_GETCOUNT,0,0)>=2,"search includes enabled commands from Start's right column");
+    SearchEnter(bar); opened=WaitFor(BROWSER_NAMESPACE_CLASS,NULL);
+    Check(opened!=NULL,"a Start command search result opens Explorer95's namespace window"); SendMessageA(opened,WM_CLOSE,0,0);
+    Check(SearchControlLabel(label),"obtain an installed applet's native display name independently from its parent folder");
+    SearchFocus(bar); SearchInput(bar,label); PumpFor(250); started=GetTickCount();
+    do { PumpFor(20); popup=FindWindowA("Explorer95.TaskbarSearchResults",NULL); }
+    while(SendDlgItemMessageA(popup,4,LB_GETCOUNT,0,0)<2 && GetTickCount()-started<4000);
+    Check(SendDlgItemMessageA(popup,4,LB_GETCOUNT,0,0)>=2,"search discovers an actual installed applet from the Control Panel namespace");
+    SearchInput(bar,""); PumpFor(30);
+}
 static void __attribute__((noinline)) TaskbarSearchTests(HWND bar,const char *directory,const char *settings,const char *module)
 {
     static TaskbarLink link; static char target[MAX_PATH],shortcut[MAX_PATH],programs[MAX_PATH],container[MAX_PATH],query[512];
@@ -95,6 +156,7 @@ static void __attribute__((noinline)) TaskbarSearchTests(HWND bar,const char *di
       SetForegroundWindow(external); started=GetTickCount();
       while(IsWindowVisible(popup) && GetTickCount()-started<2000) PumpFor(20);
       Check(!IsWindowVisible(popup),"switching to another application closes the nonactivating search popup"); DestroyWindow(external); }
+    SearchFilesTest(bar,directory); SearchSystemTests(bar);
     Check(SUCCEEDED(OleInitialize(NULL)),"initialize COM for the owned Start search shortcut");
     wsprintfA(target,"%s\\query-child.exe",directory); PanelGuiFixture(module,target);
     Check(SUCCEEDED(SHGetSpecialFolderLocation(NULL,CSIDL_PROGRAMS,&pidl)) && SHGetPathFromIDListA(pidl,programs),"locate the isolated Programs folder for search"); CoTaskMemFree(pidl);

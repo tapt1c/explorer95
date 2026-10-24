@@ -116,6 +116,7 @@ void start(void)
     host.instance = instance; host.font = uiFont;
     host.openFolder = BrowserOpen; host.specialPath = SpecialPath; host.showRun = ShowRun; host.closeFolders = BrowserShutdown;
     host.openRequest = BrowserOpenRequest;
+    host.findFiles = BrowserFindFiles;
     bar = EnvironmentCreate(&host);
     if (!bar) { EnvironmentShutdown(); UiShutdown(); RenderTraceClose(); ExitProcess(1); }
     ReleaseMutex(startup); CloseHandle(startup);

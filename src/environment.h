@@ -12,6 +12,7 @@ typedef struct EnvironmentHost {
     void (*showRun)(void);
     void (*closeFolders)(void);
     HWND (*openRequest)(const FolderRequest *request);
+    HWND (*findFiles)(const char *query);
 } EnvironmentHost;
 
 HWND EnvironmentCreate(const EnvironmentHost *host);

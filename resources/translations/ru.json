@@ -499,6 +499,8 @@
   "Run a command or open an address": "Запустить команду или открыть адрес",
   "Run entered command": "Выполнить введённую команду",
   "Copy result": "Копировать результат",
+  "Find files...": "Найти файлы...",
+  "Cannot open file search.": "Не удалось открыть поиск файлов.",
   "Enter a valid command, address or expression.": "Введите команду, адрес или выражение.",
   "Toolbar position": "Расположение панели",
   "Move left / up": "Сдвинуть влево / вверх",

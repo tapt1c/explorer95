@@ -241,6 +241,21 @@ static int FolderIndex(int id)
     int i; for (i = 0; i < RIGHT_COUNT; ++i) if (rightCommands[i] == id) return i;
     return -1;
 }
+BOOL StartSearchCommand(int ordinal,int *command,const char **label)
+{
+    int i;
+    for(i=0;i<RIGHT_COUNT;++i) {
+        int index=rightOrder[i];
+        if(!(VisibleItems() & RightBit(index))) continue;
+        if(ordinal--==0) { *command=rightCommands[index]; *label=rightLabels[index]; return TRUE; }
+    }
+    return FALSE;
+}
+HICON StartSearchCommandIcon(int command)
+{
+    int index=FolderIndex(command);
+    return index>=0 ? RightSmallIcon(index) : NULL;
+}
 static void FreePrograms(void)
 {
     int i;

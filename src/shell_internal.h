@@ -108,6 +108,8 @@ typedef struct PinnedProgram { char path[MAX_PATH], arguments[512], label[80]; i
 extern PinnedProgram startPins[PIN_LIMIT];
 extern int startPinCount;
 BOOL StartSearchRecent(int index,PinnedProgram *entry);
+BOOL StartSearchCommand(int ordinal,int *command,const char **label);
+HICON StartSearchCommandIcon(int command);
 void StartLoadPins(void);
 int StartFindPin(const char *path, const char *arguments);
 BOOL StartAddPin(const PinnedProgram *pin);
