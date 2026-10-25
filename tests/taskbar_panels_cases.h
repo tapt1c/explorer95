@@ -362,24 +362,25 @@ static void __attribute__((noinline)) TaskbarPanelsTests(HWND bar,const char *di
     PanelGuiFixture(module,target);
     Check(pins && toolbar && IsWindowVisible(pins) && IsWindowVisible(toolbar),"the shell loads pinned applications and a persisted custom folder panel");
     Check(!IsWindowVisible(GetDlgItem(bar,ID_QUICKGRIP)) && !GetPrivateProfileIntA("Taskbar","QuickLaunch",TRUE,settings),"Quick Launch is disabled for a fresh profile while pinned applications remain visible");
-    /* UpdateTasks runs every 400ms. A closed switcher fixture can still own
-     * a grouped "First application (2)" button until that update. Do not
-     * include it in the idle width used by the exact +160px assertion. */
+    /* Every fixture process is closed and the startup browser is gone.
+     * UpdateTasks assigns contiguous IDs and removes unused buttons before
+     * laying out the strip. Wait for that empty state and its settled width;
+     * do not scan closed-window captions or poll 64 absent controls. */
     { DWORD settled=GetTickCount(); int previous=-1; BOOL pending;
     started=GetTickCount();
     do {
         int width=PanelWidth(pins); pending=FALSE;
-        for(i=0;i<TASK_LIMIT;++i) {
-            char caption[100]={0},prefix[19]; GetWindowTextA(GetDlgItem(bar,ID_TASK+i),caption,sizeof(caption));
-            lstrcpynA(prefix,caption,18); if(!lstrcmpA(prefix,"First application")) pending=TRUE;
-            lstrcpynA(prefix,caption,19); if(!lstrcmpA(prefix,"Second application")) pending=TRUE;
-        }
+        pending=GetDlgItem(bar,ID_TASK)!=NULL;
         if(pending || width!=previous) settled=GetTickCount();
         previous=width;
         if(!pending && GetTickCount()-settled>=500) break;
         PumpFor(30);
     } while(GetTickCount()-started<3500);
-    Check(!pending && GetTickCount()-settled>=500,"closed switcher tasks, including grouped captions, leave a stable idle strip before its width is measured"); }
+    if(pending || GetTickCount()-settled<500) {
+        char note[160]; wsprintfA(note,"idle strip: tasks=%d width=%d quiet=%lu elapsed=%lu\r\n",
+            pending,previous,GetTickCount()-settled,GetTickCount()-started); Log(note);
+    }
+    Check(!pending && GetTickCount()-settled>=500,"closed fixture tasks leave an empty stable idle strip before its width is measured"); }
     initial=PanelWidth(pins);
     {
         HWND task=NULL; RECT strip,button; DWORD deadline=GetTickCount();
