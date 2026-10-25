@@ -65,6 +65,45 @@ static void SearchCloseChild(HWND window)
     SendMessageA(window,WM_CLOSE,0,0);
     Check(WaitForSingleObject(process,4000)==WAIT_OBJECT_0,"the launched search fixture exits before the next execution"); CloseHandle(process);
 }
+static HWND SearchHistoryOpen(HWND bar)
+{
+    HWND combo=GetDlgItem(GetDlgItem(bar,ID_SEARCHBOX),2),popup; RECT field;
+    SearchFocus(bar); GetWindowRect(combo,&field); PanelClick(combo,field.right-field.left-8);
+    popup=SearchStatus("Search history");
+    Check(popup && !SendMessageA(combo,CB_GETDROPPEDSTATE,0,0),"the search arrow opens a compact history popup instead of an empty native drop list");
+    return popup;
+}
+static void __attribute__((noinline)) SearchHistoryTests(HWND bar,const char *settings)
+{
+    HWND popup,list,launched; char expected[514],text[512],recent[MAX_PATH],after[MAX_PATH]; int i,n; RECT frame,area;
+    popup=SearchHistoryOpen(bar); list=GetDlgItem(popup,4); n=(int)SendMessageA(list,LB_GETCOUNT,0,0);
+    Check(n>=4 && IsWindowEnabled(GetDlgItem(popup,7)),"history offers separate groups of programs and queries with an enabled Clear action");
+    GetWindowRect(popup,&frame); SystemParametersInfoA(SPI_GETWORKAREA,0,&area,0);
+    Check(frame.left>=area.left && frame.top>=area.top && frame.right<=area.right && frame.bottom<=area.bottom,
+          "search history fits the work area even with the taskbar docked at an edge");
+    SaveScreen("build/taskbar-search-history.bmp"); SearchEnter(bar);
+    launched=WaitFor("Explorer95.SmokeChild","Explorer95 smoke child");
+    Check(launched && SendMessageA(launched,WM_APP+35,0,0),"the most recent search program relaunches once with its quoted arguments"); SearchCloseChild(launched);
+    popup=SearchHistoryOpen(bar); list=GetDlgItem(popup,4); n=(int)SendMessageA(list,LB_GETCOUNT,0,0);
+    for(i=0;i<n;++i) if((int)SendMessageA(list,LB_GETITEMDATA,i,0)>=200) break;
+    Check(i<n,"search history includes a recallable query after program rows");
+    GetPrivateProfileStringA("TaskbarSearchHistory","Query0","",expected,sizeof(expected),settings);
+    SendMessageA(list,LB_SETCURSEL,i,0); SearchEnter(bar); PumpFor(250);
+    SendMessageA(GetDlgItem(GetDlgItem(bar,ID_SEARCHBOX),2),WM_GETTEXT,sizeof(text),(LPARAM)text);
+    Check(expected[0]=='!' && !lstrcmpA(text,expected+1) && !FindWindowA("Explorer95.SmokeChild",NULL),
+          "recalling a query restores literal text and search results without executing it");
+    popup=SearchHistoryOpen(bar);
+    GetPrivateProfileStringA("Recent","Program0","",recent,sizeof(recent),settings);
+    SendMessageA(GetDlgItem(popup,7),BM_CLICK,0,0); PumpFor(80);
+    GetPrivateProfileStringA("TaskbarSearchHistory","Query0","",text,sizeof(text),settings);
+    GetPrivateProfileStringA("Recent","Program0","",after,sizeof(after),settings);
+    Check(!text[0] && !IsWindowEnabled(GetDlgItem(popup,7)) && SendDlgItemMessageA(popup,4,LB_GETCOUNT,0,0)==1 && !lstrcmpA(recent,after),
+          "Clear removes only search history, leaves a compact empty state and preserves Start's recent programs");
+    Check(!(GetWindowLongA(GetDlgItem(popup,4),GWL_STYLE)&WS_VSCROLL),"a short search history has no vertical scrollbar");
+    SaveScreen("build/taskbar-search-history-empty.bmp");
+    SearchInput(bar,"5+7"); Check(SearchStatus("12")!=NULL,"a calculation remains available after clearing history"); SearchEnter(bar);
+    SendMessageA(FindWindowExA(GetDlgItem(GetDlgItem(bar,ID_SEARCHBOX),2),NULL,"EDIT",NULL),WM_KEYDOWN,VK_ESCAPE,0);
+}
 static void SearchFilesTest(HWND bar,const char *directory)
 {
     HWND popup,browser,results; char text[512],path[MAX_PATH]; HANDLE file; DWORD started;
@@ -189,6 +228,7 @@ static void __attribute__((noinline)) TaskbarSearchTests(HWND bar,const char *di
     launched=WaitFor("Explorer95.SmokeChild","Explorer95 smoke child");
     Check(launched && SendMessageA(launched,WM_APP+35,0,0),"Enter before the search debounce waits for the matching shortcut instead of executing its label as a command");
     SearchCloseChild(launched);
+    SearchHistoryTests(bar,settings);
     Check(DeleteFileA(shortcut) && SetFileAttributesA(container,FILE_ATTRIBUTE_NORMAL) && RemoveDirectoryA(container),
         "remove only the owned nested query shortcut and directory; the mapped EXE is removed after shell exit"); OleUninitialize();
     SendMessageA(bar,WM_COMMAND,ID_PROPERTIES,0); properties=WaitFor("Explorer95.Properties",NULL);

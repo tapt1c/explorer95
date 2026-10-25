@@ -2,6 +2,7 @@
 #include "browser_internal.h"
 #include "render_trace.h"
 #include "toolbar_compat.h"
+#include "taskbar_query.h"
 #define EX95_LOCALIZE_UI
 #include "localization.h"
 
@@ -523,9 +524,21 @@ static void Up(Browser *browser)
         BrowserNavigate(browser, NULL, parent, -1); EnvFree(parent);
     }
 }
+static BOOL AddressPath(Browser *browser,const char *input,char *path)
+{
+    if(input[0]=='\\' && input[1]!='\\' && browser->path[1]==':') {
+        if(lstrlenA(input)+2>=MAX_PATH) return FALSE;
+        path[0]=browser->path[0]; path[1]=':'; lstrcpyA(path+2,input); return TRUE;
+    }
+    if(input[0]!='\\' && input[1]!=':' && browser->path[0]) return EnvJoin(path,browser->path,input);
+    lstrcpyA(path,input); return TRUE;
+}
 static void AddressGo(Browser *browser)
 {
-    char input[MAX_PATH], path[MAX_PATH], expanded[MAX_PATH]; DWORD length;
+    char input[MAX_PATH], path[MAX_PATH], expanded[MAX_PATH], file[MAX_PATH], arguments[512]; DWORD length, attributes;
+    if(SendMessageA(browser->address,WM_GETTEXTLENGTH,0,0)>=MAX_PATH) {
+        BrowserError(browser->window,"The path is too long.",ERROR_FILENAME_EXCED_RANGE); return;
+    }
     GetWindowTextA(browser->address, input, MAX_PATH);
     if (!input[0]) return;
     if (!browser->path[0]) {
@@ -534,18 +547,27 @@ static void AddressGo(Browser *browser)
     }
     length = ExpandEnvironmentStringsA(input, expanded, MAX_PATH);
     if (!length || length > MAX_PATH) { BrowserError(browser->window, "The path is too long.", ERROR_FILENAME_EXCED_RANGE); return; }
-    lstrcpyA(input, expanded);
-    if (!lstrcmpiA(input, "My Computer")) { BrowserSpecial(browser, CSIDL_DRIVES); return; }
-    if (!lstrcmpiA(input, "Desktop")) { BrowserSpecial(browser, CSIDL_DESKTOP); return; }
-    if (!lstrcmpiA(input, "Recycle Bin")) { BrowserSpecial(browser, CSIDL_BITBUCKET); return; }
-    if (input[0] == '\\' && input[1] != '\\' && browser->path[1] == ':') {
-        if (lstrlenA(input) + 2 >= MAX_PATH) return;
-        path[0] = browser->path[0]; path[1] = ':'; lstrcpyA(path + 2, input); BrowserNavigate(browser, path, NULL, -1); return;
+    if (!lstrcmpiA(expanded, "My Computer")) { BrowserSpecial(browser, CSIDL_DRIVES); return; }
+    if (!lstrcmpiA(expanded, "Desktop")) { BrowserSpecial(browser, CSIDL_DESKTOP); return; }
+    if (!lstrcmpiA(expanded, "Recycle Bin")) { BrowserSpecial(browser, CSIDL_BITBUCKET); return; }
+    if(!AddressPath(browser,expanded,path)) { BrowserError(browser->window,"The path is too long.",ERROR_FILENAME_EXCED_RANGE); return; }
+    attributes=GetFileAttributesA(path);
+    arguments[0]=0;
+    /* Test the complete relative path first: spaces in a folder or filename
+     * must not turn its last words into command arguments. */
+    if(attributes==INVALID_FILE_ATTRIBUTES) {
+        if(!TaskbarQuerySplit(input,file,sizeof(file),arguments,sizeof(arguments))) {
+            BrowserError(browser->window,"Enter a valid path or program command.",ERROR_INVALID_PARAMETER); return;
+        }
+        if(!AddressPath(browser,file,path)) { BrowserError(browser->window,"The path is too long.",ERROR_FILENAME_EXCED_RANGE); return; }
+        attributes=GetFileAttributesA(path);
     }
-    if (input[0] != '\\' && input[1] != ':' && browser->path[0]) {
-        if (!EnvJoin(path, browser->path, input)) { BrowserError(browser->window, "The path is too long.", ERROR_FILENAME_EXCED_RANGE); return; }
-    } else lstrcpyA(path, input);
-    BrowserNavigate(browser, path, NULL, -1);
+    if(attributes!=INVALID_FILE_ATTRIBUTES && !(attributes&FILE_ATTRIBUTE_DIRECTORY)) {
+        HWND window=browser->window; lstrcpyA(expanded,browser->path);
+        /* ShellExecute can run a nested loop in which this browser closes. */
+        if(EnvironmentLaunch(window,path,arguments[0] ? arguments : NULL,expanded[0] ? expanded : NULL) &&
+            BrowserIsWindow(window) && (Browser *)GetWindowLongPtrA(window,GWLP_USERDATA)==browser) BrowserAddressUpdate(browser);
+    } else BrowserNavigate(browser, path, NULL, -1);
 }
 static HMENU ViewChoices(void)
 {

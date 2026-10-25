@@ -5,26 +5,113 @@
 #include "render_trace.h"
 #include "localization.h"
 #include "paint.h"
+#include "program_history.h"
 
 #define RESULT_LIMIT 8
 #define WALK_LIMIT 16
+#define HISTORY_LIMIT 8
+#define HISTORY_APP 100
+#define HISTORY_QUERY 200
+#define HISTORY_OPEN (WM_APP+73)
+typedef struct SearchLaunch { char path[MAX_PATH],arguments[512],label[MAX_PATH]; } SearchLaunch;
 typedef struct SearchResult { char path[MAX_PATH],arguments[512],label[MAX_PATH]; HICON icon; LPITEMIDLIST pidl; int command; BOOL folder; } SearchResult;
 typedef struct SearchWalk { char directory[MAX_PATH]; HANDLE find; } SearchWalk;
 static struct {
-    HWND host,combo,edit,icon,popup,status,list,copy,files;
+    HWND host,combo,edit,icon,popup,status,list,copy,files,clear;
     HICON searchIcon;
     HFONT answerFont;
     PaintBuffer hostPaint,popupPaint,rowPaint;
-    WNDPROC original;
+    WNDPROC original,comboOriginal;
     IShellFolder *controls;
     IEnumIDList *controlItems;
     LPITEMIDLIST controlRoot;
     SearchResult results[RESULT_LIMIT]; int count,calculation,depth,visited,root;
     SearchWalk walk[WALK_LIMIT]; char roots[2][MAX_PATH],query[512],answer[64];
     BOOL open,pending,submitPending,updating,scanning,navigated,controlsPending;
+    BOOL history;
+    int queryCount,appCount;
+    char queries[HISTORY_LIMIT][512];
+    SearchLaunch apps[HISTORY_LIMIT];
+    HICON historyIcons[HISTORY_LIMIT];
 } search;
 static void ShowResults(void);
 static void Submit(void);
+static void ShowHistory(void);
+static void HistorySubmit(void);
+static void Caption(const char *path,char *label);
+static void FreeHistoryIcons(void)
+{
+    int i; for(i=0;i<HISTORY_LIMIT;++i) {
+        if(search.historyIcons[i]) DestroyIcon(search.historyIcons[i]);
+        search.historyIcons[i]=NULL;
+    }
+}
+static BOOL HistoryWriteValue(const char *ini,const char *key,const char *value)
+{
+    char encoded[514]; const char *p;
+    for(p=value;*p;++p) if(*p=='\r' || *p=='\n') return FALSE;
+    encoded[0]='!'; lstrcpynA(encoded+1,value,sizeof(encoded)-1);
+    return WritePrivateProfileStringA("TaskbarSearchHistory",key,encoded,ini);
+}
+static BOOL WriteHistory(const char *ini,const void *clear)
+{
+    int i; char key[24];
+    if(!WritePrivateProfileStringA("TaskbarSearchHistory",NULL,NULL,ini)) return FALSE;
+    if(clear) return TRUE;
+    for(i=0;i<search.queryCount;++i) {
+        wsprintfA(key,"Query%d",i); if(!HistoryWriteValue(ini,key,search.queries[i])) return FALSE;
+    }
+    for(i=0;i<search.appCount;++i) {
+        wsprintfA(key,"App%d",i); if(!HistoryWriteValue(ini,key,search.apps[i].path)) return FALSE;
+        wsprintfA(key,"Arguments%d",i); if(!HistoryWriteValue(ini,key,search.apps[i].arguments)) return FALSE;
+        wsprintfA(key,"Label%d",i); if(!HistoryWriteValue(ini,key,search.apps[i].label)) return FALSE;
+    }
+    return TRUE;
+}
+static BOOL ReadHistoryValue(const char *key,char *value,int capacity)
+{
+    char encoded[514]; DWORD n=GetPrivateProfileStringA("TaskbarSearchHistory",key,"",encoded,sizeof(encoded),env.ini);
+    if(n>=sizeof(encoded)-1 || encoded[0]!='!' || n>=(DWORD)capacity+1) return FALSE;
+    lstrcpyA(value,encoded+1); return TRUE;
+}
+static void LoadHistory(void)
+{
+    int i; char key[24],query[512]; SearchLaunch app;
+    for(i=0;i<HISTORY_LIMIT;++i) {
+        wsprintfA(key,"Query%d",i);
+        if(ReadHistoryValue(key,query,sizeof(query)) && query[0]) lstrcpyA(search.queries[search.queryCount++],query);
+        ZeroMemory(&app,sizeof(app)); wsprintfA(key,"App%d",i);
+        if(!ReadHistoryValue(key,app.path,sizeof(app.path)) || !app.path[0]) continue;
+        wsprintfA(key,"Arguments%d",i); if(!ReadHistoryValue(key,app.arguments,sizeof(app.arguments))) continue;
+        wsprintfA(key,"Label%d",i); if(!ReadHistoryValue(key,app.label,sizeof(app.label))) continue;
+        if(!app.label[0]) Caption(app.path,app.label);
+        search.apps[search.appCount++]=app;
+    }
+}
+static void RememberQuery(const char *query)
+{
+    int i,j;
+    if(!query[0]) return;
+    if(search.queryCount && !lstrcmpA(search.queries[0],query)) return;
+    for(i=0;i<search.queryCount && lstrcmpA(search.queries[i],query);++i) {}
+    if(i==search.queryCount && search.queryCount<HISTORY_LIMIT) ++search.queryCount;
+    if(i>=HISTORY_LIMIT) i=HISTORY_LIMIT-1;
+    for(j=i;j>0;--j) lstrcpyA(search.queries[j],search.queries[j-1]);
+    lstrcpynA(search.queries[0],query,sizeof(search.queries[0]));
+    EnvCommitProfile(search.host,WriteHistory,NULL);
+}
+static void RememberApp(const char *path,const char *arguments,const char *label)
+{
+    int i,j; SearchLaunch app; DWORD attributes=GetFileAttributesA(path);
+    if(attributes==INVALID_FILE_ATTRIBUTES || (attributes&FILE_ATTRIBUTE_DIRECTORY) || !IsProgramHistoryEntry(path,NULL)) return;
+    ZeroMemory(&app,sizeof(app)); lstrcpynA(app.path,path,sizeof(app.path)); lstrcpynA(app.arguments,arguments,sizeof(app.arguments));
+    if(label && label[0]) lstrcpynA(app.label,label,sizeof(app.label)); else Caption(path,app.label);
+    for(i=0;i<search.appCount;++i) if(!lstrcmpiA(search.apps[i].path,path) && !lstrcmpA(search.apps[i].arguments,arguments)) break;
+    if(i==search.appCount && search.appCount<HISTORY_LIMIT) ++search.appCount;
+    if(i>=HISTORY_LIMIT) i=HISTORY_LIMIT-1;
+    for(j=i;j>0;--j) search.apps[j]=search.apps[j-1];
+    search.apps[0]=app; EnvCommitProfile(search.host,WriteHistory,NULL);
+}
 static void CloseWalk(void)
 {
     while(search.depth) { SearchWalk *walk=&search.walk[--search.depth]; if(walk->find!=INVALID_HANDLE_VALUE) FindClose(walk->find); }
@@ -39,11 +126,19 @@ void TaskbarSearchHide(void)
     if(!search.host) return;
     if(!search.open && !search.pending && !search.scanning) return;
     search.open=search.pending=search.submitPending=FALSE; KillTimer(search.host,1); KillTimer(search.host,2); CloseWalk(); ShowWindow(search.popup,SW_HIDE);
+    search.history=FALSE; FreeHistoryIcons();
 }
 BOOL TaskbarSearchActive(void) { return search.popup && IsWindowVisible(search.popup); }
+static void DismissSearch(void)
+{
+    char query[512]="";
+    if(search.open && !search.history && !search.pending && !search.scanning && search.calculation==QUERY_COMMAND)
+        lstrcpyA(query,search.query);
+    TaskbarSearchHide(); if(query[0]) RememberQuery(query);
+}
 void TaskbarSearchDeactivate(HWND next)
 {
-    if(next!=search.popup && !IsChild(search.popup,next) && next!=search.host && !IsChild(search.host,next)) TaskbarSearchHide();
+    if(next!=search.popup && !IsChild(search.popup,next) && next!=search.host && !IsChild(search.host,next)) DismissSearch();
 }
 static void ClearResults(void)
 {
@@ -169,15 +264,9 @@ static void BeginSearch(void)
     }
     ShowResults();
 }
-static void ShowResults(void)
+static void PlacePopup(int width,int height,RECT *client)
 {
-    RECT field,area,client; SIZE text; HDC dc; HGDIOBJ old;
-    BOOL visible=IsWindowVisible(search.popup),command=search.calculation==QUERY_COMMAND;
-    int width=300,height=command ? 66+(search.count+1)*24 : 88,x,y,i,selected;
-    const char *status=search.calculation==QUERY_VALUE ? search.answer : search.calculation==QUERY_ZERO ? UiText("Cannot divide by zero.") :
-        search.calculation==QUERY_RANGE ? UiText("Number is too large.") : search.calculation==QUERY_INVALID ? UiText("Invalid expression.") :
-        UiText(search.scanning ? "Searching" : search.count ? "Search Results" : "Run a command or open an address");
-    if(!search.open) return;
+    RECT field,area; int x,y;
     GetWindowRect(search.host,&field); SystemParametersInfoA(SPI_GETWORKAREA,0,&area,0);
     if(width>area.right-area.left) width=area.right-area.left;
     if(height>area.bottom-area.top) height=area.bottom-area.top;
@@ -188,11 +277,66 @@ static void ShowResults(void)
     if(x<area.left) x=area.left;
     if(y+height>area.bottom) y=area.bottom-height;
     if(y<area.top) y=area.top;
+    SetWindowPos(search.popup,HWND_TOPMOST,x,y,width,height,SWP_NOACTIVATE|SWP_NOCOPYBITS);
+    GetClientRect(search.popup,client);
+}
+static void HistoryRow(int code)
+{ SendMessageA(search.list,LB_ADDSTRING,0,(LPARAM)code); }
+static void ShowHistory(void)
+{
+    RECT client; int i,rows,height; SHFILEINFOA info;
+    TaskbarSearchHide(); search.open=search.history=TRUE; search.calculation=QUERY_COMMAND;
+    rows=(search.appCount ? search.appCount+1 : 0)+(search.queryCount ? search.queryCount+1 : 0);
+    if(!rows) rows=1;
+    PlacePopup(320,64+rows*24,&client);
+    UiSetWindowTextA(search.status,UiText("Search history"));
+    EnvMoveControl(search.status,6,4,client.right-12,22);
+    SendMessageA(search.list,WM_SETREDRAW,FALSE,0); SendMessageA(search.list,LB_RESETCONTENT,0,0);
+    if(search.appCount) {
+        HistoryRow(-2);
+        for(i=0;i<search.appCount;++i) {
+            ZeroMemory(&info,sizeof(info));
+            if(SHGetFileInfoA(search.apps[i].path,0,&info,sizeof(info),SHGFI_ICON|SHGFI_SMALLICON)) search.historyIcons[i]=info.hIcon;
+            HistoryRow(HISTORY_APP+i);
+        }
+    }
+    if(search.queryCount) { HistoryRow(-3); for(i=0;i<search.queryCount;++i) HistoryRow(HISTORY_QUERY+i); }
+    if(!search.appCount && !search.queryCount) HistoryRow(-4);
+    SendMessageA(search.list,LB_SETCURSEL,rows>1 ? 1 : -1,0);
+    height=(client.bottom-62)/24*24; if(height>rows*24) height=rows*24;
+    EnvMoveControl(search.list,4,28,client.right-8,height);
+    SendMessageA(search.list,WM_SETREDRAW,TRUE,0); EnvShowControl(search.list,TRUE);
+    EnvShowControl(search.copy,FALSE); EnvShowControl(search.files,FALSE);
+    EnvMoveControl(search.clear,8,client.bottom-28,client.right-16,22);
+    EnableWindow(search.clear,search.appCount || search.queryCount); EnvShowControl(search.clear,TRUE);
+    ShowWindow(search.popup,SW_SHOWNOACTIVATE);
+    RedrawWindow(search.popup,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_FRAME|RDW_ALLCHILDREN|RDW_UPDATENOW);
+}
+static void HistorySubmit(void)
+{
+    int row=(int)SendMessageA(search.list,LB_GETCURSEL,0,0),code=(int)SendMessageA(search.list,LB_GETITEMDATA,row,0);
+    if(code>=HISTORY_QUERY && code<HISTORY_QUERY+search.queryCount) {
+        char query[512]; lstrcpyA(query,search.queries[code-HISTORY_QUERY]); TaskbarSearchHide();
+        search.updating=TRUE; UiSetLiteralWindowTextA(search.combo,query); search.updating=FALSE;
+        BeginSearch(); SetFocus(search.edit);
+    } else if(code>=HISTORY_APP && code<HISTORY_APP+search.appCount) {
+        SearchLaunch app=search.apps[code-HISTORY_APP]; TaskbarSearchHide(); StartHide();
+        if(EnvironmentLaunch(env.bar,app.path,app.arguments[0] ? app.arguments : NULL,NULL)) RememberApp(app.path,app.arguments,app.label);
+    }
+}
+static void ShowResults(void)
+{
+    RECT client; SIZE text; HDC dc; HGDIOBJ old;
+    BOOL visible=IsWindowVisible(search.popup),command=search.calculation==QUERY_COMMAND;
+    int width=300,height=command ? 66+(search.count+1)*24 : 88,i,selected;
+    const char *status=search.calculation==QUERY_VALUE ? search.answer : search.calculation==QUERY_ZERO ? UiText("Cannot divide by zero.") :
+        search.calculation==QUERY_RANGE ? UiText("Number is too large.") : search.calculation==QUERY_INVALID ? UiText("Invalid expression.") :
+        UiText(search.scanning ? "Searching" : search.count ? "Search Results" : "Run a command or open an address");
+    if(!search.open) return;
     /* Keep the old complete frame until geometry, text and list data agree.
      * Win95 may paint native children synchronously during these operations. */
     if(visible) SendMessageA(search.popup,WM_SETREDRAW,FALSE,0);
-    SetWindowPos(search.popup,HWND_TOPMOST,x,y,width,height,SWP_NOACTIVATE|SWP_NOCOPYBITS);
-    GetClientRect(search.popup,&client);
+    PlacePopup(width,height,&client); EnvShowControl(search.clear,FALSE);
     UiSetWindowTextA(search.status,status);
     EnvMoveControl(search.status,6,4,client.right-12,command ? 22 : 46);
     selected=(int)SendMessageA(search.list,LB_GETCURSEL,0,0);
@@ -215,6 +359,7 @@ static void ShowResults(void)
     UiGetTextExtentPoint32A(dc,UiText("Find files..."),lstrlenA(UiText("Find files...")),&text);
     SelectObject(dc,old); ReleaseDC(search.files,dc);
     EnvMoveControl(search.files,8,command ? client.bottom-28 : 58,text.cx+20,22);
+    EnvShowControl(search.files,TRUE);
     if(visible) SendMessageA(search.popup,WM_SETREDRAW,TRUE,0);
     else ShowWindow(search.popup,SW_SHOWNOACTIVATE);
     RedrawWindow(search.popup,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_FRAME|RDW_ALLCHILDREN|RDW_UPDATENOW);
@@ -235,33 +380,38 @@ static void FindFiles(void)
 {
     char query[512]; UiGetWindowTextA(search.combo,query,sizeof(query));
     if(!query[0]) return;
-    TaskbarSearchHide(); StartHide();
+    TaskbarSearchHide(); StartHide(); RememberQuery(query);
     if(!env.host.findFiles || !env.host.findFiles(query))
         EnvError(env.bar,"Cannot open file search.",ERROR_NOT_ENOUGH_MEMORY);
 }
 static void __attribute__((noinline)) Submit(void)
 {
-    char file[512],arguments[512],query[512]; SearchResult *result; int selected; BOOL okay;
+    char file[512],arguments[512],query[512],label[MAX_PATH]=""; SearchResult *result; int selected; BOOL okay;
+    if(search.history) { HistorySubmit(); return; }
     KillTimer(search.host,1);
     UiGetWindowTextA(search.combo,query,sizeof(query));
     if(lstrcmpA(query,search.query) || !TaskbarSearchActive()) BeginSearch();
-    if(!query[0] || search.calculation!=QUERY_COMMAND) return;
+    if(!query[0] || search.calculation!=QUERY_COMMAND) {
+        if(query[0] && search.calculation==QUERY_VALUE) RememberQuery(query);
+        return;
+    }
     selected=(int)SendMessageA(search.list,LB_GETCURSEL,0,0);
     if(selected>0 && selected<=search.count) {
         result=&search.results[selected-1];
         if(result->command) {
-            int command=result->command; TaskbarSearchHide(); StartHide(); EnvCommand(command); return;
+            int command=result->command; TaskbarSearchHide(); StartHide(); RememberQuery(query); EnvCommand(command); return;
         }
         if(result->pidl) {
             LPITEMIDLIST pidl=result->pidl; BOOL folder=result->folder; SHELLEXECUTEINFOA execute;
             result->pidl=NULL; TaskbarSearchHide(); StartHide();
+            RememberQuery(query);
             ZeroMemory(&execute,sizeof(execute)); execute.cbSize=sizeof(execute); execute.fMask=SEE_MASK_IDLIST;
             execute.hwnd=env.bar; execute.lpIDList=pidl; execute.nShow=SW_SHOWNORMAL;
             if(folder) OpenNativeFolder(pidl);
             else if(!ShellExecuteExA(&execute)) EnvError(env.bar,"Cannot open this Control Panel item.",GetLastError());
             CoTaskMemFree(pidl); return;
         }
-        lstrcpyA(file,result->path); lstrcpyA(arguments,result->arguments);
+        lstrcpyA(file,result->path); lstrcpyA(arguments,result->arguments); lstrcpyA(label,result->label);
     } else if(!TaskbarQuerySplit(query,file,sizeof(file),arguments,sizeof(arguments))) {
         UiMessageBoxA(search.host,UiText("Enter a valid command, address or expression."),"Explorer95",MB_OK|MB_ICONEXCLAMATION); return;
     }
@@ -280,18 +430,22 @@ static void __attribute__((noinline)) Submit(void)
     /* Copy before launching: ShellExecute can enter a nested shell loop. */
     okay=EnvironmentLaunch(env.bar,file,arguments[0] ? arguments : NULL,NULL);
     if(okay) {
-        int found=(int)SendMessageA(search.combo,CB_FINDSTRINGEXACT,(WPARAM)-1,(LPARAM)query);
-        if(found!=CB_ERR) SendMessageA(search.combo,CB_DELETESTRING,found,0);
-        SendMessageA(search.combo,CB_INSERTSTRING,0,(LPARAM)query);
-        if(SendMessageA(search.combo,CB_GETCOUNT,0,0)>10) SendMessageA(search.combo,CB_DELETESTRING,10,0);
+        RememberQuery(query); RememberApp(file,arguments,label);
         search.updating=TRUE; UiSetLiteralWindowTextA(search.combo,query); search.updating=FALSE;
     }
+}
+static void ClearHistory(void)
+{
+    if(!EnvCommitProfile(search.popup,WriteHistory,(const void *)1)) return;
+    search.queryCount=search.appCount=0;
+    ZeroMemory(search.queries,sizeof(search.queries)); ZeroMemory(search.apps,sizeof(search.apps)); ShowHistory();
 }
 static BOOL Key(UINT key)
 {
     if(key=='A' && GetKeyState(VK_CONTROL)<0) { SendMessageA(search.edit,EM_SETSEL,0,-1); return TRUE; }
-    if(key==VK_ESCAPE) { TaskbarSearchHide(); SendMessageA(search.combo,CB_SHOWDROPDOWN,FALSE,0); return TRUE; }
+    if(key==VK_ESCAPE) { DismissSearch(); SendMessageA(search.combo,CB_SHOWDROPDOWN,FALSE,0); return TRUE; }
     if(key==VK_RETURN) {
+        if(search.history && GetFocus()==search.clear) { ClearHistory(); return TRUE; }
         if(GetFocus()==search.files) { FindFiles(); return TRUE; }
         if(GetFocus()==search.copy && search.calculation==QUERY_VALUE) { CopyAnswer(); return TRUE; }
         if(SendMessageA(search.combo,CB_GETDROPPEDSTATE,0,0)) SendMessageA(search.combo,CB_SHOWDROPDOWN,FALSE,0);
@@ -300,15 +454,23 @@ static BOOL Key(UINT key)
     if(key==VK_DOWN || key==VK_UP) {
         int current,count;
         if(SendMessageA(search.combo,CB_GETDROPPEDSTATE,0,0)) return FALSE;
-        if(!TaskbarSearchActive()) BeginSearch();
+        if(!TaskbarSearchActive()) {
+            char text[512]; UiGetWindowTextA(search.combo,text,sizeof(text));
+            if(text[0]) BeginSearch(); else { ShowHistory(); return TRUE; }
+        }
         search.navigated=TRUE; search.submitPending=FALSE;
         current=(int)SendMessageA(search.list,LB_GETCURSEL,0,0); count=(int)SendMessageA(search.list,LB_GETCOUNT,0,0);
-        current+=key==VK_DOWN ? 1 : -1; if(current<0) current=0; if(current>=count) current=count-1;
+        if(search.history) {
+            int next=current,direction=key==VK_DOWN ? 1 : -1;
+            while((next+=direction)>=0 && next<count)
+                if((int)SendMessageA(search.list,LB_GETITEMDATA,next,0)>=0) { current=next; break; }
+        } else { current+=key==VK_DOWN ? 1 : -1; if(current<0) current=0; if(current>=count) current=count-1; }
         SendMessageA(search.list,LB_SETCURSEL,current,0); return TRUE;
     }
     if(key==VK_TAB && TaskbarSearchActive()) {
         HWND order[4]={search.edit,search.files,NULL,NULL},focus=GetFocus(); int count=2,i;
-        if(search.calculation==QUERY_COMMAND) { order[1]=search.list; order[2]=search.files; count=3; }
+        if(search.history) { order[1]=search.list; if(IsWindowEnabled(search.clear)) { order[2]=search.clear; count=3; } }
+        else if(search.calculation==QUERY_COMMAND) { order[1]=search.list; order[2]=search.files; count=3; }
         else if(search.calculation==QUERY_VALUE) { order[2]=search.copy; count=3; }
         for(i=0;i<count && order[i]!=focus;++i) {}
         i=(i+(GetKeyState(VK_SHIFT)<0 ? count-1 : 1))%count; SetFocus(order[i]);
@@ -347,6 +509,10 @@ static void DrawStatus(const DRAWITEMSTRUCT *item)
 }
 static LRESULT CALLBACK EditProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
 {
+    if((message==WM_KEYDOWN && wp==VK_F4) || (message==WM_SYSKEYDOWN && wp==VK_DOWN)) {
+        if(lp&(1UL<<30)) return 0;
+        if(search.history) TaskbarSearchHide(); else ShowHistory(); return 0;
+    }
     if(message==WM_DRAWITEM && ((DRAWITEMSTRUCT *)lp)->hwndItem==search.icon) {
         DRAWITEMSTRUCT *item=(DRAWITEMSTRUCT *)lp;
         FillRect(item->hDC,&item->rcItem,(HBRUSH)(COLOR_WINDOW+1));
@@ -362,15 +528,30 @@ static LRESULT CALLBACK EditProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
     if(message==WM_CHAR && (wp==VK_RETURN || wp==VK_ESCAPE)) return 0;
     return CallWindowProcA(search.original,window,message,wp,lp);
 }
+static LRESULT CALLBACK ComboProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
+{
+    if(message==WM_LBUTTONDOWN || message==WM_LBUTTONDBLCLK) {
+        RECT rect; GetClientRect(window,&rect);
+        if((short)LOWORD(lp)>=rect.right-GetSystemMetrics(SM_CXVSCROLL)) {
+            SetFocus(search.edit);
+            if(search.history) TaskbarSearchHide(); else ShowHistory();
+            return 0;
+        }
+    }
+    return CallWindowProcA(search.comboOriginal,window,message,wp,lp);
+}
 static LRESULT CALLBACK SearchProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
 {
     switch(message) {
+    case HISTORY_OPEN:
+        SendMessageA(search.combo,CB_SHOWDROPDOWN,FALSE,0); ShowHistory(); return 0;
     case WM_COMMAND:
         if((HWND)lp==search.combo && !search.updating) {
             if(HIWORD(wp)==CBN_EDITCHANGE || HIWORD(wp)==CBN_SELENDOK) { TaskbarSearchHide(); search.pending=TRUE; SetTimer(window,1,200,NULL); }
-            if(HIWORD(wp)==CBN_DROPDOWN) TaskbarSearchHide();
+            if(HIWORD(wp)==CBN_DROPDOWN) { TaskbarSearchHide(); PostMessageA(search.host,HISTORY_OPEN,0,0); }
         } else if((HWND)lp==search.copy) CopyAnswer();
         else if((HWND)lp==search.files) FindFiles();
+        else if((HWND)lp==search.clear) ClearHistory();
         else if((HWND)lp==search.list) {
             if(HIWORD(wp)==LBN_SELCHANGE) { search.navigated=TRUE; search.submitPending=FALSE; }
             if(HIWORD(wp)==LBN_DBLCLK) Submit();
@@ -381,7 +562,7 @@ static LRESULT CALLBACK SearchProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
         else if(wp==2) SearchBatch();
         return 0;
     case WM_ACTIVATE:
-        if(window==search.popup && LOWORD(wp)==WA_INACTIVE && (HWND)lp!=env.bar) TaskbarSearchHide();
+        if(window==search.popup && LOWORD(wp)==WA_INACTIVE && (HWND)lp!=env.bar) DismissSearch();
         break;
     case WM_ERASEBKGND: return TRUE;
     case WM_PAINT: {
@@ -405,6 +586,22 @@ static LRESULT CALLBACK SearchProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
         BOOL selected=!!(item->itemState&ODS_SELECTED); HGDIOBJ old; HDC dc;
         if(item->CtlID==3) { DrawStatus(item); return TRUE; }
         if(item->itemID==(UINT)-1) return TRUE;
+        if(search.history) {
+            int code=(int)item->itemData; HICON icon=NULL; const char *label=NULL; BOOL header=code<0;
+            if(code>=HISTORY_QUERY && code<HISTORY_QUERY+search.queryCount) { label=search.queries[code-HISTORY_QUERY]; icon=search.searchIcon; }
+            else if(code>=HISTORY_APP && code<HISTORY_APP+search.appCount) { label=search.apps[code-HISTORY_APP].label; icon=search.historyIcons[code-HISTORY_APP]; }
+            else label=UiText(code==-2 ? "Recent programs" : code==-3 ? "Recent searches" : "No search history yet");
+            selected=selected && !header;
+            dc=PaintBufferBegin(&search.rowPaint,item->hDC,&rect);
+            FillRect(dc,&rect,(HBRUSH)(INT_PTR)((selected ? COLOR_HIGHLIGHT : header ? COLOR_BTNFACE : COLOR_WINDOW)+1));
+            if(icon) DrawIconEx(dc,rect.left+4,rect.top+4,icon,16,16,0,NULL,DI_NORMAL);
+            rect.left+=header ? 8 : 26; rect.right-=4;
+            old=SelectObject(dc,header ? UiFont(env.host.font) : env.host.font);
+            SetBkMode(dc,TRANSPARENT); SetTextColor(dc,GetSysColor(selected ? COLOR_HIGHLIGHTTEXT : header ? COLOR_GRAYTEXT : COLOR_WINDOWTEXT));
+            if(header) UiDrawTextA(dc,label,-1,&rect,DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX|DT_END_ELLIPSIS);
+            else UiDrawNativeTextA(dc,label,-1,&rect,DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX|DT_END_ELLIPSIS);
+            SelectObject(dc,old); PaintBufferEnd(&search.rowPaint,item->hDC,&item->rcItem); return TRUE;
+        }
         if(item->itemID>0 && item->itemID<=(UINT)search.count) result=&search.results[item->itemID-1];
         dc=PaintBufferBegin(&search.rowPaint,item->hDC,&rect);
         FillRect(dc,&rect,(HBRUSH)(INT_PTR)((selected ? COLOR_HIGHLIGHT : COLOR_WINDOW)+1));
@@ -437,13 +634,16 @@ BOOL TaskbarSearchCreate(void)
     search.list=EnvControl(search.popup,"LISTBOX","",WS_TABSTOP|LBS_NOTIFY|LBS_OWNERDRAWFIXED|LBS_NOINTEGRALHEIGHT|WS_VSCROLL,4);
     search.copy=EnvControl(search.popup,"BUTTON","Copy result",WS_TABSTOP,5);
     search.files=EnvControl(search.popup,"BUTTON","Find files...",WS_TABSTOP,6);
-    if(!search.host || !search.combo || !search.edit || !search.popup || !search.status || !search.list || !search.copy || !search.files) {
+    search.clear=EnvControl(search.popup,"BUTTON","Clear search history",WS_TABSTOP,7);
+    if(!search.host || !search.combo || !search.edit || !search.popup || !search.status || !search.list || !search.copy || !search.files || !search.clear) {
         RenderTraceShell("search.create",E_FAIL,GetLastError(),(search.host ? 1 : 0)|(search.combo ? 2 : 0)|(search.edit ? 4 : 0)|(search.popup ? 8 : 0)|(search.list ? 16 : 0));
         return FALSE;
     }
     SendMessageA(search.combo,CB_LIMITTEXT,sizeof(search.query)-1,0);
     search.original=(WNDPROC)SetWindowLongPtrA(search.edit,GWLP_WNDPROC,(LONG_PTR)EditProc);
     if(!search.original) return FALSE;
+    search.comboOriginal=(WNDPROC)SetWindowLongPtrA(search.combo,GWLP_WNDPROC,(LONG_PTR)ComboProc);
+    if(!search.comboOriginal) return FALSE;
     SetWindowLongA(search.edit,GWL_STYLE,GetWindowLongA(search.edit,GWL_STYLE)|WS_CLIPCHILDREN);
     search.searchIcon=EnvSystemIcon(23);
     search.icon=EnvControl(search.edit,"STATIC","",SS_OWNERDRAW|SS_NOTIFY,1);
@@ -451,6 +651,7 @@ BOOL TaskbarSearchCreate(void)
     ZeroMemory(&font,sizeof(font)); GetObjectA(env.host.font,sizeof(font),&font);
     font.lfHeight=-20; font.lfWeight=FW_BOLD; search.answerFont=CreateFontIndirectA(&font);
     LayoutEditIcon();
+    LoadHistory();
     return TRUE;
 }
 int TaskbarSearchLayout(int begin,int end,int cross,BOOL vertical)
@@ -479,14 +680,14 @@ int TaskbarSearchLayout(int begin,int end,int cross,BOOL vertical)
     if(changed) {
         LayoutEditIcon();
         RedrawWindow(search.host,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_ALLCHILDREN|RDW_UPDATENOW);
-        if(TaskbarSearchActive()) ShowResults();
+        if(TaskbarSearchActive()) { if(search.history) ShowHistory(); else ShowResults(); }
     }
     return begin+(vertical ? hostHeight+4 : size+4);
 }
 BOOL TaskbarSearchTranslate(MSG *message)
 {
     BOOL inside=message->hwnd==search.host || IsChild(search.host,message->hwnd) || message->hwnd==search.popup || IsChild(search.popup,message->hwnd);
-    if(!inside && (message->message==WM_LBUTTONDOWN || message->message==WM_RBUTTONDOWN || message->message==WM_MBUTTONDOWN)) TaskbarSearchHide();
+    if(!inside && (message->message==WM_LBUTTONDOWN || message->message==WM_RBUTTONDOWN || message->message==WM_MBUTTONDOWN)) DismissSearch();
     if(inside && message->message==WM_KEYDOWN && message->wParam==VK_RETURN && (message->lParam&(1UL<<30))) return TRUE;
     if(inside && message->message==WM_KEYDOWN && Key((UINT)message->wParam)) return TRUE;
     return FALSE;
@@ -496,6 +697,7 @@ void TaskbarSearchDestroy(void)
     TaskbarSearchHide(); ClearResults();
     if(search.icon) DestroyWindow(search.icon);
     if(search.edit && search.original) SetWindowLongPtrA(search.edit,GWLP_WNDPROC,(LONG_PTR)search.original);
+    if(search.combo && search.comboOriginal) SetWindowLongPtrA(search.combo,GWLP_WNDPROC,(LONG_PTR)search.comboOriginal);
     if(search.popup) DestroyWindow(search.popup);
     if(search.host) DestroyWindow(search.host);
     if(search.searchIcon) DestroyIcon(search.searchIcon);

@@ -354,6 +354,12 @@ static void LanguageRestartTests(const char *directory,const char *executable)
         Check(files.left>=frame.left+4 && files.right+4<=button.left && files.top==button.top,
             "translated file-search and Copy result buttons fit without overlapping");
         SaveScreen("build/taskbar-search-ru.bmp"); SearchInput(bar,""); PumpFor(50);
+        { HWND edit=FindWindowExA(GetDlgItem(GetDlgItem(bar,ID_SEARCHBOX),2),NULL,"EDIT",NULL);
+          SendMessageA(edit,WM_KEYDOWN,VK_F4,0); popup=FindWindowA("Explorer95.TaskbarSearchResults",NULL);
+          Check(IsWindowVisible(popup) && LanguageWideEqual(GetDlgItem(popup,3),L"\u0418\u0441\u0442\u043e\u0440\u0438\u044f \u043f\u043e\u0438\u0441\u043a\u0430") &&
+              LanguageWideEqual(GetDlgItem(popup,7),L"\u041e\u0447\u0438\u0441\u0442\u0438\u0442\u044c \u0438\u0441\u0442\u043e\u0440\u0438\u044e \u043f\u043e\u0438\u0441\u043a\u0430"),
+              "F4 opens search history with its Russian heading and Clear action");
+          PumpFor(80); SaveScreen("build/taskbar-search-history-ru.bmp"); SendMessageA(edit,WM_KEYDOWN,VK_ESCAPE,0); }
     }
     {
         HWND browser=WaitFor(BROWSER_CLASS,NULL); Check(browser!=NULL,"the Russian shell opens its own filesystem browser"); PumpFor(400);

@@ -353,6 +353,31 @@ static void BrowserAddressTests(HWND browser, const char *fixture)
     Check(!lstrcmpiA(text, path) && IsWindowVisible(icon), "address editing still accepts relative paths after dropdown navigation");
     Navigate(browser, fixture);
 }
+static void __attribute__((noinline)) BrowserAddressProgramTests(HWND browser,const char *fixture)
+{
+    char module[MAX_PATH],target[MAX_PATH],command[512],text[MAX_PATH],folder[MAX_PATH],shortcut[MAX_PATH];
+    int i,windows=PaneWindowCount(); HWND child; TaskbarLink link;
+    GetModuleFileNameA(NULL,module,sizeof(module)); wsprintfA(target,"%s\\address child.exe",fixture); PanelGuiFixture(module,target);
+    ZeroMemory(&link,sizeof(link)); lstrcpyA(link.target,target); lstrcpyA(link.arguments,"\"--child\""); lstrcpyA(link.directory,fixture);
+    wsprintfA(shortcut,"%s\\address shortcut.lnk",fixture);
+    Check(SUCCEEDED(OleInitialize(NULL)) && TaskbarLinkWrite(shortcut,&link),"create only our address-launch shortcut with its own arguments"); OleUninitialize();
+    Navigate(browser,fixture);
+    for(i=0;i<3;++i) {
+        if(i==2) lstrcpyA(command,"address shortcut.lnk");
+        else wsprintfA(command,"\"%s\" \"--child\"",i ? "address child.exe" : target);
+        SetWindowTextA(GetDlgItem(browser,ID_ADDRESS),command); SendMessageA(browser,WM_COMMAND,ID_GO,0);
+        child=WaitFor("Explorer95.SmokeChild","Explorer95 smoke child");
+        Check(child && SendMessageA(child,WM_APP+35,0,0),"the address field launches a program command or existing shortcut with its original quoted arguments");
+        SendMessageA(GetDlgItem(browser,ID_ADDRESS),WM_GETTEXT,sizeof(text),(LPARAM)text);
+        Check(!lstrcmpiA(text,fixture) && PaneWindowCount()==windows,"launching an address leaves the current folder and browser window unchanged");
+        SearchCloseChild(child);
+    }
+    wsprintfA(folder,"%s\\address folder",fixture); Check(CreateDirectoryA(folder,NULL),"create only our address-folder fixture with spaces");
+    Navigate(browser,"address folder"); SendMessageA(GetDlgItem(browser,ID_ADDRESS),WM_GETTEXT,sizeof(text),(LPARAM)text);
+    Check(!lstrcmpiA(text,folder),"an unquoted relative folder with spaces remains a complete navigation path");
+    Navigate(browser,fixture);
+    Check(DeleteFileA(shortcut) && DeleteFileA(target) && RemoveDirectoryA(folder),"remove only our owned address-launch executable, shortcut and folder");
+}
 static void BrowserPaneTests(HWND browser, const char *fixture, const char *settings)
 {
     HWND sidebar, list, options, toolbar, results; RECT original; char path[MAX_PATH], value[MAX_PATH + 32], root[MAX_PATH]; HANDLE file; DWORD started;
@@ -518,5 +543,6 @@ static void BrowserPaneTests(HWND browser, const char *fixture, const char *sett
     Navigate(browser, path); Navigate(browser, fixture); SendMessageA(browser, WM_COMMAND, ID_FOLDERS_CLOSE, 0);
     Check(GetPrivateProfileIntA("ExplorerHistory", "Count", 0, settings) >= 1, "history recording can be enabled again");
     BrowserAddressTests(browser, fixture);
+    BrowserAddressProgramTests(browser, fixture);
     ShowWindow(browser, SW_RESTORE); MoveWindow(browser, original.left, original.top, original.right - original.left, original.bottom - original.top, TRUE);
 }
