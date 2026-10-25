@@ -902,29 +902,7 @@ void EnvCommand(int id)
     case ID_SHUTDOWN: ShutdownShow(); break;
     case ID_LOGOFF:
         if (!(env.availableStartItems & START_ITEM_LOGOFF)) break;
-        if (MessageBoxA(env.bar, id == ID_LOGOFF ? "Save your work. Log off Windows now?" : "Save your work. Shut down Windows now?",
-            "Explorer95", MB_YESNO | MB_DEFBUTTON2 | MB_ICONQUESTION) == IDYES)
-            {
-                SetLastError(ERROR_SUCCESS);
-                if (!ExitWindowsEx(id == ID_LOGOFF ? EWX_LOGOFF : EWX_SHUTDOWN, 0)) {
-                    DWORD error = GetLastError();
-                    if (id == ID_LOGOFF && (GetVersion() & 0x80000000UL) && error == ERROR_INVALID_FUNCTION) {
-                        /* Some Win95 configurations reject a direct logoff.
-                         * Delegate to the installed shell's session dialog;
-                         * never substitute reboot, shutdown, or forced logoff. */
-                        typedef void (WINAPI *SessionDialog)(HWND);
-                        SessionDialog dialog = (SessionDialog)(void *)GetProcAddress(GetModuleHandleA("shell32.dll"), MAKEINTRESOURCEA(60));
-                        if (dialog) {
-                            MessageBoxA(env.bar, "Use the Windows dialog to select:\r\n"
-                                "Close all programs and log on as a different user.\r\n\r\n"
-                                "The available choices depend on your installed logon provider.",
-                                "Log Off Windows", MB_OK | MB_ICONINFORMATION);
-                            dialog(env.bar);
-                        } else EnvError(env.bar, "This Windows installation could not log off directly.", error);
-                    } else if (error) EnvError(env.bar, "Windows could not end the session.", error);
-                    /* A cancelled session end may return FALSE without an error. */
-                }
-            }
+        ShutdownLogoffShow();
         break;
     case ID_TASKMANAGER: {
         SHELLEXECUTEINFOA execute; DWORD length=GetWindowsDirectoryA(path,MAX_PATH);

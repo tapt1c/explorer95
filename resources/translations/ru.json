@@ -149,6 +149,8 @@
   "Task Manager...": "Диспетчер задач...",
   "Windows could not open the task list.": "Не удалось открыть список задач.",
   "Log Off Windows": "Выход из Windows",
+  "Log off": "Выход",
+  "Save your work before logging off.\r\nAll open programs will close.": "Сохраните работу перед выходом.\r\nВсе открытые программы будут закрыты.",
   "Explorer95 Desktop": "Рабочий стол Explorer95",
   "More Quick Launch programs": "Другие программы быстрого запуска",
   "Drag to resize Quick Launch (unlock the taskbar first)": "Перетащите для изменения размера (снимите закрепление панели)",

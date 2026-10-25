@@ -331,6 +331,17 @@ static void LanguageRestartTests(const char *directory,const char *executable)
               "the MS-DOS restart checkbox has its Russian label in the real shutdown window");
         PumpFor(80); SaveScreen("build/shutdown-dos-ru.bmp");
         SendMessageA(dialog,WM_COMMAND,IDCANCEL,0); /* Cleanup only; never select a power command. */
+        SendMessageA(bar,WM_COMMAND,ID_LOGOFF,0); dialog=WaitFor("Explorer95.Shutdown",NULL);
+        Check(dialog && LanguageWideEqual(GetDlgItem(dialog,ID_LOGOFF),L"\u0412\u044b\u0445\u043e\u0434"),
+              "the real Russian Log Off dialog labels its action Выход");
+        Check(LanguageWideEqual(GetDlgItem(dialog,1704),L"\u0421\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u0435 \u0440\u0430\u0431\u043e\u0442\u0443 \u043f\u0435\u0440\u0435\u0434 \u0432\u044b\u0445\u043e\u0434\u043e\u043c.\r\n\u0412\u0441\u0435 \u043e\u0442\u043a\u0440\u044b\u0442\u044b\u0435 \u043f\u0440\u043e\u0433\u0440\u0430\u043c\u043c\u044b \u0431\u0443\u0434\u0443\u0442 \u0437\u0430\u043a\u0440\u044b\u0442\u044b."),
+              "the save reminder is Russian on an English system locale");
+        PumpFor(80); SaveScreen("build/logoff-ru.bmp");
+        /* Paint the pressed state only; never send a click to the session action. */
+        SendMessageA(GetDlgItem(dialog,ID_LOGOFF),BM_SETSTATE,TRUE,0); PumpFor(60);
+        SaveScreen("build/logoff-ru-pressed.bmp");
+        SendMessageA(GetDlgItem(dialog,ID_LOGOFF),BM_SETSTATE,FALSE,0);
+        SendMessageA(dialog,WM_COMMAND,IDCANCEL,0);
     }
     {
         HWND popup; RECT button,frame,files;

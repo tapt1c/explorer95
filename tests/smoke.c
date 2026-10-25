@@ -1195,6 +1195,43 @@ static void RepaintTests(HWND bar)
     SendDlgItemMessageA(properties, 608, BM_SETCHECK, inactive, 0); SendMessageA(properties, WM_COMMAND, IDOK, 0);
     DeleteObject(marker); DestroyWindow(observer); UnregisterClassA(cls.lpszClassName, cls.hInstance);
 }
+static void LogoffTests(HWND bar, int style)
+{
+    HWND dialog, overlay, action, reminder; RECT frame, client, button, text; HDC dc; char label[160];
+    SendMessageA(bar, WM_COMMAND, ID_LOGOFF, 0);
+    dialog = WaitFor("Explorer95.Shutdown", "Log Off Windows"); overlay = WaitFor("Explorer95.ShutdownShade", NULL);
+    Check(dialog && overlay && !IsWindowEnabled(bar), "Log Off uses the shared modal session dialog and desktop snapshot");
+    action = GetDlgItem(dialog, ID_LOGOFF); reminder = GetDlgItem(dialog, 1704);
+    Check(action && reminder && GetDlgItem(dialog, IDCANCEL) && !GetDlgItem(dialog, 1700) &&
+          !GetDlgItem(dialog, 1701) && !GetDlgItem(dialog, 1702) && !GetDlgItem(dialog, 1703),
+          "Log Off has one session action, a reminder and Cancel without any power or DOS controls");
+    GetWindowRect(dialog, &frame); GetClientRect(dialog, &client);
+    Check(frame.right-frame.left == 314 && frame.bottom-frame.top == 200 &&
+          frame.left >= 0 && frame.top >= 0 && frame.right <= GetSystemMetrics(SM_CXSCREEN) && frame.bottom <= GetSystemMetrics(SM_CYSCREEN),
+          "Log Off retains the compact shutdown dimensions within the screen");
+    Check(((GetWindowLongA(dialog, GWL_STYLE) & WS_CAPTION) == WS_CAPTION) == !!style,
+          "Log Off follows the selected Windows 95 or XP shutdown style");
+    GetWindowRect(action, &button); GetWindowRect(reminder, &text);
+    MapWindowPoints(NULL, dialog, (POINT *)&button, 2); MapWindowPoints(NULL, dialog, (POINT *)&text, 2);
+    Check(button.left >= 0 && button.right <= text.left && text.right <= client.right &&
+          text.top >= 0 && text.bottom <= client.bottom && button.bottom <= client.bottom,
+          "Log Off button sits on the left and the save reminder fits on the right");
+    GetWindowTextA(action, label, sizeof(label)); Check(!lstrcmpA(label, "Log off"), "the session action keeps its own Log off label");
+    GetWindowTextA(reminder, label, sizeof(label));
+    Check(!lstrcmpA(label, "Save your work before logging off.\r\nAll open programs will close."),
+          "the accessible reminder asks users to save before programs close");
+    PumpFor(100); dc = GetDC(dialog);
+    Check(GetPixel(dc, 8, 8) == (style ? GetSysColor(COLOR_BTNFACE) : RGB(0,45,140)),
+          "Log Off paints the same system face or blue header as Shut Down"); ReleaseDC(dialog, dc);
+    SaveScreen(style ? "build/logoff-95.bmp" : "build/logoff-xp.bmp");
+    /* Tests only cancel. Never click the action or send Enter to its button. */
+    SendMessageA(dialog, WM_COMMAND, IDCANCEL, 0); PumpFor(80);
+    Check(!IsWindow(dialog) && !IsWindow(overlay) && IsWindowEnabled(bar), "Cancel Log Off restores the shell and removes the snapshot");
+    SendMessageA(bar, WM_COMMAND, ID_LOGOFF, 0); dialog = WaitFor("Explorer95.Shutdown", NULL);
+    PostMessageA(dialog, WM_KEYDOWN, VK_ESCAPE, 0); PumpFor(100);
+    Check(!IsWindow(dialog) && !FindWindowA("Explorer95.ShutdownShade", NULL) && IsWindowEnabled(bar),
+          "Escape cancels Log Off during the fade without ending the session");
+}
 static void ShutdownStyleTests(HWND bar, const char *settings)
 {
     HWND properties = OpenSettings(bar), dialog; RECT rect, client, button; HDC dc; int style, id;
@@ -1241,6 +1278,7 @@ static void ShutdownStyleTests(HWND bar, const char *settings)
         ReleaseDC(dialog, dc);
         SaveScreen(style ? "build/shutdown-dos-95.bmp" : "build/shutdown-dos-xp.bmp");
         SendMessageA(dialog, WM_COMMAND, IDCANCEL, 0); /* Cleanup only; never execute a power action. */
+        LogoffTests(bar, style);
         properties = OpenSettings(bar); SettingsPage(properties, 2, -1);
         Check(SendDlgItemMessageA(properties, 1029, CB_GETCURSEL, 0, 0) == style,
               "reopening settings retains the selected shutdown style");
@@ -1249,7 +1287,7 @@ static void ShutdownStyleTests(HWND bar, const char *settings)
 }
 static void ShutdownTests(HWND bar, HWND menu)
 {
-    HWND dialog, overlay, fixture, logoff; HDC dc; COLORREF first, final; RECT rect; char label[32]; DWORD started;
+    HWND dialog, overlay, fixture; HDC dc; COLORREF first, final; RECT rect; char label[32]; DWORD started;
     fixture = CreateWindowExA(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, "STATIC", "", WS_POPUP | WS_VISIBLE | SS_WHITERECT,
         2, 2, 40, 40, NULL, NULL, GetModuleHandleA(NULL), NULL);
     UpdateWindow(fixture); SetForegroundWindow(bar); PumpFor(60);
@@ -1291,9 +1329,6 @@ static void ShutdownTests(HWND bar, HWND menu)
     PostMessageA(dialog, WM_KEYDOWN, VK_ESCAPE, 0); PumpFor(150);
     Check(dialog && !IsWindow(dialog) && !FindWindowA("Explorer95.ShutdownShade", NULL) && IsWindowEnabled(bar), "Escape also cancels while the background fade is in progress");
     DestroyWindow(fixture);
-    PostMessageA(menu, WM_COMMAND, 313, 0); logoff = WaitFor("#32770", "Explorer95");
-    Check(logoff && !FindWindowA("Explorer95.Shutdown", NULL), "Log Off keeps its existing confirmation instead of opening the new shutdown choice");
-    SendMessageA(logoff, WM_COMMAND, IDNO, 0); PumpFor(60);
 }
 static BOOL PreviewStartMatches(HWND preview, HWND start, int x, int y)
 {
