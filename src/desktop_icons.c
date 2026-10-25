@@ -713,31 +713,10 @@ void DesktopIconsLineUp(DesktopIcons *icons)
     else {
         plan = MakePlan(icons,&count,TRUE);
         if (!plan) return;
-        RECT area; int rank, columns,rows,cursor=0,iconWidth=IconWidth(icons); BOOL okay=TRUE;
-        BOOL vertical=!!(GetWindowLongA(icons->list,GWL_STYLE)&LVS_ALIGNLEFT);
-        GetClientRect(icons->list,&area); columns=area.right/icons->width+1; rows=area.bottom/icons->height+1;
         for(i=0;i<count;++i) plan[i].to=GridPoint(icons,plan[i].from);
-        /* Pack in the existing visual order. Do not re-sort Shell32's items
-         * or retain holes accumulated by the old label-edge clamping. */
-        for(rank=0;rank<count && okay;++rank) {
-            int next=-1,cell; POINT first={0,0}; BOOL placed=FALSE;
-            for(i=0;i<count;++i) if(!plan[i].moving) {
-                POINT point=plan[i].to;
-                if(next<0 || (vertical ? point.x<first.x || (point.x==first.x && point.y<first.y) :
-                    point.y<first.y || (point.y==first.y && point.x<first.x))) { next=i; first=point; }
-            }
-            if(next<0) { okay=FALSE; break; }
-            for(cell=cursor;cell<columns*rows;++cell) {
-                POINT point;
-                point.x=(vertical ? cell/rows : cell%columns)*icons->width+(icons->width-iconWidth)/2;
-                point.y=(vertical ? cell%rows : cell/columns)*icons->height+4;
-                if(FitPlacement(&area,&plan[next],&point,TRUE) && FreePosition(plan,count,next,point)) {
-                    plan[next].to=point; plan[next].fixed=plan[next].moving=TRUE; placed=TRUE; cursor=cell+1; break;
-                }
-            }
-            if(!placed) okay=FALSE;
-        }
-        if(okay) ApplyPlan(icons,plan,count);
+        /* Line up preserves the user's spatial layout. Only Auto Arrange
+         * packs columns; resolve collisions around these nearest grid cells. */
+        if(ResolvePositions(icons,plan,count,TRUE)) ApplyPlan(icons,plan,count);
         HeapFree(GetProcessHeap(),0,plan);
     }
     icons->ready = TRUE; icons->pending = FALSE; SaveOrReport(icons);

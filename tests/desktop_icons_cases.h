@@ -83,7 +83,7 @@ static void CheckDesktopGridLabels(HWND list, int size)
         Check(PtInRect(&area,hit.pt) && ListView_HitTest(list,&hit)==i && (hit.flags&LVHT_ONITEMLABEL),"packed shortcut labels remain individually clickable without an earlier item covering them");
     }
 }
-static void DesktopGridLabelTests(const char *directory)
+static void __attribute__((noinline)) DesktopGridLabelTests(const char *directory)
 {
     HWND parent, list; HIMAGELIST images; int size, i;
     char profile[MAX_PATH], layout[MAX_PATH];
@@ -109,17 +109,21 @@ static void DesktopGridLabelTests(const char *directory)
         testDesktopIcons=DesktopIconsCreate(list,profile); DesktopIconsConfigure(testDesktopIcons,FALSE,FALSE,TRUE,64,80); DesktopPump();
         CheckDesktopGridLabels(list,size);
         {
-            const char *shortNames[]={"One","Two","Three","Four"}; int step=size==32 ? 64 : 80; POINT first;
+            const char *shortNames[]={"One","Two","Three","Four"}; int step=size==32 ? 64 : 80; POINT expected[4];
             DesktopIconsConfigure(testDesktopIcons,FALSE,FALSE,TRUE,64,step);
-            for(i=0;i<4;++i) { ListView_SetItemText(list,i,0,(char *)shortNames[i]); ListView_SetItemPosition(list,i,(64-size)/2,4+i*step*2); }
-            DesktopIconsLineUp(testDesktopIcons); first=DesktopPoint(list,0);
+            for(i=0;i<4;++i) {
+                expected[i].x=(64-size)/2+(i%2)*128; expected[i].y=4+(i/2)*step*2;
+                ListView_SetItemText(list,i,0,(char *)shortNames[i]); ListView_SetItemPosition(list,i,expected[i].x+5,expected[i].y+3);
+            }
+            DesktopIconsLineUp(testDesktopIcons);
             for(i=0;i<4;++i) { POINT point=DesktopPoint(list,i);
-                Check(point.x==first.x && point.y==first.y+i*step,"Line up removes accumulated holes in visual order without reserving blank native-cell padding"); }
+                Check(point.x==expected[i].x && point.y==expected[i].y,"Line up snaps nearby without collapsing the user's separated icon groups"); }
+            DesktopIconsLineUp(testDesktopIcons);
             RedrawWindow(list,NULL,NULL,RDW_INVALIDATE|RDW_UPDATENOW);
             DesktopPump();
             for(i=0;i<4;++i) { POINT point=DesktopPoint(list,i); char text[MAX_PATH]; ListView_GetItemText(list,i,0,text,sizeof(text));
-                Check(!lstrcmpA(text,shortNames[i]) && point.x==first.x && point.y==first.y+i*step,
-                    "compact icon order and captions survive deferred native painting"); }
+                Check(!lstrcmpA(text,shortNames[i]) && point.x==expected[i].x && point.y==expected[i].y,
+                    "repeated Line up and deferred native painting preserve aligned positions and captions"); }
             SaveScreen(size==32 ? "build/grid-compact-32.bmp" : "build/grid-compact-48.bmp");
         }
         DesktopIconsDestroy(testDesktopIcons); testDesktopIcons=NULL;

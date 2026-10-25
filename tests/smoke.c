@@ -1833,8 +1833,10 @@ static void EnvironmentTests(HWND bar, HWND browser, HWND childWindow, HWND menu
 void start(void)
 {
     static char module[MAX_PATH], executable[MAX_PATH], command[1024], settings[MAX_PATH], settingsDir[MAX_PATH];
-    char fixture[MAX_PATH], temp[MAX_PATH], path[MAX_PATH], title[MAX_PATH + 32];
-    char actual[MAX_PATH + 32];
+    /* Suite-owned buffers live for the whole run. Keep the freestanding
+     * entry frame below the compiler's CRT stack-probe threshold. */
+    static char fixture[MAX_PATH], temp[MAX_PATH], path[MAX_PATH], title[MAX_PATH + 32];
+    static char actual[MAX_PATH + 32];
     STARTUPINFOA startup;
     HWND bar, browser, files, menu, run, dialog, task, desktop;
     RECT originalWork;
