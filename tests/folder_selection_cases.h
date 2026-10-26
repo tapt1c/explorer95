@@ -89,5 +89,17 @@ static void FolderSelectionTests(void)
         CoTaskMemFree(applet); CoTaskMemFree(parent); IEnumIDList_Release(items);
         IShellFolder_Release(controls); IShellFolder_Release(desktop);
     }
+    {
+        LPITEMIDLIST fonts=NULL,matched; char directory[MAX_PATH],child[MAX_PATH];
+        Check(SUCCEEDED(SHGetSpecialFolderLocation(NULL,CSIDL_FONTS,&fonts)) && SHGetPathFromIDListA(fonts,directory),
+            "Fonts supplies both a real filesystem path and a canonical shell PIDL");
+        matched=FolderFontsPidl(directory,NULL);
+        Check(matched!=NULL,"opening the Fonts path preserves its native shell extension"); CoTaskMemFree(matched);
+        matched=FolderFontsPidl(NULL,fonts);
+        Check(matched!=NULL && FolderObjectIsFolder(fonts,0),"Fonts remains navigable through its namespace even without folder attributes"); CoTaskMemFree(matched);
+        wsprintfA(child,"%s\\ordinary-child",directory);
+        Check(!FolderFontsPidl(child,NULL),"a Fonts descendant is not silently redirected to the installed Fonts root");
+        Check(!FolderFontsPidl(NULL,NULL),"missing locations never match Fonts"); CoTaskMemFree(fonts);
+    }
     OleUninitialize();
 }

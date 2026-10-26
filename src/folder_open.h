@@ -12,6 +12,9 @@ BOOL FolderRequestCopy(const COPYDATASTRUCT *copy, FolderRequest *request);
 DWORD FolderRequestSend(HWND owner, const FolderRequest *request);
 /* Recognize canonical system roots even when Win95 omits their folder flag. */
 BOOL FolderObjectIsFolder(LPCITEMIDLIST absolute,SFGAOF attributes);
+/* Return the canonical Fonts PIDL for its exact path or namespace; CoTaskMemFree.
+ * Fonts has a filesystem path but must retain its installed shell extension. */
+LPITEMIDLIST FolderFontsPidl(const char *path,LPCITEMIDLIST absolute);
 /* A validated absolute folder PIDL copied from Shell IDList Array; HeapFree. */
 LPITEMIDLIST FolderSelectionPidl(IDataObject *data);
 /* Optional in/out attribute mask, resolved by the selected item's parent. */

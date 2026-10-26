@@ -911,6 +911,28 @@ static void NativeFolderTests(HWND menu)
         Check(!IsWindow(frame), "native folder closes cleanly before reopening");
     }
 }
+static void FontsBrowserTests(HWND menu,const char *settings)
+{
+    LPITEMIDLIST fonts=NULL; char directory[MAX_PATH],record[MAX_PATH+2]; HWND frame,view;
+    Check(SUCCEEDED(SHGetSpecialFolderLocation(NULL,CSIDL_FONTS,&fonts)) && SHGetPathFromIDListA(fonts,directory),
+        "inspect the installed Fonts location without installing or removing a font"); CoTaskMemFree(fonts);
+    SendMessageA(menu,WM_COMMAND,ID_CONTROL,0); frame=WaitFor(BROWSER_NAMESPACE_CLASS,NULL);
+    Check(frame!=NULL,"open an Explorer95 frame for the native Fonts navigation test"); Navigate(frame,directory);
+    view=FindWindowExA(frame,NULL,"SHELLDLL_DefView",NULL);
+    Check(view && IsWindowVisible(view) && !IsWindowVisible(GetDlgItem(frame,ID_FILES)),
+        "a Fonts filesystem address hosts the installed shell view instead of the ordinary file list");
+    /* HMENU state is process-local in Wine. Query the frame's existing
+     * native contract instead of accepting a failed foreign menu lookup. */
+    Check(SendMessageA(frame,NATIVE_GETSHELLBROWSER,0,0)!=0,
+        "the Fonts frame exposes its own active shell browser for native menu commands");
+    SendMessageA(frame,WM_COMMAND,ID_UP,0); SendMessageA(frame,WM_COMMAND,ID_BACK,0);
+    view=FindWindowExA(frame,NULL,"SHELLDLL_DefView",NULL);
+    Check(view && IsWindowVisible(view),"Back restores Fonts as a native shell view");
+    GetPrivateProfileStringA("ExplorerHistory","Target0","",record,sizeof(record),settings);
+    Check(record[0]=='!' && !lstrcmpiA(record+1,directory),"Fonts history stores its stable filesystem address for the next session");
+    SendMessageA(frame,WM_COMMAND,ID_REFRESH,0); SendMessageA(frame,WM_CLOSE,0,0);
+    Check(!IsWindow(frame),"the native Fonts window refreshes and closes without altering installed fonts");
+}
 static void CheckStartFits(HWND bar, HWND menu)
 {
     RECT rect, taskbar, item; BOOL okay; int id;
@@ -2016,6 +2038,7 @@ void start(void)
         Check(!IsWindow(initial), "startup folder closes before keyboard focus tests begin");
     }
     if (group != GROUP_BROWSER) FirstStartDefaultsTests(bar, FindWindowA("Explorer95.Start", NULL), settings);
+    if(group==GROUP_MENU || group==GROUP_FULL) StartEnterTests(bar,FindWindowA("Explorer95.Start",NULL));
     WelcomeSettingsTest(bar,settings);
     if (group != GROUP_BROWSER) WinKeyTests(bar, FindWindowA("Explorer95.Start", NULL));
     /* Finish the cold-start folder activation check before deliberately
@@ -2096,6 +2119,7 @@ void start(void)
     FolderOptionsUiTests(browser,settings);
     DesktopStackTests(bar, desktop, browser);
     NativeFolderTests(menu);
+    FontsBrowserTests(menu,settings);
     AboutCommandTest(browser);
     if (group == GROUP_BROWSER) goto shutdown;
     PostMessageA(menu, WM_COMMAND, 305, 0);
@@ -2182,8 +2206,16 @@ shutdown:
             } while ((!desktopList || !SendMessageA(desktopList,LVM_GETITEMCOUNT,0,0)) && GetTickCount()-ready<3000);
             Check(DesktopIconPixels(desktopList)==48,"the chosen desktop icon size survives a real shell restart");
         }
-        PostMessageA(bar,WM_CLOSE,0,0);
-        Check(WaitForGuiProcess(process.hProcess,5000) == WAIT_OBJECT_0,"icon-only restart exits cleanly");
+        /* Messages target only our disposable process. Never request a real
+         * logoff or broadcast session-end messages to the test computer. */
+        Check(SendMessageA(bar,WM_QUERYENDSESSION,0,0),"Explorer95 accepts a session-end query without exiting early");
+        SendMessageA(bar,WM_ENDSESSION,FALSE,0); PumpFor(80);
+        Check(IsWindow(bar) && IsWindowVisible(bar) && WaitForSingleObject(process.hProcess,0)==WAIT_TIMEOUT,
+            "a cancelled session end preserves the running shell");
+        SendMessageA(bar,WM_ENDSESSION,TRUE,0);
+        Check(WaitForGuiProcess(process.hProcess,5000) == WAIT_OBJECT_0,"a committed session end terminates Explorer95 cleanly");
+        { RECT work; SystemParametersInfoA(SPI_GETWORKAREA,0,&work,0);
+          Check(EqualRect(&work,&originalWork),"session-end cleanup restores the original desktop work area"); }
         CloseHandle(process.hThread); CloseHandle(process.hProcess);
         WritePrivateProfileStringA("Start","ButtonLabel",caption,settings);
         TaskbarBandsRestartSettings(settings,TRUE);

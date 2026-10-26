@@ -186,7 +186,7 @@ static void CompactToolbar(Browser *browser, int size)
     bitmaps[0].bitmap.nID = size == 24 ? IDB_STD_LARGE_COLOR : IDB_STD_SMALL_COLOR; bitmaps[0].count = 15;
     bitmaps[1].bitmap.nID = size == 24 ? IDB_VIEW_LARGE_COLOR : IDB_VIEW_SMALL_COLOR; bitmaps[1].count = 12;
     bitmaps[2].bitmap.nID = size == 24 ? IDB_HIST_LARGE_COLOR : IDB_HIST_SMALL_COLOR; bitmaps[2].count = 5;
-    bitmaps[3].bitmap.hInst = NULL; bitmaps[3].bitmap.nID = (UINT_PTR)browser->toolbarImages; bitmaps[3].count = 8;
+    bitmaps[3].bitmap.hInst = NULL; bitmaps[3].bitmap.nID = (UINT_PTR)browser->toolbarImages; bitmaps[3].count = BROWSER_TOOLBAR_IMAGES;
     sized = ToolbarCompact(toolbar, size, count, widths, captions, bitmaps, browser->toolbarImages ? 4 : 3);
     RenderTraceShell("toolbar.compact", sized ? S_OK : E_FAIL, (DWORD)size, ToolbarCompactLegacy(toolbar));
 }
@@ -224,10 +224,10 @@ void BrowserBuildToolbar(Browser *browser)
     ToolbarButton(browser, ID_REFRESH, "", navigation >= 0 ? navigation + 5 : stock + STD_REDOW, TBSTYLE_BUTTON | TBSTYLE_AUTOSIZE);
     ToolbarButton(browser, 0, "", 8, TBSTYLE_SEP);
     ToolbarButton(browser, ID_VIEWS, "", navigation >= 0 ? navigation + 6 : views >= 0 ? views + VIEW_LARGEICONS : stock + STD_PRINTPRE, TBSTYLE_BUTTON | TBSTYLE_DROPDOWN);
-    if (browser->recycleBin) ToolbarButton(browser, ID_EMPTY_RECYCLE, "Empty Recycle Bin", stock + STD_DELETE, TBSTYLE_BUTTON);
+    if (browser->recycleBin) ToolbarButton(browser, ID_EMPTY_RECYCLE, "Empty Recycle Bin", navigation >= 0 ? navigation + 11 : stock + STD_DELETE, TBSTYLE_BUTTON);
     if (browser->options.extraTools) ToolbarButton(browser, 0, "", 8, TBSTYLE_SEP);
     for (i = 0; i < BROWSER_EXTRA_TOOLS; ++i) if (browser->options.extraTools & (1U << i))
-        ToolbarButton(browser, extraCommands[i], extraNames[i], stock + extraImages[i], TBSTYLE_BUTTON);
+        ToolbarButton(browser, extraCommands[i], extraNames[i], navigation >= 0 ? navigation + 8 + i : stock + extraImages[i], TBSTYLE_BUTTON);
     CompactToolbar(browser, size);
     BrowserUpdate(browser);
 }
@@ -380,13 +380,22 @@ BOOL BrowserNavigate(Browser *browser, const char *requested, LPCITEMIDLIST pidl
         length = GetFullPathNameA(requested, MAX_PATH, path, NULL);
         if (!length || length >= MAX_PATH) { BrowserError(browser->window, "The path is too long or invalid.", ERROR_BAD_PATHNAME); return FALSE; }
     }
+    {
+        LPITEMIDLIST fonts=FolderFontsPidl(path,pidl);
+        if(fonts) {
+            absolute=BrowserClonePidl(fonts); CoTaskMemFree(fonts);
+            if(!absolute) return FALSE;
+            path[0]=0;
+        }
+    }
     if (path[0]) {
         length = lstrlenA(path); if (length > 3 && path[length - 1] == '\\') path[length - 1] = 0;
         watch = FindFirstChangeNotificationA(path, FALSE, FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME | FILE_NOTIFY_CHANGE_SIZE | FILE_NOTIFY_CHANGE_LAST_WRITE);
         if (watch == INVALID_HANDLE_VALUE) watch = NULL;
         if (!BrowserFilesRead(browser, path, &entries, &total)) { if (watch) FindCloseChangeNotification(watch); return FALSE; }
-    } else if (pidl) {
-        absolute = BrowserClonePidl(pidl); if (!absolute) return FALSE;
+    } else if (pidl || absolute) {
+        if(!absolute) absolute = BrowserClonePidl(pidl);
+        if (!absolute) return FALSE;
         { RECT initial; POINT point;
           HWND current = browser->native ? NativeViewWindow(browser->native) : browser->files;
           GetWindowRect(current, &initial); point.x = initial.left; point.y = initial.top;

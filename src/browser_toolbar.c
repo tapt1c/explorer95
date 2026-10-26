@@ -1,5 +1,5 @@
-/* Small native GDI navigation artwork. Stock Win95 common controls consume
- * this bitmap strip directly; no image decoder, theme engine or alpha API. */
+/* User-supplied Windows 98 palette artwork for stock Win95 toolbar controls.
+ * No image decoder, theme engine or alpha API is needed at runtime. */
 #define WIN32_LEAN_AND_MEAN
 #include "browser_internal.h"
 
@@ -24,7 +24,6 @@ void BrowserToolbarSubclass(Browser *browser)
         SetWindowLongPtrA(browser->toolbar, GWLP_WNDPROC, (LONG_PTR)ToolbarProc);
 }
 
-static int Scale(int value, int size) { return value * size / 24; }
 void BrowserDrawSymbol(HDC dc, const RECT *rect, char symbol, COLORREF color)
 {
     if (browserSymbols) {
@@ -47,87 +46,63 @@ void BrowserDrawSymbol(HDC dc, const RECT *rect, char symbol, COLORREF color)
         SelectObject(dc, old); DeleteObject(pen);
     }
 }
-static void Box(HDC dc, int size, int left, int top, int right, int bottom, HBRUSH brush)
+/* Preserve the supplied palette strips. All tiles have an exact 16px or
+ * 20px pitch; the large 24px toolbar centers the complete 20px artwork. */
+static HBITMAP ResourceStrip(HDC target,UINT resource,int cell,int count)
 {
-    RECT rect = {Scale(left, size), Scale(top, size), Scale(right, size), Scale(bottom, size)};
-    FillRect(dc, &rect, brush);
-}
-int BrowserToolbarAddImages(Browser *browser, int size)
-{
-    HDC target = GetDC(browser->window), dc = CreateCompatibleDC(target);
-    HBITMAP bitmap = target ? CreateCompatibleBitmap(target, size * 8, size) : NULL;
-    HGDIOBJ oldBitmap, oldPen, oldBrush; HICON folder = NULL;
-    HPEN greenPen = NULL, bluePen = NULL, handlePen = NULL;
-    HBRUSH green = NULL, blue = NULL, glass = NULL, red = NULL, white = GetStockObject(WHITE_BRUSH);
-    int i, index = -1; TBADDBITMAP images;
-    if (!target || !dc || !bitmap) goto done;
-    greenPen = CreatePen(PS_SOLID, size >= 24 ? 2 : 1, RGB(40,120,35));
-    bluePen = CreatePen(PS_SOLID, size >= 24 ? 2 : 1, RGB(40,115,175));
-    handlePen = CreatePen(PS_SOLID, size >= 24 ? 3 : 2, RGB(130,95,55));
-    green = CreateSolidBrush(RGB(72,176,55)); blue = CreateSolidBrush(RGB(40,115,175));
-    glass = CreateSolidBrush(RGB(205,232,247)); red = CreateSolidBrush(RGB(210,65,50));
-    if (!greenPen || !bluePen || !handlePen || !green || !blue || !glass || !red) goto done;
-    oldBitmap = SelectObject(dc, bitmap); oldPen = SelectObject(dc, greenPen); oldBrush = SelectObject(dc, green);
-    { RECT all = {0, 0, size * 8, size}; FillRect(dc, &all, (HBRUSH)(COLOR_BTNFACE + 1)); }
-    folder = size >= 24 ? EnvLargeSystemIcon(4) : EnvSystemIcon(4);
-    for (i = 0; i < 8; ++i) {
-        int x; SetWindowOrgEx(dc, -i * size, 0, NULL);
-        if (i < 2) {
-            SelectObject(dc, greenPen); SelectObject(dc, green);
-            Ellipse(dc, Scale(1,size), Scale(1,size), Scale(23,size), Scale(23,size));
-            for (x = 5; x <= 11; ++x) {
-                int left = i ? 23 - x : x;
-                Box(dc, size, left, 12 - (x - 5), left + 1, 13 + (x - 5), white);
-            }
-            Box(dc, size, i ? 5 : 11, 10, i ? 13 : 19, 15, white);
-        } else if (i == 2 || i == 4) {
-            if (folder) DrawIconEx(dc, 0, 0, folder, size, size, 0, NULL, DI_NORMAL);
-            if (i == 2) {
-                Box(dc, size, 13, 11, 17, 23, green);
-                for (x = 0; x < 7; ++x) Box(dc, size, 15 - x, 5 + x, 16 + x, 6 + x, green);
-            }
-        } else if (i == 3) {
-            SelectObject(dc, handlePen); MoveToEx(dc, Scale(14,size), Scale(14,size), NULL); LineTo(dc, Scale(23,size), Scale(23,size));
-            SelectObject(dc, bluePen); SelectObject(dc, glass);
-            Ellipse(dc, Scale(1,size), Scale(1,size), Scale(18,size), Scale(18,size));
-            Box(dc, size, 5, 4, 11, 6, white);
-        } else if (i == 5) {
-            static const POINT shape[] = {{2,11},{2,4},{15,4},{15,1},{22,6},{15,11},{15,8},{6,8},{6,11}};
-            POINT arrow[9]; int half, point;
-            SelectObject(dc, greenPen); SelectObject(dc, green);
-            for (half = 0; half < 2; ++half) {
-                for (point = 0; point < 9; ++point) {
-                    arrow[point].x = Scale(half ? 23 - shape[point].x : shape[point].x, size);
-                    arrow[point].y = Scale(half ? 23 - shape[point].y : shape[point].y, size);
-                }
-                Polygon(dc, arrow, 9);
-            }
-        } else if (i == 6) {
-            Box(dc, size, 1, 2, 23, 22, blue); Box(dc, size, 2, 7, 22, 21, white);
-            for (x = 0; x < 9; ++x) Box(dc, size, 4 + (x % 3) * 6, 9 + (x / 3) * 4, 8 + (x % 3) * 6, 12 + (x / 3) * 4, x % 3 == 0 ? red : x % 3 == 1 ? green : blue);
-        } else {
-            SelectObject(dc, bluePen); SelectObject(dc, white);
-            Ellipse(dc, Scale(2,size), Scale(2,size), Scale(23,size), Scale(23,size));
-            MoveToEx(dc, Scale(12,size), Scale(5,size), NULL); LineTo(dc, Scale(12,size), Scale(13,size));
-            LineTo(dc, Scale(18,size), Scale(16,size));
-            Box(dc, size, 11, 2, 14, 4, blue); Box(dc, size, 2, 11, 4, 14, blue);
-        }
-    }
-    SetWindowOrgEx(dc, 0, 0, NULL); SelectObject(dc, oldBrush); SelectObject(dc, oldPen); SelectObject(dc, oldBitmap);
-    images.hInst = NULL; images.nID = (UINT_PTR)bitmap;
-    index = (int)SendMessageA(browser->toolbar, TB_ADDBITMAP, 8, (LPARAM)&images);
-    if (index >= 0) { browser->toolbarImages = bitmap; bitmap = NULL; }
+    HBITMAP original=(HBITMAP)LoadImageA(browserInstance,MAKEINTRESOURCEA(resource),IMAGE_BITMAP,0,0,LR_CREATEDIBSECTION);
+    HBITMAP mapped=NULL; HDC dc=NULL; HGDIOBJ old=NULL; BITMAP dimensions; RECT area;
+    if(!original || !GetObjectA(original,sizeof(dimensions),&dimensions) ||
+       dimensions.bmWidth!=cell*count || dimensions.bmHeight!=cell) goto done;
+    mapped=CreateCompatibleBitmap(target,dimensions.bmWidth,dimensions.bmHeight);
+    dc=CreateCompatibleDC(target); if(!mapped || !dc) goto fail;
+    old=SelectObject(dc,mapped); SetRect(&area,0,0,dimensions.bmWidth,dimensions.bmHeight);
+    FillRect(dc,&area,(HBRUSH)(COLOR_BTNFACE+1));
+    if(!PaintColorKey(dc,0,0,original,RGB(255,0,255),FALSE)) goto fail;
+    goto done;
+fail:
+    if(old) { SelectObject(dc,old); old=NULL; }
+    if(mapped) { DeleteObject(mapped); mapped=NULL; }
 done:
-    if (folder) DestroyIcon(folder);
-    if (greenPen) DeleteObject(greenPen);
-    if (bluePen) DeleteObject(bluePen);
-    if (handlePen) DeleteObject(handlePen);
-    if (green) DeleteObject(green);
-    if (blue) DeleteObject(blue);
-    if (glass) DeleteObject(glass);
-    if (red) DeleteObject(red);
-    if (bitmap) DeleteObject(bitmap);
-    if (dc) DeleteDC(dc);
-    if (target) ReleaseDC(browser->window, target);
+    if(old) SelectObject(dc,old);
+    if(dc) DeleteDC(dc);
+    if(original) DeleteObject(original);
+    return mapped;
+}
+int BrowserToolbarAddImages(Browser *browser,int size)
+{
+    /* Back, Forward, Up, Search, Folders, Refresh, Views, History;
+     * Copy, Cut, Paste, Delete, Properties, Folder Options. */
+    static const struct { BYTE strip,index; } tiles[BROWSER_TOOLBAR_IMAGES]={
+        {0,0},{0,1},{0,28},{0,17},{0,12},{1,3},{0,20},{1,12},
+        {0,6},{0,5},{0,7},{0,10},{0,15},{1,10}
+    };
+    HDC target=GetDC(browser->window),dc=NULL,source=NULL; HBITMAP bitmap=NULL,strips[2]={NULL,NULL};
+    HGDIOBJ oldBitmap=NULL,oldSource=NULL; int i,index=-1,cell=size==16 ? 16 : 20,pad=(size-cell)/2;
+    RECT area={0,0,size*BROWSER_TOOLBAR_IMAGES,size}; TBADDBITMAP images;
+    if(!target) goto done;
+    dc=CreateCompatibleDC(target); source=CreateCompatibleDC(target);
+    bitmap=CreateCompatibleBitmap(target,area.right,area.bottom);
+    strips[0]=ResourceStrip(target,size==16 ? 208 : 209,cell,46);
+    strips[1]=ResourceStrip(target,size==16 ? 210 : 211,cell,16);
+    if(!dc || !source || !bitmap || !strips[0] || !strips[1]) goto done;
+    oldBitmap=SelectObject(dc,bitmap); oldSource=SelectObject(source,strips[0]);
+    FillRect(dc,&area,(HBRUSH)(COLOR_BTNFACE+1));
+    for(i=0;i<BROWSER_TOOLBAR_IMAGES;++i) {
+        SelectObject(source,strips[tiles[i].strip]);
+        if(!BitBlt(dc,i*size+pad,pad,cell,cell,source,tiles[i].index*cell,0,SRCCOPY)) goto done;
+    }
+    SelectObject(dc,oldBitmap); oldBitmap=NULL;
+    images.hInst=NULL; images.nID=(UINT_PTR)bitmap;
+    index=(int)SendMessageA(browser->toolbar,TB_ADDBITMAP,BROWSER_TOOLBAR_IMAGES,(LPARAM)&images);
+    if(index>=0) { browser->toolbarImages=bitmap; bitmap=NULL; }
+done:
+    if(oldBitmap) SelectObject(dc,oldBitmap);
+    if(oldSource) SelectObject(source,oldSource);
+    for(i=0;i<2;++i) if(strips[i]) DeleteObject(strips[i]);
+    if(bitmap) DeleteObject(bitmap);
+    if(source) DeleteDC(source);
+    if(dc) DeleteDC(dc);
+    if(target) ReleaseDC(browser->window,target);
     return index;
 }

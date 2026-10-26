@@ -1021,6 +1021,16 @@ BOOL StartTranslate(MSG *message)
 {
     if (!IsWindowVisible(env.start)) return FALSE;
     if (message->message == WM_KEYDOWN && message->wParam == VK_ESCAPE) { StartHide(); return TRUE; }
+    if(message->message==WM_KEYDOWN && message->wParam==VK_RETURN) {
+        HWND button=GetFocus(); char kind[16];
+        if(GetParent(button)==env.start && IsWindowVisible(button) && IsWindowEnabled(button) &&
+           GetClassNameA(button,kind,sizeof(kind)) && !lstrcmpiA(kind,"BUTTON")) {
+            /* Owner-drawn buttons have no dialog default ID. Activate the
+             * focused item explicitly; holding Enter must not relaunch it. */
+            if(!(message->lParam&(1UL<<30))) SendMessageA(button,BM_CLICK,0,0);
+            return TRUE;
+        }
+    }
     return IsDialogMessageA(env.start, message);
 }
 void StartDestroy(void)

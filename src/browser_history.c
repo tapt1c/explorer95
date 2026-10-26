@@ -109,7 +109,7 @@ void BrowserHistoryRecord(Browser *browser)
     ZeroMemory(&next, sizeof(next));
     if (!BrowserHistoryEnabled()) return;
     if (browser->path[0]) lstrcpyA(next.target, browser->path);
-    else if (browser->pidl && !KnownNamespace(browser, next.target)) {
+    else if (browser->pidl && !SHGetPathFromIDListA(browser->pidl,next.target) && !KnownNamespace(browser, next.target)) {
         IShellFolder *desktop; STRRET name;
         if (FAILED(SHGetDesktopFolder(&desktop))) return;
         ZeroMemory(&name, sizeof(name));

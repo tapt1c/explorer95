@@ -95,11 +95,11 @@ build/ui64/task_switch_hook.dll: build/obj64/src/task_switch_hook.o Makefile
 build/native/EX95TS01.VXD: src/task_switch_native.asm src/task_switch_native_core.c src/task_switch_native_core.h src/task_switch_native_protocol.h tools/task_switch_native.lnk tools/build_task_switch_native.py tools/win95-alt-tab-probe/fixprobe.py tests/check_vxd.py build/native/.flags Makefile
 	python3 tools/build_task_switch_native.py
 
-build/resources.o: src/explorer95.rc resources/Bitmap143.bmp resources/welcome.bmp resources/explorer95.ico resources/Explorer95UI.ttf resources/Explorer95UI95.ttf resources/LiberationSans-LICENSE.txt build/tray_hook.dll build/task_switch_hook.dll build/native/EX95TS01.VXD build/obj32/.flags Makefile
+build/resources.o: src/explorer95.rc resources/Bitmap143.bmp resources/welcome.bmp $(wildcard resources/toolbar98/*.bmp) resources/explorer95.ico resources/Explorer95UI.ttf resources/Explorer95UI95.ttf resources/LiberationSans-LICENSE.txt build/tray_hook.dll build/task_switch_hook.dll build/native/EX95TS01.VXD build/obj32/.flags Makefile
 	@mkdir -p $(@D)
 	$(WINDRES) --preprocessor="$(CC)" --preprocessor-arg=-E --preprocessor-arg=-xc -I. -i $< -o $@
 
-build/ui64/resources.o: src/explorer95.rc resources/Bitmap143.bmp resources/welcome.bmp resources/explorer95.ico resources/Explorer95UI.ttf resources/Explorer95UI95.ttf resources/LiberationSans-LICENSE.txt build/ui64/tray_hook.dll build/ui64/task_switch_hook.dll build/obj64/.flags Makefile
+build/ui64/resources.o: src/explorer95.rc resources/Bitmap143.bmp resources/welcome.bmp $(wildcard resources/toolbar98/*.bmp) resources/explorer95.ico resources/Explorer95UI.ttf resources/Explorer95UI95.ttf resources/LiberationSans-LICENSE.txt build/ui64/tray_hook.dll build/ui64/task_switch_hook.dll build/obj64/.flags Makefile
 	@mkdir -p $(@D)
 	$(WINDRES64) --preprocessor="$(CC64)" --preprocessor-arg=-E --preprocessor-arg=-xc -I. -i $< -o $@
 

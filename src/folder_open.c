@@ -107,10 +107,19 @@ static UINT PidlLength(const BYTE *data, SIZE_T size, UINT offset)
     }
     return 0;
 }
+static BOOL SamePidl(LPCITEMIDLIST left,LPCITEMIDLIST right)
+{
+    LPCITEMIDLIST scan; UINT bytes=2,i;
+    if(!left || !right) return FALSE;
+    for(scan=right;scan->mkid.cb;scan=(LPCITEMIDLIST)((const BYTE *)scan+scan->mkid.cb)) bytes+=scan->mkid.cb;
+    if(PidlLength((const BYTE *)left,bytes,0)!=bytes) return FALSE;
+    for(i=0;i<bytes;++i) if(((const BYTE *)left)[i]!=((const BYTE *)right)[i]) return FALSE;
+    return TRUE;
+}
 BOOL FolderObjectIsFolder(LPCITEMIDLIST absolute,SFGAOF attributes)
 {
-    static const int roots[]={CSIDL_CONTROLS,CSIDL_PRINTERS,CSIDL_NETWORK,CSIDL_DRIVES};
-    LPITEMIDLIST root=NULL; LPCITEMIDLIST scan; UINT bytes,i,r; BOOL same;
+    static const int roots[]={CSIDL_CONTROLS,CSIDL_PRINTERS,CSIDL_NETWORK,CSIDL_DRIVES,CSIDL_FONTS};
+    LPITEMIDLIST root=NULL; UINT r; BOOL same;
     if(!absolute) return FALSE;
     if(attributes&SFGAO_FOLDER) return TRUE;
     /* Only canonical roots are compatibility exceptions. A provider may
@@ -118,16 +127,27 @@ BOOL FolderObjectIsFolder(LPCITEMIDLIST absolute,SFGAOF attributes)
      * New Connection and Control Panel's children retain native commands. */
     for(r=0;r<sizeof(roots)/sizeof(roots[0]);++r) {
         if(FAILED(SHGetSpecialFolderLocation(NULL,roots[r],&root))) continue;
-        bytes=2; same=FALSE;
-        for(scan=root;scan->mkid.cb;scan=(LPCITEMIDLIST)((const BYTE *)scan+scan->mkid.cb)) bytes+=scan->mkid.cb;
-        if(PidlLength((const BYTE *)absolute,bytes,0)==bytes) {
-            for(i=0;i<bytes && ((const BYTE *)absolute)[i]==((const BYTE *)root)[i];++i) {}
-            same=i==bytes;
-        }
+        same=SamePidl(absolute,root);
         CoTaskMemFree(root);
         if(same) return TRUE;
     }
     return FALSE;
+}
+LPITEMIDLIST FolderFontsPidl(const char *path,LPCITEMIDLIST absolute)
+{
+    LPITEMIDLIST fonts=NULL; BOOL same;
+    char directory[MAX_PATH],target[MAX_PATH]; DWORD length;
+    if(FAILED(SHGetSpecialFolderLocation(NULL,CSIDL_FONTS,&fonts))) return NULL;
+    same=SamePidl(absolute,fonts);
+    if(!same && path && path[0] && SHGetPathFromIDListA(fonts,directory)) {
+        length=GetFullPathNameA(path,MAX_PATH,target,NULL);
+        if(length && length<MAX_PATH) {
+            if(length>3 && target[length-1]=='\\') target[length-1]=0;
+            same=!lstrcmpiA(target,directory);
+        }
+    }
+    if(same) return fonts;
+    CoTaskMemFree(fonts); return NULL;
 }
 static LPITEMIDLIST SelectionPidl(IDataObject *data, BOOL foldersOnly, SFGAOF *attributes)
 {

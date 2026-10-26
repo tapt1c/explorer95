@@ -56,6 +56,9 @@ def main():
         welcome = work / "resources/welcome.bmp"
         welcome.write_bytes(welcome.read_bytes())
         run("welcome bitmap changes rebuild only resources", 0, 1)
+        for bitmap in sorted((work / "resources/toolbar98").glob("*.bmp")):
+            bitmap.write_bytes(bitmap.read_bytes())
+            run(f"Windows 98 toolbar bitmap {bitmap.name} rebuilds resources", 0, 1)
         icon = work / "resources/explorer95.ico"
         icon.write_bytes(icon.read_bytes())
         run("application icon changes rebuild only resources", 0, 1)

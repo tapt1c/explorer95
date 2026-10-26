@@ -1190,6 +1190,13 @@ static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
         for (i = 0; i < count; ++i) if (DragQueryFileA(drop, i, path, MAX_PATH)) AddQuickFile(path);
         DragFinish(drop); RefreshQuick(); return 0;
     }
+    case WM_QUERYENDSESSION: return TRUE;
+    case WM_ENDSESSION:
+        /* ExitWindowsEx accepts a request before other programs can veto it.
+         * Leave only after Windows commits the session end. A cancelled end
+         * must preserve the desktop, hooks and running browser windows. */
+        if(wp) { RenderTraceShutdown("exit.session",S_OK,(DWORD)lp); PostQuitMessage(0); }
+        return 0;
     case WM_CLOSE:
         RenderTraceShutdown("exit.request",S_OK,0);
         if(FileDragDeferClose(window)) return 0;

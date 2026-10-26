@@ -127,6 +127,28 @@ static void StartOrderTests(HWND bar, HWND menu, const char *settings)
     SendMessageA(properties,WM_COMMAND,ID_VISIBLE,0); SendMessageA(properties,WM_COMMAND,IDOK,0);
     Check(GetPrivateProfileIntA("Start","ItemsVersion",0,settings)==2,"visibility migration is saved once so hidden Command Prompt stays hidden");
 }
+static void StartEnterTests(HWND bar,HWND menu)
+{
+    const int ids[]={ID_PINNED,ID_COMPUTER,ID_PROGRAMS}; int i;
+    for(i=0;i<3;++i) {
+        HWND button=GetDlgItem(menu,ids[i]),opened; int tabs=0;
+        SendMessageA(GetDlgItem(bar,ID_START),BM_CLICK,0,0); PumpFor(250);
+        while(!(SendMessageA(button,BM_GETSTATE,0,0)&BST_FOCUS) && tabs++<40) {
+            keybd_event(VK_TAB,0,0,0); keybd_event(VK_TAB,0,KEYEVENTF_KEYUP,0); PumpFor(30);
+        }
+        Check(IsWindowVisible(menu) && (SendMessageA(button,BM_GETSTATE,0,0)&BST_FOCUS),
+            "native Tab reaches the selected visible Start button before pressing Enter");
+        keybd_event(VK_RETURN,0,0,0); keybd_event(VK_RETURN,0,KEYEVENTF_KEYUP,0);
+        opened=WaitFor(i==0 ? BROWSER_CLASS : i==1 ? BROWSER_NAMESPACE_CLASS : "#32768",NULL);
+        Check(opened && IsWindowVisible(opened),"one real Enter activates a pin, a system-folder link or the Programs submenu");
+        if(i<2) SendMessageA(opened,WM_CLOSE,0,0);
+        else {
+            keybd_event(VK_ESCAPE,0,0,0); keybd_event(VK_ESCAPE,0,KEYEVENTF_KEYUP,0); PumpFor(80);
+            if(IsWindowVisible(menu)) PostMessageA(menu,WM_KEYDOWN,VK_ESCAPE,0);
+        }
+        PumpFor(80);
+    }
+}
 static void FirstStartDefaultsTests(HWND bar, HWND menu, const char *settings)
 {
     static const int modes[] = {0,1,0,0,0,1,1};

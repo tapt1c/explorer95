@@ -52,7 +52,7 @@ Explorer95 — любительская нативная оболочка для
 | `src/browser.h`, `src/browser_internal.h` | Публичные команды и внутреннее состояние Проводника: отдельные настройки, история, PIDL, дерево, файловые данные и уведомление каталога. |
 | `src/browser.c` | Общая рамка файловых и виртуальных папок, навигация, адрес, toolbar, меню, layout, настройки, клавиши и обновление открытого каталога. |
 | `src/browser_options.c`, `tests/folder_options_cases.h` | Компактные Folder View / Toolbar / History, независимые черновики и атомарный Apply/Cancel. |
-| `src/browser_toolbar.c` | Собственная GDI-полоса навигационных значков для штатного Win95 toolbar. |
+| `src/browser_toolbar.c`, `resources/toolbar98/` | Пользовательские BMP Windows 98, сборка полосы значков GDI и штатный Win95 toolbar. |
 | `src/toolbar_compat.c/.h`, `tests/toolbar_compat_cases.h` | Индивидуальные размеры кнопок и запасной путь без TB_SETBUTTONINFO; реальные native-кнопки, состояния, клики, история и геометрия RU/EN. |
 | `src/browser_address.c` | Редактируемый Win95 ComboBox: значок текущей папки, owner-draw иерархия мест и очередь выбора. |
 | `src/browser_files.c` | Чтение каталогов, шесть режимов, значки/эскизы, сортировка, файловый буфер, операции Shell32, свойства и контекстные меню. |
@@ -1336,8 +1336,16 @@ explorer95.exe --settings="C:\EX95TEST\Explorer95.ini"
   Для встроенных namespace сопоставляйте PIDL со стабильной GUID-целью:
   Win95 может вернуть локализованное имя даже для SHGDN_FORPARSING. Enter в History
   открывает сохранённую цель; перестановка MRU не должна менять снимок под выделением.
-- Toolbar использует GDI-полосу из `browser_toolbar.c` и стандартные bitmap-наборы
-  Common Controls как запасной путь. Bitmap принадлежит Browser и освобождается
+- Toolbar использует исходные BMP из `resources/toolbar98/`: 279/268 имеют
+  ячейки 16×16, 277/266 — 20×20. `browser_toolbar.c` копирует целые ячейки;
+  крупный toolbar 24px центрирует artwork 20px с полями 2px. Не режьте все
+  ресурсы по одному размеру и не растягивайте палитровые пиксели. Magenta
+  RGB(255,0,255) отображается как COLOR_BTNFACE через PaintColorKey/GDI.
+  Полоса содержит восемь навигационных и шесть дополнительных изображений;
+  ToolbarCompact получает тот же BROWSER_TOOLBAR_IMAGES для legacy-кнопок.
+  Исходные BMP сохраняются неизменными и входят в зависимости обоих ресурсов.
+  Стандартные bitmap-наборы Common Controls остаются запасным путём.
+  Bitmap принадлежит Browser и освобождается
   после toolbar. LIST и индивидуальная ширина — необязательные подсказки;
   базовый путь должен работать со старым toolbar. У Back/Forward/Views всегда
   задавайте TBSTYLE_DROPDOWN как требование интерфейса: при отсутствии DRAWDDARROWS
@@ -1914,6 +1922,11 @@ Rename со скрытым расширением, системные Properties
 - Log Off, Shut Down и Exit Explorer95 — разные действия. При `Incorrect Function`
   у Log Off сохраняйте штатный запасной диалог; не заменяйте выход из сеанса
   принудительным завершением программ или перезагрузкой.
+  WM_QUERYENDSESSION только разрешает запрос. WM_ENDSESSION с TRUE запускает
+  обычную очистку через выход из главного цикла; FALSE сохраняет оболочку.
+  Не завершайте процесс сразу после успешного ExitWindowsEx: другие программы
+  ещё могут отменить выход. Тест посылает сообщения только своему процессу,
+  проверяет отмену, завершение и восстановление work area, без настоящего Log Off.
 - В меню панели задач нет Exit Explorer95; команда Task Manager запускает
   полный путь Windows\\TASKMAN.EXE без записи в recent programs. Пользователь
   подтвердил работу штатного Task List в настоящей Windows 95.
@@ -2011,6 +2024,20 @@ WelcomeClose вызывается при завершении. Окно WS_EX_TO
 Изменения welcome.bmp должны инвалидировать оба resources.o; это проверяется
 tests/check_incremental.py. Остальные языковые/focus-сценарии используют отдельный
 профиль с отключённой плашкой, а welcome_cases проверяет default-on и реальный restart.
+
+В двухколоночном Start Enter явно вызывает BM_CLICK текущей видимой и доступной
+кнопки. BS_OWNERDRAW не задаёт dialog default ID; одного IsDialogMessage для
+Enter недостаточно. Бит повторного WM_KEYDOWN подавляется. Классические popup
+сохраняют штатную клавиатурную обработку. Тест использует Tab и настоящий Enter
+для закрепления, ссылки на системную папку и Programs submenu.
+
+Fonts — файловый путь с особым shell view. FolderFontsPidl распознаёт точный
+CSIDL_FONTS или его нормализованный путь и возвращает COM-owned PIDL.
+BrowserNavigate размещает родное представление вместо BrowserFilesRead даже
+для адреса Windows\Fonts. Собственный Browser PIDL остаётся heap-owned,
+browser->path пуст в native-режиме; сохранённая история берёт стабильный путь
+из PIDL. Подкаталоги Fonts не перенаправляются к корню. Проверки читают папку,
+проверяют native-хост, F5 и Back; установленные шрифты не изменяются.
 
 Апплеты из taskbar search и namespace-меню Start используют общий
 ShellNamespaceInvoke: привязка родительского IShellFolder, GetUIObjectOf,
