@@ -606,10 +606,14 @@ static void NativeSelectionTests(HWND parent)
     Check(SUCCEEDED(IShellBrowser_QueryActiveShellView(NativeViewShellBrowser(view),&shell)),"obtain the virtual action view contract");
     original=shell->lpVtbl; nativeSelectionOriginal=original; table=*original;
     table.QueryInterface=NativeSelectionQuery; table.GetItemObject=NativeSelectionNoData; shell->lpVtbl=&table;
-    nativeSelectionLegacyMissing=TRUE; nativeSelectionDataRequests=0;
+    nativeSelectionLegacyMissing=FALSE; nativeSelectionDataRequests=0;
     ListView_SetItemState(list,0,LVIS_SELECTED|LVIS_FOCUSED,LVIS_SELECTED|LVIS_FOCUSED);
-    Check(NativeViewSelection(view,&selection) && !selection.capabilities && !nativeSelectionDataRequests,
-        "virtual action folders never enter the transfer fallback even when the legacy interface is missing");
+    { NativeSelection expected;
+      Check(NativeViewSelection(view,&expected),"read the real Control Panel selection through its available legacy interface");
+      nativeSelectionLegacyMissing=TRUE;
+      Check(NativeViewSelection(view,&selection) && selection.capabilities==expected.capabilities &&
+          !lstrcmpA(selection.name,expected.name) && !lstrcmpA(selection.path,expected.path) && !nativeSelectionDataRequests,
+          "Control Panel recovers the selected object's real PIDL and attributes by public enumeration without a transfer request"); }
     shell->lpVtbl=original; IShellView_Release(shell); NativeViewDestroy(view);
 }
 static void NativeViewMessageTests(void)

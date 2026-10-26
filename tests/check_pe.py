@@ -19,7 +19,8 @@ ALLOWED = {
     "advapi32.dll": {"GetUserNameA", "RegOpenKeyExA", "RegQueryValueExA", "RegCloseKey",
                      "RegCreateKeyExA", "RegSetValueExA", "RegDeleteValueA", "RegDeleteKeyA",
                      "RegEnumKeyExA", "RegEnumValueA", "RegQueryInfoKeyA", "RegFlushKey"},
-    "comctl32.dll": {"InitCommonControls", "ImageList_Create", "ImageList_Destroy",
+    # CreateMappedBitmap is the original Win95 palette mapper, predating IE.
+    "comctl32.dll": {"CreateMappedBitmap", "InitCommonControls", "ImageList_Create", "ImageList_Destroy",
                       "ImageList_AddMasked", "ImageList_GetImageCount", "ImageList_GetIconSize", "ImageList_ReplaceIcon", "ImageList_Remove",
                       # Original Win95 common-controls drag-image API (no IE4+ dependency).
                       "ImageList_GetIcon", "ImageList_BeginDrag", "ImageList_DragEnter", "ImageList_DragMove",

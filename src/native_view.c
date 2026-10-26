@@ -31,7 +31,7 @@ struct NativeView {
     IContextMenu2 *context;
     ShellNew *newMenu;
     LPITEMIDLIST absolute;
-    BOOL desktop, deleting, recycleBin, statePending, refreshPending;
+    BOOL desktop, deleting, recycleBin, controlPanel, statePending, refreshPending;
     int operationDepth;
     BOOL fileDragging, layoutHover, layoutDropped; int fileDragCallDepth, fileHover; BOOL fileHoverTarget; char fileHoverPath[MAX_PATH];
     FileDrop *fileDrop; int dropIndex;
@@ -287,6 +287,28 @@ static UINT PidlBytes(LPCITEMIDLIST pidl)
     return bytes;
 }
 
+static BOOL SpecialFolder(LPCITEMIDLIST absolute,int csidl)
+{
+    LPITEMIDLIST root=NULL; UINT bytes,i; BOOL same;
+    if(FAILED(SHGetSpecialFolderLocation(NULL,csidl,&root))) return FALSE;
+    bytes=PidlBytes(root); same=bytes==PidlBytes(absolute);
+    for(i=0;same && i<bytes;++i) if(((const BYTE *)root)[i]!=((const BYTE *)absolute)[i]) same=FALSE;
+    CoTaskMemFree(root); return same;
+}
+static BOOL ObjectName(NativeView *view,LPCITEMIDLIST item,char *text,UINT size)
+{
+    STRRET name; UINT bytes=PidlBytes(item)+2,length=0;
+    if(FAILED(IShellFolder_GetDisplayNameOf(view->folder,item,SHGDN_NORMAL,&name))) return FALSE;
+    if(name.uType==STRRET_WSTR) {
+        BOOL okay=WideCharToMultiByte(CP_ACP,0,name.pOleStr,-1,text,size,NULL,NULL)!=0;
+        CoTaskMemFree(name.pOleStr); return okay;
+    }
+    if(name.uType==STRRET_CSTR) { lstrcpynA(text,name.cStr,size); return TRUE; }
+    if(name.uType!=STRRET_OFFSET || name.uOffset>=bytes) return FALSE;
+    while(name.uOffset+length<bytes && ((const char *)item)[name.uOffset+length]) ++length;
+    if(name.uOffset+length==bytes || length>=size) return FALSE;
+    CopyMemory(text,(const BYTE *)item+name.uOffset,length+1); return TRUE;
+}
 static LPITEMIDLIST Combine(LPCITEMIDLIST base, LPCITEMIDLIST relative)
 {
     UINT left = PidlBytes(base), right = PidlBytes(relative), i;
@@ -531,10 +553,36 @@ static LPITEMIDLIST SelectedObject(NativeView *view,SFGAOF *attributes)
     RenderTraceShell("view.selection",S_OK,index,*attributes);
     return pidl;
 }
+static LPITEMIDLIST EnumeratedSelection(NativeView *view,SFGAOF *attributes)
+{
+    IEnumIDList *items=NULL; LPITEMIDLIST item=NULL,found=NULL; char label[MAX_PATH],name[MAX_PATH];
+    int selected=ListView_GetNextItem(view->list,-1,LVNI_SELECTED),count=0; HRESULT result=E_FAIL;
+    if(selected<0) return NULL;
+    label[0]=0; ListView_GetItemText(view->list,selected,0,label,sizeof(label));
+    if(!label[0]) return NULL;
+    if(FAILED(IShellFolder_EnumObjects(view->folder,view->parent,SHCONTF_FOLDERS|SHCONTF_NONFOLDERS,&items)) || !items) return NULL;
+    /* Recover the actual PIDL from a unique native display name, never infer
+     * an object's type from its label or inspect private ListView data. */
+    while(count++<512 && (result=IEnumIDList_Next(items,1,&item,NULL))==S_OK) {
+        if(ObjectName(view,item,name,sizeof(name)) && !lstrcmpA(name,label)) {
+            if(found) { CoTaskMemFree(item); result=E_FAIL; break; }
+            found=item;
+        } else CoTaskMemFree(item);
+    }
+    IEnumIDList_Release(items);
+    if(result!=S_FALSE) { CoTaskMemFree(found); return NULL; }
+    if(found && FAILED(IShellFolder_GetAttributesOf(view->folder,1,(LPCITEMIDLIST *)&found,attributes))) *attributes=0;
+    RenderTraceShell("view.selection.enum",result,selected,found ? *attributes : 0);
+    return found;
+}
 static LPITEMIDLIST SelectedAbsolute(NativeView *view,SFGAOF *attributes)
 {
-    LPITEMIDLIST relative=SelectedObject(view,attributes),absolute,computer=NULL;
+    LPITEMIDLIST relative=SelectedObject(view,attributes),absolute;
     IDataObject *data=NULL; char path[MAX_PATH]; BOOL transferable=view->desktop;
+    /* Original Control Panel views may lack IShellFolderView. Public folder
+     * enumeration supplies its selected folder/action without IDataObject.
+     * This fallback is deliberately unavailable in Dial-Up Networking. */
+    if(!relative && view->controlPanel) relative=EnumeratedSelection(view,attributes);
     if(relative) {
         absolute=Combine(view->absolute,relative); CoTaskMemFree(relative); return absolute;
     }
@@ -543,13 +591,7 @@ static LPITEMIDLIST SelectedAbsolute(NativeView *view,SFGAOF *attributes)
      * actions (notably Dial-Up Networking's New Connection) must never be
      * queried for a transfer object while inspecting or activating them. */
     if(!transferable) transferable=SHGetPathFromIDListA(view->absolute,path);
-    if(!transferable && SUCCEEDED(SHGetSpecialFolderLocation(view->parent,CSIDL_DRIVES,&computer))) {
-        UINT bytes=PidlBytes(computer),i;
-        transferable=bytes==PidlBytes(view->absolute);
-        for(i=0;transferable && i<bytes;++i)
-            if(((const BYTE *)computer)[i]!=((const BYTE *)view->absolute)[i]) transferable=FALSE;
-        CoTaskMemFree(computer);
-    }
+    if(!transferable) transferable=SpecialFolder(view->absolute,CSIDL_DRIVES);
     if(!transferable || FAILED(IShellView_GetItemObject(view->view,SVGIO_SELECTION,&IID_IDataObject,(void **)&data))) return NULL;
     absolute=FolderSelectionFirstPidl(data,attributes); IDataObject_Release(data); return absolute;
 }
@@ -944,14 +986,8 @@ NativeView *NativeViewCreateEx(HWND parent, LPCITEMIDLIST absolute, BOOL desktop
     view->absolute = Combine(NULL, absolute);
     if (!view->absolute || FAILED(SHGetDesktopFolder(&root))) goto fail;
     if (!desktop) {
-        LPITEMIDLIST bin = NULL;
-        if (SUCCEEDED(SHGetSpecialFolderLocation(parent, CSIDL_BITBUCKET, &bin))) {
-            UINT bytes = PidlBytes(bin), i;
-            view->recycleBin = bytes == PidlBytes(absolute);
-            for (i = 0; view->recycleBin && i < bytes; ++i)
-                if (((const BYTE *)bin)[i] != ((const BYTE *)absolute)[i]) view->recycleBin = FALSE;
-            CoTaskMemFree(bin);
-        }
+        view->recycleBin=SpecialFolder(absolute,CSIDL_BITBUCKET);
+        view->controlPanel=SpecialFolder(absolute,CSIDL_CONTROLS);
     }
     if (PidlBytes(absolute)) {
         if (FAILED(IShellFolder_BindToObject(root, absolute, NULL, &IID_IShellFolder, (void **)&view->folder))) goto fail;
@@ -1115,15 +1151,9 @@ static BOOL DesktopTarget(NativeView *view, POINT screen, BOOL excludeSelection)
      * Enumerate only this desktop after entering a new item, never its drives. */
     if(SUCCEEDED(IShellFolder_EnumObjects(view->folder,view->parent,SHCONTF_FOLDERS|SHCONTF_NONFOLDERS,&items)) && items) {
         while(IEnumIDList_Next(items,1,&item,&fetched)==S_OK) {
-            STRRET name; char text[MAX_PATH]; BOOL match=FALSE;
-            if(SUCCEEDED(IShellFolder_GetDisplayNameOf(view->folder,item,SHGDN_NORMAL,&name))) {
-                if(name.uType==STRRET_CSTR) { lstrcpynA(text,name.cStr,sizeof(text)); match=TRUE; }
-                else if(name.uType==STRRET_WSTR) { match=WideCharToMultiByte(CP_ACP,0,name.pOleStr,-1,text,sizeof(text),NULL,NULL)!=0; CoTaskMemFree(name.pOleStr); }
-                else if(name.uType==STRRET_OFFSET && name.uOffset<PidlBytes(item)) {
-                    UINT remaining=PidlBytes(item)-name.uOffset;
-                    lstrcpynA(text,(char *)item+name.uOffset,remaining<sizeof(text) ? remaining : sizeof(text)); match=TRUE;
-                }
-                if(match && !lstrcmpA(text,label)) {
+            char text[MAX_PATH];
+            if(ObjectName(view,item,text,sizeof(text))) {
+                if(!lstrcmpA(text,label)) {
                     SFGAOF flags=SFGAO_FOLDER|SFGAO_DROPTARGET; LPCITEMIDLIST selected=item;
                     if(SUCCEEDED(IShellFolder_GetAttributesOf(view->folder,1,&selected,&flags))) {
                         LPITEMIDLIST absolute=Combine(view->absolute,item);

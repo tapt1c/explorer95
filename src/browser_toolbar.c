@@ -46,63 +46,22 @@ void BrowserDrawSymbol(HDC dc, const RECT *rect, char symbol, COLORREF color)
         SelectObject(dc, old); DeleteObject(pen);
     }
 }
-/* Preserve the supplied palette strips. All tiles have an exact 16px or
- * 20px pitch; the large 24px toolbar centers the complete 20px artwork. */
-static HBITMAP ResourceStrip(HDC target,UINT resource,int cell,int count)
-{
-    HBITMAP original=(HBITMAP)LoadImageA(browserInstance,MAKEINTRESOURCEA(resource),IMAGE_BITMAP,0,0,LR_CREATEDIBSECTION);
-    HBITMAP mapped=NULL; HDC dc=NULL; HGDIOBJ old=NULL; BITMAP dimensions; RECT area;
-    if(!original || !GetObjectA(original,sizeof(dimensions),&dimensions) ||
-       dimensions.bmWidth!=cell*count || dimensions.bmHeight!=cell) goto done;
-    mapped=CreateCompatibleBitmap(target,dimensions.bmWidth,dimensions.bmHeight);
-    dc=CreateCompatibleDC(target); if(!mapped || !dc) goto fail;
-    old=SelectObject(dc,mapped); SetRect(&area,0,0,dimensions.bmWidth,dimensions.bmHeight);
-    FillRect(dc,&area,(HBRUSH)(COLOR_BTNFACE+1));
-    if(!PaintColorKey(dc,0,0,original,RGB(255,0,255),FALSE)) goto fail;
-    goto done;
-fail:
-    if(old) { SelectObject(dc,old); old=NULL; }
-    if(mapped) { DeleteObject(mapped); mapped=NULL; }
-done:
-    if(old) SelectObject(dc,old);
-    if(dc) DeleteDC(dc);
-    if(original) DeleteObject(original);
-    return mapped;
-}
+/* Win95's toolbar must load a real palette bitmap, independent of the
+ * current screen depth. Let the original common-controls mapper replace
+ * only the transparent palette entry; no screen-depth XOR/mask conversion. */
 int BrowserToolbarAddImages(Browser *browser,int size)
 {
-    /* Back, Forward, Up, Search, Folders, Refresh, Views, History;
-     * Copy, Cut, Paste, Delete, Properties, Folder Options. */
-    static const struct { BYTE strip,index; } tiles[BROWSER_TOOLBAR_IMAGES]={
-        {0,0},{0,1},{0,28},{0,17},{0,12},{1,3},{0,20},{1,12},
-        {0,6},{0,5},{0,7},{0,10},{0,15},{1,10}
-    };
-    HDC target=GetDC(browser->window),dc=NULL,source=NULL; HBITMAP bitmap=NULL,strips[2]={NULL,NULL};
-    HGDIOBJ oldBitmap=NULL,oldSource=NULL; int i,index=-1,cell=size==16 ? 16 : 20,pad=(size-cell)/2;
-    RECT area={0,0,size*BROWSER_TOOLBAR_IMAGES,size}; TBADDBITMAP images;
-    if(!target) goto done;
-    dc=CreateCompatibleDC(target); source=CreateCompatibleDC(target);
-    bitmap=CreateCompatibleBitmap(target,area.right,area.bottom);
-    strips[0]=ResourceStrip(target,size==16 ? 208 : 209,cell,46);
-    strips[1]=ResourceStrip(target,size==16 ? 210 : 211,cell,16);
-    if(!dc || !source || !bitmap || !strips[0] || !strips[1]) goto done;
-    oldBitmap=SelectObject(dc,bitmap); oldSource=SelectObject(source,strips[0]);
-    FillRect(dc,&area,(HBRUSH)(COLOR_BTNFACE+1));
-    for(i=0;i<BROWSER_TOOLBAR_IMAGES;++i) {
-        SelectObject(source,strips[tiles[i].strip]);
-        if(!BitBlt(dc,i*size+pad,pad,cell,cell,source,tiles[i].index*cell,0,SRCCOPY)) goto done;
+    COLORMAP color; TBADDBITMAP images; BITMAP dimensions; HBITMAP bitmap; int index;
+    color.from=RGB(255,0,255); color.to=GetSysColor(COLOR_BTNFACE);
+    bitmap=CreateMappedBitmap(browserInstance,size==16 ? 208 : 209,0,&color,1);
+    if(!bitmap) return -1;
+    if(!GetObjectA(bitmap,sizeof(dimensions),&dimensions) ||
+       dimensions.bmWidth!=size*BROWSER_TOOLBAR_IMAGES || dimensions.bmHeight!=size) {
+        DeleteObject(bitmap); return -1;
     }
-    SelectObject(dc,oldBitmap); oldBitmap=NULL;
     images.hInst=NULL; images.nID=(UINT_PTR)bitmap;
     index=(int)SendMessageA(browser->toolbar,TB_ADDBITMAP,BROWSER_TOOLBAR_IMAGES,(LPARAM)&images);
-    if(index>=0) { browser->toolbarImages=bitmap; bitmap=NULL; }
-done:
-    if(oldBitmap) SelectObject(dc,oldBitmap);
-    if(oldSource) SelectObject(source,oldSource);
-    for(i=0;i<2;++i) if(strips[i]) DeleteObject(strips[i]);
-    if(bitmap) DeleteObject(bitmap);
-    if(source) DeleteDC(source);
-    if(dc) DeleteDC(dc);
-    if(target) ReleaseDC(browser->window,target);
+    if(index>=0) browser->toolbarImages=bitmap;
+    else DeleteObject(bitmap);
     return index;
 }

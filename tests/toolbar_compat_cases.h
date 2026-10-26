@@ -83,9 +83,40 @@ static LRESULT CALLBACK CompactTestClassicFace(HWND toolbar,UINT message,WPARAM 
     }
     return result;
 }
+static void ToolbarPaletteTests(HWND parent)
+{
+    int mode; HDC target=GetDC(parent),dc=CreateCompatibleDC(target);
+    Check(target && dc,"create the native palette comparison DC at the current display depth");
+    for(mode=0;mode<4;++mode) {
+        int size=mode&1 ? 24 : 16,x,y,stride; UINT id=mode&1 ? 209 : 208;
+        HRSRC resource=FindResourceA(GetModuleHandleA(NULL),MAKEINTRESOURCEA(id),RT_BITMAP);
+        const BITMAPINFOHEADER *header=resource ? LockResource(LoadResource(GetModuleHandleA(NULL),resource)) : NULL;
+        const RGBQUAD *palette; const BYTE *pixels; COLORMAP color; HBITMAP bitmap; HGDIOBJ old; BOOL same=TRUE;
+        Check(header && header->biSize==sizeof(*header) && header->biBitCount==4 && header->biCompression==BI_RGB &&
+            header->biWidth==size*14 && header->biHeight==size && header->biClrUsed==16,
+            "the toolbar resource is an explicit 16-color BI_RGB strip, independent of the screen bitmap depth");
+        palette=(const RGBQUAD *)(header+1); pixels=(const BYTE *)(palette+16);
+        stride=(header->biWidth*4+31)/32*4;
+        Check(SizeofResource(GetModuleHandleA(NULL),resource)>=sizeof(*header)+16*sizeof(*palette)+stride*size,
+            "the complete palette and all source scanlines fit their resource");
+        color.from=RGB(255,0,255); color.to=mode<2 ? GetSysColor(COLOR_BTNFACE) : RGB(60,96,128);
+        bitmap=CreateMappedBitmap(GetModuleHandleA(NULL),id,0,&color,1);
+        Check(bitmap!=NULL,"the original common-controls palette mapper loads the toolbar"); old=SelectObject(dc,bitmap);
+        for(y=0;y<size && same;++y) for(x=0;x<header->biWidth;++x) {
+            BYTE pair=pixels[(size-1-y)*stride+x/2],index=(pair>>(x&1 ? 0 : 4))&15;
+            COLORREF expected=RGB(palette[index].rgbRed,palette[index].rgbGreen,palette[index].rgbBlue);
+            if(expected==color.from) expected=color.to;
+            if(GetPixel(dc,x,y)!=expected) { same=FALSE; break; }
+        }
+        SelectObject(dc,old); DeleteObject(bitmap);
+        Check(same,"native palette loading preserves every artwork pixel and replaces only transparency on system and custom faces");
+    }
+    DeleteDC(dc); ReleaseDC(parent,target);
+}
 static void ToolbarCompatTests(HWND parent)
 {
     int mode;
+    ToolbarPaletteTests(parent);
     for (mode = 0; mode < 6; ++mode) {
         int size = mode & 1 ? 24 : 16, widths[5], i; const char *captions[5];
         const char *names[] = {"Back", "", "", "", "History"};

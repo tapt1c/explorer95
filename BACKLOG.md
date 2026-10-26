@@ -1,5 +1,82 @@
 # Следующие задачи Explorer95
 
+## Чекпоинт: исправления после проверки 244e7fe на Windows 95
+
+Работа продолжается; этот раздел фиксирует промежуточный результат. Ветка
+`codex/fix-full-ui`; исходный локальный коммит `244e7fe`, опубликованный main
+пока `a3a0f1b` / alpha.84. Нового релиза для этих изменений ещё нет.
+
+Пользователь показал пропавшую заливку toolbar при True Color 32 bit,
+открытие Fonts из Control Panel штатным Explorer и оболочку, оставшуюся
+под окном нового сетевого входа. Подтвердил: ручной адрес C:\Windows\Fonts
+уже открывается внутри Explorer95. Следовательно, путь Fonts работает,
+проверять нужно native selection/activation в Control Panel. Видео:
+`C:/Users/Iliya/Desktop/26 October 2026_vmware_iAfcs4tZdA.mp4`.
+Кадры: `build/video-fonts-logoff/contact.jpg`. ВМ не управляется.
+
+Подготовлено:
+
+- Заменены исходники toolbar на варианты 262/264/273/275 из того же архива.
+  `tools/build_toolbar_bitmaps.py` (только Python stdlib) читает BI_RGB/RLE4
+  и собирает `build/toolbar98-small.bmp` / `build/toolbar98-large.bmp` как
+  16-color BI_RGB/4bpp. Ячейки 16/20px сохранены целиком, крупные кнопки 24px.
+  Make использует grouped targets; RC теперь содержит только два bitmap.
+  Runtime — штатный Win95 CreateMappedBitmap с заменой magenta на COLOR_BTNFACE,
+  без прежнего XOR/маски и преобразования исходников в глубину цвета экрана.
+  API добавлен в reviewed Win95 imports. README ресурсов ещё описывает старый
+  вариант: обновить вместе с AGENTS/основным README после завершения проверок.
+- NativeView узнаёт точный Control Panel root. При отсутствии IShellFolderView
+  выбор восстанавливается ограниченной публичной EnumObjects/GetDisplayNameOf:
+  только единственное совпадение, затем реальные атрибуты и PIDL. Это lookup,
+  не классификация типа по подписи. IDataObject не запрашивается; Dial-Up
+  Networking в этот fallback не входит. ObjectName переиспользуется desktop
+  drop resolver. Нужно проверить реальные native-команды и переносы регрессиями.
+- Создано первым обычное скрытое окно Explorer95.Session без TOOLWINDOW/owner.
+  Оно участвует в протоколе QUERYENDSESSION/ENDSESSION; обработчик общий с bar.
+  FALSE сохраняет оболочку, TRUE завершает главный цикл с обычной очисткой.
+  Прежний тест посылал сообщения только tool window и не доказывал регистрацию
+  обычного участника сеанса. Новый тест проверяет Session HWND и шлёт сообщения
+  только своей копии; настоящий Log Off в автотестах запрещён.
+
+Уже прошли: x86/PE (328 imports, 8 DLL, no CRT), сборка ui64/smoke/probe.
+Независимая Pillow-декодировка сравнила каждый пиксель всех 14 ячеек обоих
+сгенерированных bitmap с исходниками. `build/win95-corrections-probe.log`
+завершается `Native selection checks passed.`: Control Panel enum fallback
+совпадает с обычным native PIDL/атрибутами и не получает transfer object;
+ToolbarPaletteTests сравнивает каждый mapped-пиксель с палитрой ресурса
+для обоих размеров и системного/произвольного фона. Это Wine, не настоящая Win95.
+
+Осталось: menu (session HWND/cancel/exit), browser (native Control Panel/Fonts,
+desktop drops), language/визуальный осмотр новых toolbar, check-build после
+нового генератора; попытка full. Прежний локальный full останавливался в PaintTests
+на `the real native label retains its white foreground and gains dark contrast
+on a light background`; не ослаблять этот assert. Требуется повторная целевая
+проверка Win95 пользователем, особенно открытия Fonts из CP и реального Log Off.
+
+Окружение тестов:
+
+- WATCOM: `/mnt/c/Users/Iliya/Documents/Codex/2026-10-16/ghbdt/work/watcom/root`.
+- `build/run-welcome-prebuilt.sh menu|browser|language|full` запускает уже
+  собранные EXE; `EX95_TEST_SCREEN=1024x768x24` для большого экрана.
+- Prefix по умолчанию `/home/eversiege/.cache/explorer95-logoff-20261025`;
+  второй через EX95_TEST_PREFIX —
+  `/home/eversiege/.cache/explorer95-native-selection-20261026`.
+  Перед другим Xvfb завершить только wineserver нужного prefix через его `-k`.
+- Wine: `../wine10/root/usr/lib/wine/wine64` и `wineserver64`; запуск через WSL Ubuntu.
+- `make -f build/native-selection-probe.mk build/ui64/native-selection-probe.exe`
+  и `sh build/run-native-selection-probe.sh` — игнорируемый точечный probe.
+  `build/native-selection-probe.c` включает также ToolbarPaletteTests.
+- Тестовые PID в Wine повторяются. После аварии могут остаться собственные
+  `Explorer95 smoke program 32.lnk` и query container в Programs prefix.
+  Только собственные остатки переносить в карантин внутри того же prefix,
+  не удалять Programs. Ранее созданные quarantine-fonts-20261026 сохранены.
+
+Последние логи: `build/win95-corrections-build.log`,
+`build/win95-corrections-test-build.log`, `build/win95-corrections-probe.log`.
+Не запускать одновременно два Make в checkout и не пересобирать EXE во время UI.
+Не использовать Computer Use; при реальном управлении ПК пользователь требует
+`C:/Users/Iliya/.codex/skills/python-desktop/SKILL.md`.
+
 ## Выполнено: значки Windows 98, Enter в Start, завершение сеанса и Fonts
 
 Из пользовательского BITMAP.7z сохранены исходные 266/268/277/279 BMP.

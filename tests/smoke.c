@@ -2208,11 +2208,14 @@ shutdown:
         }
         /* Messages target only our disposable process. Never request a real
          * logoff or broadcast session-end messages to the test computer. */
-        Check(SendMessageA(bar,WM_QUERYENDSESSION,0,0),"Explorer95 accepts a session-end query without exiting early");
-        SendMessageA(bar,WM_ENDSESSION,FALSE,0); PumpFor(80);
+        HWND session=FindWindowA("Explorer95.Session",NULL);
+        Check(session && !IsWindowVisible(session) && !(GetWindowLongA(session,GWL_EXSTYLE)&WS_EX_TOOLWINDOW) &&
+            !GetWindow(session,GW_OWNER),"session notifications have an ordinary unowned window rather than only tool windows");
+        Check(SendMessageA(session,WM_QUERYENDSESSION,0,0),"Explorer95 accepts a session-end query without exiting early");
+        SendMessageA(session,WM_ENDSESSION,FALSE,0); PumpFor(80);
         Check(IsWindow(bar) && IsWindowVisible(bar) && WaitForSingleObject(process.hProcess,0)==WAIT_TIMEOUT,
             "a cancelled session end preserves the running shell");
-        SendMessageA(bar,WM_ENDSESSION,TRUE,0);
+        SendMessageA(session,WM_ENDSESSION,TRUE,0);
         Check(WaitForGuiProcess(process.hProcess,5000) == WAIT_OBJECT_0,"a committed session end terminates Explorer95 cleanly");
         { RECT work; SystemParametersInfoA(SPI_GETWORKAREA,0,&work,0);
           Check(EqualRect(&work,&originalWork),"session-end cleanup restores the original desktop work area"); }

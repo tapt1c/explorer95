@@ -18,7 +18,7 @@ ShellState env;
 typedef struct TaskGroup { HWND windows[TASK_LIMIT], button; int count,pin; DWORD process; BOOL active; HICON icon; char application[MAX_PATH]; } TaskGroup;
 typedef struct QuickItem { char path[MAX_PATH]; HICON icon; HWND button; } QuickItem;
 static TaskGroup tasks[TASK_LIMIT];
-static HWND taskWindows[TASK_LIMIT], savedWindows[TASK_LIMIT], lastActive, bridge, quickTip, desktopButton;
+static HWND taskWindows[TASK_LIMIT], savedWindows[TASK_LIMIT], lastActive, bridge, quickTip, desktopButton, sessionWindow;
 static HWND quickGrip, quickMore, quickHot;
 static QuickItem quick[24];
 static HICON desktopIcon, explorerIcon, explorerLargeIcon;
@@ -1016,6 +1016,16 @@ static void AutoHideTick(void)
 
 static PaintBuffer barBuffer, barButtonBuffer;
 
+static LRESULT CALLBACK SessionProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
+{
+    if(message==WM_QUERYENDSESSION) { RenderTraceShutdown("session.query",S_OK,0); return TRUE; }
+    if(message==WM_ENDSESSION) {
+        RenderTraceShutdown(wp ? "exit.session" : "session.cancel",S_OK,(DWORD)lp);
+        if(wp) PostQuitMessage(0);
+        return 0;
+    }
+    return DefWindowProcA(window,message,wp,lp);
+}
 static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
 {
     LRESULT menuResult;
@@ -1190,13 +1200,9 @@ static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
         for (i = 0; i < count; ++i) if (DragQueryFileA(drop, i, path, MAX_PATH)) AddQuickFile(path);
         DragFinish(drop); RefreshQuick(); return 0;
     }
-    case WM_QUERYENDSESSION: return TRUE;
+    case WM_QUERYENDSESSION:
     case WM_ENDSESSION:
-        /* ExitWindowsEx accepts a request before other programs can veto it.
-         * Leave only after Windows commits the session end. A cancelled end
-         * must preserve the desktop, hooks and running browser windows. */
-        if(wp) { RenderTraceShutdown("exit.session",S_OK,(DWORD)lp); PostQuitMessage(0); }
-        return 0;
+        return SessionProc(window,message,wp,lp);
     case WM_CLOSE:
         RenderTraceShutdown("exit.request",S_OK,0);
         if(FileDragDeferClose(window)) return 0;
@@ -1219,8 +1225,15 @@ HWND EnvironmentCreate(const EnvironmentHost *callbacks)
     NativeViewSetHost(callbacks); PaintColorsChanged(&desktopColors); EnvRefreshStartItems();
     SystemParametersInfoA(SPI_GETWORKAREA, 0, &env.originalArea, 0);
     env.primary = FindWindowA("Shell_TrayWnd", NULL) == NULL;
-    if (!EnvRegister("Explorer95.Desktop", DesktopProc, (HBRUSH)(COLOR_BACKGROUND + 1), 0) ||
+    if (!EnvRegister("Explorer95.Session",SessionProc,NULL,0) ||
+        !EnvRegister("Explorer95.Desktop", DesktopProc, (HBRUSH)(COLOR_BACKGROUND + 1), 0) ||
         !EnvRegister("Explorer95.Taskbar", BarProc, (HBRUSH)(COLOR_BTNFACE + 1), 0) || !EnvRegister("Explorer95.QuickGrip", QuickGripProc, NULL, 0) || !PropertiesRegister()) return NULL;
+    /* Win9x session management needs an ordinary application window. The
+     * desktop, taskbar and tray bridge are tool windows. Keep this first,
+     * unowned window hidden so it participates without becoming a task. */
+    sessionWindow=CreateWindowExA(0,"Explorer95.Session","Explorer95",WS_OVERLAPPEDWINDOW,
+        0,0,0,0,NULL,NULL,env.host.instance,NULL);
+    if(!sessionWindow) return NULL;
     env.desktop = CreateWindowExA(WS_EX_TOOLWINDOW, "Explorer95.Desktop", "Explorer95 Desktop", WS_POPUP | WS_CLIPCHILDREN,
         0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN), NULL, NULL, env.host.instance, NULL);
     /* Establish the owner's band before creating its topmost Start/tooltip
@@ -1318,6 +1331,7 @@ void EnvironmentShutdown(void)
     RenderTraceShutdown("exit.properties",S_OK,0);
     if (env.properties) DestroyWindow(env.properties);
     if (bridge) DestroyWindow(bridge);
+    if(sessionWindow) { DestroyWindow(sessionWindow); sessionWindow=NULL; }
     SetPropA(env.bar, "Explorer95.ShutdownStage", (HANDLE)6);
     RenderTraceShutdown("exit.appbar",S_OK,0);
     if (env.appbar) {
