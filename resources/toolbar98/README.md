@@ -22,6 +22,13 @@ The runtime no longer creates a screen-depth source strip using XOR/masks.
 Native palette tests compare every mapped pixel with the resource palette on
 system and custom faces. The original source BMP bytes remain intact.
 
+The original 262/264 exports declare `bfOffBits` two bytes past their physical
+scanline start: they count a 16-byte file header but physically store 14 bytes,
+leaving two extra bytes at EOF. The builder validates this exact layout and
+reads their scanlines immediately after the DIB palette. Following the declared
+offset shifts 262 by two pixels and 264 by four pixels, wrapping adjacent glyphs.
+Other BMPs retain their declared offsets, including legitimate header padding.
+
 The first source supplies Back (0), Forward (1), Up (28), Search (17),
 Folders (12), Views (20), Copy (6), Cut (5), Paste (7), Delete (10), Properties (15).
 The second supplies Refresh (3), History (12), Folder Options (10). The combined

@@ -28,6 +28,15 @@ def read_bitmap(path):
     pixels = [[0] * width for _ in range(height)]  # bottom-up DIB rows
     if compression == 0:
         stride = (width * bits + 31) // 32 * 4
+        # These original exports count a 16-byte file header in bfOffBits,
+        # but store pixels immediately after the actual 14-byte header/DIB.
+        # The extra two bytes are at EOF, not before the scanlines. Respect
+        # their physical DIB layout instead of shifting/wrapping every row.
+        if path.name in ('262.bmp', '264.bmp'):
+            start = 54 + count * 4
+            if offset != start + 2 or len(data) != offset + stride * height or data[-2:] != b'\0\0':
+                raise ValueError(f'{path}: unexpected original export layout')
+            offset = start
         if offset + stride * height > len(data):
             raise ValueError(f'{path}: truncated bitmap rows')
         for y in range(height):

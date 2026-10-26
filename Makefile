@@ -112,6 +112,7 @@ check: all
 	python3 tests/check_vxd.py build/native/EX95TS01.VXD
 	python3 -m unittest discover -s tests -p test_check_vxd.py
 	python3 -m unittest discover -s tests -p test_check_pe.py
+	python3 -m unittest discover -s tests -p test_toolbar_bitmaps.py
 	python3 -m unittest discover -s tests -p test_localization.py
 	python3 tests/check_pe.py build/tray_hook.dll --dll
 	python3 tests/check_pe.py build/task_switch_hook.dll --dll
