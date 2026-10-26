@@ -2,6 +2,8 @@
 #define WIN32_LEAN_AND_MEAN
 #include "shell_internal.h"
 #include "shutdown_dos.h"
+#include "session_logoff.h"
+#include "render_trace.h"
 #define EX95_LOCALIZE_UI
 #include "localization.h"
 
@@ -226,12 +228,9 @@ static void PowerAction(int id)
     ShutdownClose();
     if (error) EnvError(env.bar, "Windows could not perform the selected power action.", error);
 }
-static void LogoffAction(void)
+static void LogoffWindows(HWND owner)
 {
     DWORD error;
-    /* Restore input and remove the snapshot before applications can display
-     * save prompts or veto the session end. Never force a logoff. */
-    ShutdownClose();
     SetLastError(ERROR_SUCCESS);
     if (ExitWindowsEx(EWX_LOGOFF, 0)) return;
     error = GetLastError();
@@ -239,14 +238,32 @@ static void LogoffAction(void)
         typedef void (WINAPI *SessionDialog)(HWND);
         SessionDialog dialog = (SessionDialog)(void *)GetProcAddress(GetModuleHandleA("shell32.dll"), MAKEINTRESOURCEA(60));
         if (dialog) {
-            MessageBoxA(env.bar, "Use the Windows dialog to select:\r\n"
+            MessageBoxA(owner, "Use the Windows dialog to select:\r\n"
                 "Close all programs and log on as a different user.\r\n\r\n"
                 "The available choices depend on your installed logon provider.",
                 "Log Off Windows", MB_OK | MB_ICONINFORMATION);
-            dialog(env.bar);
-        } else EnvError(env.bar, "This Windows installation could not log off directly.", error);
-    } else if (error) EnvError(env.bar, "Windows could not end the session.", error);
+            dialog(owner);
+        } else EnvError(owner, "This Windows installation could not log off directly.", error);
+    } else if (error) EnvError(owner, "Windows could not end the session.", error);
     /* A cancelled session end may return FALSE without an error. */
+}
+void ShutdownLogoffClient(void)
+{
+    /* Win95 excludes the calling application from its session-end query.
+     * A distinct GUI process lets the shell remain an ordinary participant.
+     * Never perform the helper's real action on the host's newer Windows. */
+    if(Windows95()) LogoffWindows(NULL);
+}
+static void LogoffAction(void)
+{
+    DWORD error;
+    /* Restore input for native save prompts before launching the requester.
+     * The shell exits only on WM_ENDSESSION(TRUE), never on API acceptance. */
+    ShutdownClose();
+    if(!Windows95()) { LogoffWindows(env.bar); return; }
+    error=SessionLogoffLaunch(env.ini,CreateProcessA);
+    RenderTraceShutdown("logoff.helper",HRESULT_FROM_WIN32(error),error);
+    if(error) EnvError(env.bar,"Windows could not end the session.",error);
 }
 static LRESULT CALLBACK ChoiceProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
 {

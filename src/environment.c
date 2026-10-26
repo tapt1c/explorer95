@@ -1228,9 +1228,10 @@ HWND EnvironmentCreate(const EnvironmentHost *callbacks)
     if (!EnvRegister("Explorer95.Session",SessionProc,NULL,0) ||
         !EnvRegister("Explorer95.Desktop", DesktopProc, (HBRUSH)(COLOR_BACKGROUND + 1), 0) ||
         !EnvRegister("Explorer95.Taskbar", BarProc, (HBRUSH)(COLOR_BTNFACE + 1), 0) || !EnvRegister("Explorer95.QuickGrip", QuickGripProc, NULL, 0) || !PropertiesRegister()) return NULL;
-    /* Win9x session management needs an ordinary application window. The
-     * desktop, taskbar and tray bridge are tool windows. Keep this first,
-     * unowned window hidden so it participates without becoming a task. */
+    /* Keep a normal session-notification window alongside the tool windows.
+     * It stays hidden and unowned, without a task-list entry. On Win95 the
+     * independent logoff caller is still required: a window cannot remove
+     * the calling application's exemption from the session-end query. */
     sessionWindow=CreateWindowExA(0,"Explorer95.Session","Explorer95",WS_OVERLAPPEDWINDOW,
         0,0,0,0,NULL,NULL,env.host.instance,NULL);
     if(!sessionWindow) return NULL;

@@ -94,6 +94,7 @@ Explorer95 — любительская нативная оболочка для
 | `src/render_trace.c`, `src/render_trace.h` | Ограниченная opt-in трассировка `--trace-render`, EX95REND.LOG рядом с EXE; события активации, Z-order и рисования. |
 | `src/paint.c`, `src/paint.h` | Сохраняемые GDI-буферы, согласованное масштабирование XOR/AND значков, тени подписей рабочего стола, TransparentBlt с Win95-совместимым запасным путём и флажок Start. |
 | `src/shutdown.c` | Модальный выбор Stand By / Hibernate / Turn Off / Restart / MS-DOS, GDI-затемнение снимка и необязательные API питания. |
+| `src/session_logoff.c/.h`, `tests/session_logoff_cases.h` | Отдельный GUI-requester Log Off из того же EXE, частный startup token, точный профиль и инертные проверки CreateProcess без настоящего выхода. |
 | `src/shutdown_dos.c/.h`, `tests/shutdown_dos_cases.h` | Подготовка своего real-mode PIF через Win95 PifMgr; тестирование только через инертные callbacks. |
 | `src/explorer95.rc` | Ресурсы EXE; bitmap кнопки Start имеет ID `143`. |
 | `resources/Bitmap143.bmp` | Предоставленный пользователем исходный флажок 16×16. |
@@ -1937,6 +1938,20 @@ Rename со скрытым расширением, системные Properties
   не полагайтесь только на служебные desktop/taskbar HWND. Проверяйте именно
   этот HWND, его стиль и сохранность при отмене. Повторный настоящий Log Off
   на Win95 обязателен для подтверждения результата.
+  В Win95 вызывающее приложение исключено из обычного опроса завершения
+  (историческая справка: https://networkdls.com/Win32Ref/ExitWindows.html).
+  Дополнительный HWND внутри того же процесса не устраняет это исключение.
+  Поэтому SessionLogoffLaunch запускает тот же GUI EXE через CreateProcessA
+  с явным lpApplicationName и частным первым token Explorer95.LogoffClient.
+  Обычный parser по-прежнему проверяет --settings; смешанная folder-команда
+  отклоняется. Клиент обрабатывается ДО startup mutex/single-instance пути,
+  не создаёт окружение и не открывает общий trace-файл. Локализация и OLE
+  инициализируются; реальное действие клиента ограничено Win95. Он сохраняет
+  прежний Incorrect Function fallback. Основная оболочка не ждёт process handle
+  синхронно и выходит только по настоящему WM_ENDSESSION(TRUE). logoff.helper
+  в trace показывает результат запуска, а не успешность самого Log Off.
+  SessionLogoffTests использует инертный CreateProcess callback и собственные
+  временные handles. Настоящий helper/ExitWindowsEx в автотестах запрещён.
 - В меню панели задач нет Exit Explorer95; команда Task Manager запускает
   полный путь Windows\\TASKMAN.EXE без записи в recent programs. Пользователь
   подтвердил работу штатного Task List в настоящей Windows 95.

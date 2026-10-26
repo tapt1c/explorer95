@@ -178,11 +178,6 @@ void PropertiesSelectPage(int page);
 void PropertiesDesktopLayoutChanged(void);
 void PropertiesQuickLayoutChanged(void);
 BOOL PropertiesTranslate(MSG *message);
-void ShutdownShow(void);
-void ShutdownLogoffShow(void);
-void ShutdownClose(void);
-void ShutdownFocus(void);
-BOOL ShutdownActive(void);
-BOOL ShutdownTranslate(MSG *message);
+#include "shutdown.h"
 
 #endif

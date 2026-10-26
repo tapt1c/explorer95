@@ -1152,6 +1152,7 @@ static void PumpFor(DWORD duration)
 #include "quick_launch_cases.h"
 #include "backlog_menu_cases.h"
 #include "shutdown_dos_cases.h"
+#include "session_logoff_cases.h"
 #include "task_groups_cases.h"
 #include "task_switch_cases.h"
 #include "browser_panes_cases.h"
@@ -1982,7 +1983,7 @@ void start(void)
     if(group==GROUP_LANGUAGE) { ShutdownDosTests(settingsDir); LanguageTests(settingsDir); LanguageRestartTests(settingsDir,executable); goto cleanup; }
     if (group == GROUP_FULL || group == GROUP_CORE || group == GROUP_BROWSER) ShellNewTests(settingsDir, module);
     if (group == GROUP_FULL || group == GROUP_CORE || group == GROUP_BROWSER) FileDropRegistrationTests();
-    if (group == GROUP_FULL || group == GROUP_CORE || group == GROUP_MENU) ShutdownDosTests(settingsDir);
+    if (group == GROUP_FULL || group == GROUP_CORE || group == GROUP_MENU) { ShutdownDosTests(settingsDir); SessionLogoffTests(settingsDir); }
     if (group != GROUP_BROWSER) { LayoutTests(); HistoryTests(settingsDir, module, settings); ShellFeatureTests(); }
     if (group == GROUP_FULL || group == GROUP_CORE) { PaintTests(); ConfigTests(settingsDir); DesktopIconTests(settingsDir); LanguageTests(settingsDir); NativeRunTests(); FolderHandlerTests(module,settings); FolderSelectionTests(); DragDataTests(); NativeViewMessageTests(); TrayMirrorTests(); TrayMirrorCrossProcessTests(); }
     if(group==GROUP_FULL || group==GROUP_MENU || group==GROUP_CORE) { TaskbarQueryTests(settingsDir,module); TaskbarLinksTests(settingsDir,module); TaskMenuNativeTests(); }

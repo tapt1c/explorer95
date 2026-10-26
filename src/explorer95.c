@@ -11,6 +11,8 @@
 #include "browser.h"
 #include "render_trace.h"
 #include "shell_run.h"
+#include "session_logoff.h"
+#include "shutdown.h"
 #define EX95_LOCALIZE_UI
 #include "localization.h"
 
@@ -66,6 +68,17 @@ static BOOL SpecialPath(int folder, char *path)
 static void ShowRun(void)
 { ShellRun(bar,EnvironmentRecordLaunch); }
 
+static void InitializeUi(void)
+{
+    char profile[MAX_PATH],base[MAX_PATH];
+    if(FolderSettingsPath(GetCommandLineA(),profile)) profile[0]=0;
+    if(!profile[0]) {
+        if(!SpecialPath(CSIDL_APPDATA,base)) GetWindowsDirectoryA(base,MAX_PATH);
+        if(lstrlenA(base)+27<MAX_PATH) { lstrcpyA(profile,base); lstrcatA(profile,"\\Explorer95\\Explorer95.ini"); }
+    }
+    UiInitialize(profile);
+}
+
 /* Explicit entry point avoids a dependency on a modern C runtime DLL. */
 void start(void)
 {
@@ -76,7 +89,14 @@ void start(void)
     FolderRequest request; BOOL requested; DWORD error, waited; HANDLE startup;
     instance = GetModuleHandleA(NULL);
     error = FolderRequestParse(GetCommandLineA(),&request,&requested);
+    if(!error && SessionLogoffClientRequested(GetCommandLineA()) && requested) error=ERROR_INVALID_PARAMETER;
     if (error) { ErrorMessage(NULL,"Invalid folder-opening command.",error); ExitProcess(1); }
+    if(SessionLogoffClientRequested(GetCommandLineA())) {
+        InitializeUi(); ole=OleInitialize(NULL); InitCommonControls();
+        ShutdownLogoffClient();
+        if(SUCCEEDED(ole)) OleUninitialize();
+        UiShutdown(); ExitProcess(0);
+    }
     startup = CreateMutexA(NULL,FALSE,"Explorer95.Startup");
     if (!startup) { ErrorMessage(NULL,"Cannot coordinate Explorer95 startup.",GetLastError()); ExitProcess(1); }
     waited = WaitForSingleObject(startup,10000);
@@ -96,15 +116,7 @@ void start(void)
         ExitProcess(0);
     }
     RenderTraceOpen();
-    {
-        char profile[MAX_PATH],base[MAX_PATH];
-        if(FolderSettingsPath(GetCommandLineA(),profile)) profile[0]=0;
-        if(!profile[0]) {
-            if(!SpecialPath(CSIDL_APPDATA,base)) GetWindowsDirectoryA(base,MAX_PATH);
-            if(lstrlenA(base)+27<MAX_PATH) { lstrcpyA(profile,base); lstrcatA(profile,"\\Explorer95\\Explorer95.ini"); }
-        }
-        UiInitialize(profile);
-    }
+    InitializeUi();
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
     ole = OleInitialize(NULL);
     InitCommonControls();
