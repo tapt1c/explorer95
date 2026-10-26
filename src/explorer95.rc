@@ -1,5 +1,6 @@
 "EXPLORER95" ICON "resources/explorer95.ico"
 143 BITMAP "resources/Bitmap143.bmp"
+207 BITMAP "resources/welcome.bmp"
 #ifdef _WIN64
 201 RCDATA "build/ui64/tray_hook.dll"
 205 RCDATA "build/ui64/task_switch_hook.dll"

@@ -329,6 +329,7 @@ static void LanguageRestartTests(const char *directory,const char *executable)
     HANDLE fixture=CreateFileA(probe,GENERIC_WRITE,0,NULL,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL);
     Check(fixture!=INVALID_HANDLE_VALUE,"create a native filename equal to an English UI label"); CloseHandle(fixture);
     Check(WritePrivateProfileStringA("Interface","Language","ru",profile),"save the Russian language in the isolated profile");
+    Check(WritePrivateProfileStringA("Interface","ShowWelcome","0",profile),"disable the separately tested startup banner for language and focus scenarios");
     ZeroMemory(&startup,sizeof(startup)); startup.cb=sizeof(startup);
     wsprintfA(command,"\"%s\" --settings=\"%s\" --open=\"%s\" --trace-render",ownExe,profile,folder);
     Check(CreateProcessA(NULL,command,NULL,NULL,FALSE,0,NULL,NULL,&startup,&process),"launch the real application in Russian");
@@ -413,6 +414,9 @@ static void LanguageRestartTests(const char *directory,const char *executable)
           "the real Russian Start menu has no phantom translated system caption over its custom header"); }
     SendMessageA(GetDlgItem(bar,100),BM_CLICK,0,0);
     SendMessageA(bar,WM_COMMAND,600,0); properties=WaitFor("Explorer95.Properties",NULL); Check(properties!=NULL,"open translated environment settings");
+    SettingsPage(properties,SETTINGS_SHELL,-1);
+    Check(LanguageWideEqual(GetDlgItem(properties,ID_WELCOME),L"Показывать приветствие при запуске"),"the startup welcome preference has its Russian label");
+    PumpFor(80); SaveScreen("build/welcome-settings-ru.bmp");
     SettingsPage(properties,SETTINGS_START,0); SendDlgItemMessageA(properties,1002,CB_SETCURSEL,1,0); SendMessageA(properties,WM_COMMAND,0x3021,0);
     PostMessageA(bar,WM_COMMAND,100,0);
     { HWND classic=WaitFor("#32768",NULL); Check(classic!=NULL,"Russian classic Start retains a native menu with its account strip");

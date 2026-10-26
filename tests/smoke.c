@@ -1134,6 +1134,7 @@ static void PumpFor(DWORD duration)
 #include "task_switch_cases.h"
 #include "browser_panes_cases.h"
 #include "control_panel_cases.h"
+#include "welcome_cases.h"
 #include "desktop_delete_cases.h"
 #include "file_drag_cases.h"
 static void WinKeyEvent(UINT key, BOOL up)
@@ -1982,6 +1983,7 @@ void start(void)
     ZeroMemory(&startup, sizeof(startup)); startup.cb = sizeof(startup);
     if(GetEnvironmentVariableA("EX95_TEST_TRACE",actual,sizeof(actual)) && actual[0]=='1') lstrcatA(command," --trace-render");
     Check(CreateProcessA(NULL, command, NULL, NULL, FALSE, 0, NULL, NULL, &startup, &process), "launch built EXE");
+    WelcomeStartupTest();
     bar = WaitFor("Explorer95.Taskbar", NULL);
     desktop = WaitFor("Explorer95.Desktop", NULL);
     Check(bar && desktop, "taskbar and full desktop created");
@@ -2014,6 +2016,7 @@ void start(void)
         Check(!IsWindow(initial), "startup folder closes before keyboard focus tests begin");
     }
     if (group != GROUP_BROWSER) FirstStartDefaultsTests(bar, FindWindowA("Explorer95.Start", NULL), settings);
+    WelcomeSettingsTest(bar,settings);
     if (group != GROUP_BROWSER) WinKeyTests(bar, FindWindowA("Explorer95.Start", NULL));
     /* Finish the cold-start folder activation check before deliberately
      * moving foreground among independent Alt+Tab fixture processes. */
@@ -2161,6 +2164,7 @@ shutdown:
         wsprintfA(command,"\"%s\" --settings=\"%s\"",executable,settings);
         Check(CreateProcessA(NULL,command,NULL,NULL,FALSE,0,NULL,NULL,&startup,&process),"restart the shell with an icon-only Start profile");
         bar = WaitFor("Explorer95.Taskbar",NULL); GetWindowRect(GetDlgItem(bar,100),&button);
+        WelcomeDisabledTest();
         Check(bar && button.right - button.left == 26,"the real restarted shell retains the compact icon-only Start button");
         Check(GetPrivateProfileIntA("TaskbarToolbars","Count",0,settings)==2 &&
               GetPrivateProfileIntA("TaskbarToolbars","Size0",0,settings)==190 &&

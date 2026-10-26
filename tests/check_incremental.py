@@ -53,6 +53,9 @@ def main():
         bitmap = work / "resources/Bitmap143.bmp"
         bitmap.write_bytes(bitmap.read_bytes())
         run("bitmap changes rebuild only resources", 0, 1)
+        welcome = work / "resources/welcome.bmp"
+        welcome.write_bytes(welcome.read_bytes())
+        run("welcome bitmap changes rebuild only resources", 0, 1)
         icon = work / "resources/explorer95.ico"
         icon.write_bytes(icon.read_bytes())
         run("application icon changes rebuild only resources", 0, 1)

@@ -107,6 +107,22 @@ static UINT PidlLength(const BYTE *data, SIZE_T size, UINT offset)
     }
     return 0;
 }
+BOOL FolderObjectIsFolder(LPCITEMIDLIST absolute,SFGAOF attributes)
+{
+    LPITEMIDLIST controls=NULL; LPCITEMIDLIST scan; UINT bytes=2,i; BOOL same=FALSE;
+    if(!absolute) return FALSE;
+    if(attributes&SFGAO_FOLDER) return TRUE;
+    /* Only the canonical root is a compatibility exception. A provider may
+     * accept BindToObject for an applet too; that does not make it a folder.
+     * New Connection and Control Panel's children retain native commands. */
+    if(FAILED(SHGetSpecialFolderLocation(NULL,CSIDL_CONTROLS,&controls))) return FALSE;
+    for(scan=controls;scan->mkid.cb;scan=(LPCITEMIDLIST)((const BYTE *)scan+scan->mkid.cb)) bytes+=scan->mkid.cb;
+    if(PidlLength((const BYTE *)absolute,bytes,0)==bytes) {
+        for(i=0;i<bytes && ((const BYTE *)absolute)[i]==((const BYTE *)controls)[i];++i) {}
+        same=i==bytes;
+    }
+    CoTaskMemFree(controls); return same;
+}
 static LPITEMIDLIST SelectionPidl(IDataObject *data, BOOL foldersOnly, SFGAOF *attributes)
 {
     FORMATETC format; STGMEDIUM medium; LPITEMIDLIST absolute = NULL;
@@ -143,9 +159,10 @@ static LPITEMIDLIST SelectionPidl(IDataObject *data, BOOL foldersOnly, SFGAOF *a
                     }
                 }
                 if (attributes) *attributes = found;
-                if (!foldersOnly || (found & SFGAO_FOLDER)) {
-                    absolute = HeapAlloc(GetProcessHeap(),0,left+right-2);
-                    if (absolute) { CopyMemory(absolute,bytes+parent,left-2); CopyMemory((BYTE *)absolute+left-2,bytes+child,right); }
+                absolute = HeapAlloc(GetProcessHeap(),0,left+right-2);
+                if (absolute) {
+                    CopyMemory(absolute,bytes+parent,left-2); CopyMemory((BYTE *)absolute+left-2,bytes+child,right);
+                    if(foldersOnly && !FolderObjectIsFolder(absolute,found)) { HeapFree(GetProcessHeap(),0,absolute); absolute=NULL; }
                 }
             }
         }

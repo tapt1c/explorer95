@@ -114,6 +114,7 @@ static BOOL WriteOptions(const char *ini, const ShellOptions *o)
     SAVE("Desktop", "LockIcons", lockDesktopIcons); SAVE("Desktop", "SnapToGrid", snapDesktopIcons);
     SAVE("Desktop", "GridWidth", desktopGridX); SAVE("Desktop", "GridHeight", desktopGridY);
     SAVE("Desktop", "IconSize", desktopIconSize);
+    SAVE("Interface", "ShowWelcome", showWelcome);
 #undef SAVE
     okay &= WritePrivateProfileStringA("Interface","Language",o->language ? "ru" : "en",ini);
     okay &= WriteNumber(ini, "Start", "ItemsVersion", 2);
@@ -345,6 +346,7 @@ static BOOL Apply(HWND window)
     options.hideTaskLabels=Checked(window,ID_HIDETASKLABELS);
     options.group = Checked(window, ID_GROUP); options.hideInactive = Checked(window, ID_INACTIVE);
     options.searchBox=Checked(window,ID_SEARCHBAR);
+    options.showWelcome=Checked(window,ID_WELCOME);
     options.desktopIcons = Checked(window, ID_DESKTOPICONS); options.autoArrange = Checked(window, ID_AUTOARRANGE);
     options.desktopIconSize = SendDlgItemMessageA(window, ID_DESKTOPSIZE, CB_GETCURSEL, 0, 0) == 1 ? 48 : 32;
     options.lockDesktopIcons = Checked(window, ID_LOCKICONS); options.snapDesktopIcons = Checked(window, ID_SNAPICONS);
@@ -418,15 +420,16 @@ static LRESULT CALLBACK PropertiesProc(HWND window, UINT message, WPARAM wp, LPA
         Control(window, SETTINGS_DESKTOP, "BUTTON", "Background / display settings...", WS_TABSTOP, ID_BACKGROUND, 252, 298, 232, 26);
         Control(window, SETTINGS_DESKTOP, "STATIC", "Wallpaper, colors and screen saver use Windows display properties.", 0, 0, 30, 326, 454, 16);
         TraySettingsBegin(); TraySettingsCreate(window);
-        Control(window, SETTINGS_SHELL, "BUTTON", "Windows 95 startup shell", BS_GROUPBOX, 0, 24, 48, 472, 116);
+        Control(window, SETTINGS_SHELL, "BUTTON", "Windows 95 startup shell", BS_GROUPBOX, 0, 24, 48, 472, 128);
         Control(window, SETTINGS_SHELL, "STATIC", "Select which shell starts with Windows.\r\nThe change takes effect after restart.", 0, 0, 38, 68, 442, 34);
         Control(window, SETTINGS_SHELL, "BUTTON", "Use Explorer95 as shell...", WS_TABSTOP, ID_INSTALLSHELL, 38, 116, 214, 28);
         Control(window, SETTINGS_SHELL, "BUTTON", "Restore previous shell...", WS_TABSTOP, ID_RESTORESHELL, 266, 116, 214, 28);
-        Control(window, SETTINGS_SHELL, "BUTTON", "Windows 95 folder opening", BS_GROUPBOX, 0, 24, 176, 472, 148);
-        Control(window, SETTINGS_SHELL, "STATIC", "Open folders, drives, My Computer and Recycle Bin in Explorer95.\r\nIndependent of the startup shell; original commands can be restored.", 0, 0, 38, 198, 442, 38);
-        Control(window, SETTINGS_SHELL, "BUTTON", "Use Explorer95 for folders...", WS_TABSTOP, ID_INSTALLFOLDERS, 38, 246, 214, 28);
-        Control(window, SETTINGS_SHELL, "BUTTON", "Restore folder handler...", WS_TABSTOP, ID_RESTOREFOLDERS, 266, 246, 214, 28);
-        Control(window, SETTINGS_SHELL, "STATIC", "These actions apply immediately after confirmation.\r\nCancel does not undo them; use the corresponding Restore button.", 0, 0, 38, 282, 442, 34);
+        Checkbox(window,SETTINGS_SHELL,"Show welcome banner at startup",ID_WELCOME,env.options.showWelcome,38,148,442);
+        Control(window, SETTINGS_SHELL, "BUTTON", "Windows 95 folder opening", BS_GROUPBOX, 0, 24, 184, 472, 148);
+        Control(window, SETTINGS_SHELL, "STATIC", "Open folders, drives, My Computer and Recycle Bin in Explorer95.\r\nIndependent of the startup shell; original commands can be restored.", 0, 0, 38, 206, 442, 38);
+        Control(window, SETTINGS_SHELL, "BUTTON", "Use Explorer95 for folders...", WS_TABSTOP, ID_INSTALLFOLDERS, 38, 254, 214, 28);
+        Control(window, SETTINGS_SHELL, "BUTTON", "Restore folder handler...", WS_TABSTOP, ID_RESTOREFOLDERS, 266, 254, 214, 28);
+        Control(window, SETTINGS_SHELL, "STATIC", "These actions apply immediately after confirmation.\r\nCancel does not undo them; use the corresponding Restore button.", 0, 0, 38, 290, 442, 34);
         Control(window, SETTINGS_LANGUAGE, "STATIC", "Interface language:", 0, 0, 30, 60, 454, 22);
         control=Control(window, SETTINGS_LANGUAGE,"COMBOBOX","",WS_TABSTOP|CBS_DROPDOWNLIST,ID_LANGUAGE,30,90,300,100);
         SendMessageA(control,CB_ADDSTRING,0,(LPARAM)"English"); SendMessageA(control,CB_ADDSTRING,0,(LPARAM)"Russian");

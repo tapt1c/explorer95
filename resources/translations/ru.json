@@ -177,6 +177,7 @@
   "Start Menu": "Меню «Пуск»",
   "Notifications": "Уведомления",
   "System Shell": "Оболочка",
+  "Show welcome banner at startup": "Показывать приветствие при запуске",
   "Taskbar appearance": "Оформление панели задач",
   "Lock the taskbar": "Закрепить панель задач",
   "Auto-hide the taskbar": "Автоматически скрывать",

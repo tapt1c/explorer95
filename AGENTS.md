@@ -48,6 +48,7 @@ Explorer95 — любительская нативная оболочка для
 | --- | --- |
 | `src/font_resource.c/.h` | Извлечение встроенного TTF, Win95 FOT с абсолютным DOS-путём, проверка выбранного семейства, диагностика этапа и владение временными файлами. |
 | `src/explorer95.c` | Точка входа `start`, минимальные реализации памяти без CRT, Run, основной цикл сообщений и подключение оболочки. |
+| `src/welcome.c/.h`, `tests/welcome_cases.h` | Неблокирующая плашка запуска, ресурс `resources/welcome.bmp`, таймер 1500 мс и проверки общего Apply/Cancel и отключения после перезапуска. |
 | `src/browser.h`, `src/browser_internal.h` | Публичные команды и внутреннее состояние Проводника: отдельные настройки, история, PIDL, дерево, файловые данные и уведомление каталога. |
 | `src/browser.c` | Общая рамка файловых и виртуальных папок, навигация, адрес, toolbar, меню, layout, настройки, клавиши и обновление открытого каталога. |
 | `src/browser_options.c`, `tests/folder_options_cases.h` | Компактные Folder View / Toolbar / History, независимые черновики и атомарный Apply/Cancel. |
@@ -96,6 +97,7 @@ Explorer95 — любительская нативная оболочка для
 | `src/shutdown_dos.c/.h`, `tests/shutdown_dos_cases.h` | Подготовка своего real-mode PIF через Win95 PifMgr; тестирование только через инертные callbacks. |
 | `src/explorer95.rc` | Ресурсы EXE; bitmap кнопки Start имеет ID `143`. |
 | `resources/Bitmap143.bmp` | Предоставленный пользователем исходный флажок 16×16. |
+| `resources/welcome.bmp` | Предоставленная пользователем плашка 492×283, встроенный BITMAP 207; исходное изображение сохраняется. |
 | `tests/check_pe.py` | Структурная проверка PE и разрешённых импортов; только стандартная библиотека Python. |
 | `tests/test_check_pe.py` | Независимые PE-примеры для регрессий проверяющего кода, включая отказ для отсутствующего в Win95 EndMenu. |
 | `tests/layout.c`, `tests/layout_cases.h`, `tests/compat/windows.h` | Нативная проверка геометрии и общие с Windows smoke случаи; минимальные Win32-типы только для host-теста. |
@@ -1101,6 +1103,10 @@ explorer95.exe --settings="C:\EX95TEST\Explorer95.ini"
   остаются у native view; clipboard/drag используют IDataObject только по действию.
   Полный порядок IUnknown в LegacyFolderViewVtbl обязателен. Тесты блокируют
   GetItemObject и проверяют сведения, Enter и ICommDlgBrowser::OnDefaultCommand.
+  Исключение для Control Panel без SFGAO_FOLDER проверяет точный системный PIDL
+  CSIDL_CONTROLS в общем FolderObjectIsFolder. Успешный BindToObject недостаточен:
+  некоторые провайдеры принимают и PIDL апплета. Не превращайте дочерние апплеты
+  и New Connection в запросы перехода. Проверяйте Enter и двойной щелчок.
   Верхнее View/Arrange вызывает NativeViewSort: исходный Win95 IShellFolderView
   Rearrange, затем при необходимости обратный порядок с папками в начале.
   MinGW C declaration пропускает IUnknown slots; LegacyFolderViewVtbl сохраняет
@@ -1988,6 +1994,19 @@ Rename со скрытым расширением, системные Properties
 При работе над загрузкой сначала изучите восстановление из DOS в README.
 Автоматические проверки выполняйте на временных файлах; реальную смену shell,
 перезапуск и восстановление проверяйте в предназначенной для этого ВМ.
+
+## Приветствие при запуске
+
+Плашка `[Interface] ShowWelcome` включена по умолчанию и меняется в общем draft
+на странице System Shell. WelcomeShow вызывается один раз в конце EnvironmentCreate,
+после готовности оболочки; повторный folder client до этого пути не доходит.
+WelcomeClose вызывается при завершении. Окно WS_EX_TOOLWINDOW/WS_POPUP показывает
+исходный BITMAP 207 без активации и закрывается WM_TIMER через 1500 мс после
+первой отрисовки. Не используйте Sleep или отдельный вложенный цикл сообщений:
+запросы папок, панель и горячие клавиши должны продолжать работать.
+Изменения welcome.bmp должны инвалидировать оба resources.o; это проверяется
+tests/check_incremental.py. Остальные языковые/focus-сценарии используют отдельный
+профиль с отключённой плашкой, а welcome_cases проверяет default-on и реальный restart.
 
 ## GitHub, CI и релизы
 

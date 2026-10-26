@@ -79,13 +79,14 @@ static POINT SelectNativePlace(HWND list, BOOL control)
 }
 static void NativePaneNavigation(HWND browser)
 {
-    int control, count = PaneWindowCount(); char address[MAX_PATH]; DWORD started;
-    for (control = 1; control >= 0; --control) {
+    int activation, count = PaneWindowCount(); char address[MAX_PATH]; DWORD started;
+    for (activation = 0; activation < 3; ++activation) {
+        BOOL control=activation<2;
         HWND view, list; POINT point;
         SendMessageA(browser, WM_COMMAND, ID_COMPUTER, 0); PumpFor(80);
         view = FindWindowExA(browser, NULL, "SHELLDLL_DefView", NULL); list = FindWindowExA(view, NULL, WC_LISTVIEWA, NULL);
         Check(list != NULL, "My Computer exposes the original shell ListView"); point = SelectNativePlace(list, control);
-        if (control) PostMessageA(list, WM_KEYDOWN, VK_RETURN, 0);
+        if (!activation) PostMessageA(list, WM_KEYDOWN, VK_RETURN, 0);
         else PostMessageA(list, WM_LBUTTONDBLCLK, MK_LBUTTON, MAKELPARAM(point.x, point.y));
         started = GetTickCount();
         do { PumpFor(30); SendMessageA(GetDlgItem(browser, ID_ADDRESS), WM_GETTEXT, MAX_PATH, (LPARAM)address); }

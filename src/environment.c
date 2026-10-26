@@ -10,6 +10,7 @@
 #include "task_menu.h"
 #include "task_switch.h"
 #include "shell_sounds.h"
+#include "welcome.h"
 #define EX95_LOCALIZE_UI
 #include "localization.h"
 
@@ -151,6 +152,7 @@ static BOOL SettingsPath(void)
     }
     if (EnvJoin(env.quickDir, env.dataDir, "Quick Launch")) CreateDirectoryA(env.quickDir, NULL);
     env.options.language = UiReadLanguage(env.ini);
+    env.options.showWelcome=!!GetPrivateProfileIntA("Interface","ShowWelcome",TRUE,env.ini);
     env.options.edge = Clamp(Option("Edge", ABE_BOTTOM), 0, 3);
     env.options.rows = Clamp(Option("Rows", 1), 1, 3);
     env.options.taskWidth = Clamp(Option("TaskWidth", 160), 80, 300);
@@ -1256,6 +1258,7 @@ HWND EnvironmentCreate(const EnvironmentHost *callbacks)
     hotkeyLeftWin = RegisterHotKey(env.bar, 3, MOD_WIN, VK_LWIN);
     hotkeyRightWin = RegisterHotKey(env.bar, 4, MOD_WIN, VK_RWIN);
     if (env.primary) SendNotifyMessageA(HWND_BROADCAST, RegisterWindowMessageA("TaskbarCreated"), 0, 0);
+    if(env.options.showWelcome) WelcomeShow(env.host.instance,env.bar);
     return env.bar;
 }
 BOOL EnvironmentTranslate(MSG *message)
@@ -1278,6 +1281,7 @@ void EnvironmentShutdown(void)
     APPBARDATA data; int i;
     if (env.closing) return;
     env.closing = TRUE;
+    WelcomeClose();
     TaskSwitchDestroy();
     RenderTraceShutdown("exit.begin",S_OK,0);
     folderHead = folderCount = 0;

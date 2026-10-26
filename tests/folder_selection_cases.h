@@ -36,6 +36,7 @@ static void FolderSelectionTests(void)
     IDataObject data = {&selectionMethods}; LPITEMIDLIST computer, selected; LPCITEMIDLIST scan;
     UINT bytes = 2; DWORD header[] = {1,12,14}; char path[MAX_PATH];
     Check(SUCCEEDED(OleInitialize(NULL)),"initialize shell selection test");
+    Check(!FolderObjectIsFolder(NULL,SFGAO_FOLDER),"folder classification rejects a missing absolute PIDL");
     Check(SUCCEEDED(SHGetSpecialFolderLocation(NULL,CSIDL_DRIVES,&computer)),"obtain the real My Computer namespace PIDL");
     for (scan = computer; scan->mkid.cb; scan = (LPCITEMIDLIST)((const BYTE *)scan+scan->mkid.cb)) bytes += scan->mkid.cb;
     Check(bytes+14 <= sizeof(selectionBytes),"namespace PIDL fits the bounded selection fixture");
@@ -55,6 +56,7 @@ static void FolderSelectionTests(void)
         UINT left = 2, right = 2; SFGAOF expected, actual;
         Check(SUCCEEDED(SHGetDesktopFolder(&desktop)) &&
             SUCCEEDED(SHGetSpecialFolderLocation(NULL, CSIDL_CONTROLS, &parent)), "obtain the actual Control Panel parent namespace");
+        Check(FolderObjectIsFolder(parent,0),"the canonical Control Panel remains navigable when Win95 omits SFGAO_FOLDER");
         Check(SUCCEEDED(IShellFolder_BindToObject(desktop, parent, NULL, &IID_IShellFolder, (void **)&controls)),
             "bind the Control Panel owner rather than querying its children through Desktop");
         Check(SUCCEEDED(IShellFolder_EnumObjects(controls, NULL, SHCONTF_NONFOLDERS, &items)) && items &&
@@ -73,6 +75,7 @@ static void FolderSelectionTests(void)
         actual = SFGAO_FOLDER | SFGAO_FILESYSTEM | SFGAO_CANRENAME | SFGAO_HASPROPSHEET;
         selected = FolderSelectionFirstPidl(&data, &actual);
         Check(selected != NULL && actual == expected, "selection capabilities come from the relative child's owning folder");
+        Check(!FolderObjectIsFolder(selected,actual),"a Control Panel applet is not mistaken for its canonical parent root");
         HeapFree(GetProcessHeap(), 0, selected);
         CoTaskMemFree(applet); CoTaskMemFree(parent); IEnumIDList_Release(items);
         IShellFolder_Release(controls); IShellFolder_Release(desktop);

@@ -602,11 +602,12 @@ static BOOL OpenSelection(NativeView *view)
     if (view->recycleBin || (!view->desktop && !view->navigate) || !view->view || ListView_GetSelectedCount(view->list) != 1) return FALSE;
     relative=SelectedObject(view,&attributes);
     if(!relative) return FALSE;
-    if(!(attributes&SFGAO_FOLDER) && (!view->desktop || !(attributes&SFGAO_FILESYSTEM))) {
-        CoTaskMemFree(relative); return FALSE;
-    }
     absolute=Combine(view->absolute,relative); CoTaskMemFree(relative);
     if(!absolute) return FALSE;
+    if(FolderObjectIsFolder(absolute,attributes)) attributes|=SFGAO_FOLDER;
+    if(!(attributes&SFGAO_FOLDER) && (!view->desktop || !(attributes&SFGAO_FILESYSTEM))) {
+        HeapFree(GetProcessHeap(),0,absolute); return FALSE;
+    }
     if(attributes&SFGAO_FOLDER) {
         if(view->navigate) handled=view->navigate(view->parent,absolute);
         else {
