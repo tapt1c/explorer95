@@ -1336,11 +1336,16 @@ explorer95.exe --settings="C:\EX95TEST\Explorer95.ini"
   Для встроенных namespace сопоставляйте PIDL со стабильной GUID-целью:
   Win95 может вернуть локализованное имя даже для SHGDN_FORPARSING. Enter в History
   открывает сохранённую цель; перестановка MRU не должна менять снимок под выделением.
-- Toolbar использует исходные BMP из `resources/toolbar98/`: 279/268 имеют
-  ячейки 16×16, 277/266 — 20×20. `browser_toolbar.c` копирует целые ячейки;
-  крупный toolbar 24px центрирует artwork 20px с полями 2px. Не режьте все
-  ресурсы по одному размеру и не растягивайте палитровые пиксели. Magenta
-  RGB(255,0,255) отображается как COLOR_BTNFACE через PaintColorKey/GDI.
+- Toolbar использует классические варианты BMP 262/264/273/275 из
+  `resources/toolbar98/`. `tools/build_toolbar_bitmaps.py` без внешних пакетов
+  читает BI_RGB/RLE4 и собирает две BI_RGB/4bpp полосы с явной палитрой 16 цветов.
+  GNU Make grouped targets отслеживают обе полосы в build/. Ячейки 16×16 и
+  20×20 копируются целиком; крупный toolbar 24px центрирует 20px с полями 2px.
+  Runtime CreateMappedBitmap — исходный API Common Controls Win95 — заменяет
+  только magenta на COLOR_BTNFACE. Не возвращайте screen-depth DDB через
+  XOR/маску: пользователь подтвердил пропавшую заливку на Win95 True Color 32 bit.
+  ToolbarPaletteTests сравнивает каждый mapped-пиксель с исходной палитрой
+  на системном и произвольном фоне, для обоих размеров.
   Полоса содержит восемь навигационных и шесть дополнительных изображений;
   ToolbarCompact получает тот же BROWSER_TOOLBAR_IMAGES для legacy-кнопок.
   Исходные BMP сохраняются неизменными и входят в зависимости обоих ресурсов.
@@ -1927,6 +1932,11 @@ Rename со скрытым расширением, системные Properties
   Не завершайте процесс сразу после успешного ExitWindowsEx: другие программы
   ещё могут отменить выход. Тест посылает сообщения только своему процессу,
   проверяет отмену, завершение и восстановление work area, без настоящего Log Off.
+  Первым создаётся скрытое обычное окно Explorer95.Session, без owner и
+  WS_EX_TOOLWINDOW. Оно получает те же session-сообщения через общий обработчик;
+  не полагайтесь только на служебные desktop/taskbar HWND. Проверяйте именно
+  этот HWND, его стиль и сохранность при отмене. Повторный настоящий Log Off
+  на Win95 обязателен для подтверждения результата.
 - В меню панели задач нет Exit Explorer95; команда Task Manager запускает
   полный путь Windows\\TASKMAN.EXE без записи в recent programs. Пользователь
   подтвердил работу штатного Task List в настоящей Windows 95.
@@ -2038,6 +2048,13 @@ BrowserNavigate размещает родное представление вм�
 browser->path пуст в native-режиме; сохранённая история берёт стабильный путь
 из PIDL. Подкаталоги Fonts не перенаправляются к корню. Проверки читают папку,
 проверяют native-хост, F5 и Back; установленные шрифты не изменяются.
+У Control Panel без IShellFolderView допускается ограниченный EnumObjects
+fallback: единственное совпадение native display name возвращает настоящий
+owned relative PIDL, затем GetAttributesOf определяет его возможности. Имя
+используется для поиска объекта, а не определения его типа. Дубликат или
+незавершённый обход запрещают активацию. IDataObject не запрашивается; этот
+путь недоступен в Dial-Up Networking. ObjectName также обслуживает прежний
+desktop drop resolver с проверкой границ STRRET_OFFSET.
 
 Апплеты из taskbar search и namespace-меню Start используют общий
 ShellNamespaceInvoke: привязка родительского IShellFolder, GetUIObjectOf,
