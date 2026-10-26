@@ -2056,6 +2056,17 @@ owned relative PIDL, затем GetAttributesOf определяет его во
 путь недоступен в Dial-Up Networking. ObjectName также обслуживает прежний
 desktop drop resolver с проверкой границ STRRET_OFFSET.
 
+Win95 Control Panel представляет Fonts как CANLINK-only апплет. Только внутри
+точного CSIDL_CONTROLS FolderControlPanelTarget запрашивает IExtractIconA:
+полный системный MAIN.CPL и отрицательный resource ID -400 переводятся в
+CSIDL_FONTS. GIL_NOTFILENAME, другая DLL/ресурс или ошибка оставляют native
+команду. Это проверенная в Win95 идентичность системного апплета, не сравнение
+подписи и не чтение private PIDL. CPL не загружается. MinGW C IExtractIconA
+также пропускает IUnknown; локальный vtable явно сохраняет три первых слота.
+SelectedAbsolute возвращает heap-копию canonical Fonts; native Enter,
+OnDefaultCommand и сведения о выделении используют один путь. DUN в этот
+resolver не попадает; IDataObject не запрашивается.
+
 Апплеты из taskbar search и namespace-меню Start используют общий
 ShellNamespaceInvoke: привязка родительского IShellFolder, GetUIObjectOf,
 CMF_DEFAULTONLY и числовой offset штатной команды. Не передавайте их

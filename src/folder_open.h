@@ -15,6 +15,9 @@ BOOL FolderObjectIsFolder(LPCITEMIDLIST absolute,SFGAOF attributes);
 /* Return the canonical Fonts PIDL for its exact path or namespace; CoTaskMemFree.
  * Fonts has a filesystem path but must retain its installed shell extension. */
 LPITEMIDLIST FolderFontsPidl(const char *path,LPCITEMIDLIST absolute);
+/* Resolve the original Win95 Fonts applet's public icon identity only inside
+ * the canonical Control Panel. Returns a COM-owned folder PIDL, or NULL. */
+LPITEMIDLIST FolderControlPanelTarget(LPCITEMIDLIST parent,IShellFolder *folder,LPCITEMIDLIST child);
 /* A validated absolute folder PIDL copied from Shell IDList Array; HeapFree. */
 LPITEMIDLIST FolderSelectionPidl(IDataObject *data);
 /* Optional in/out attribute mask, resolved by the selected item's parent. */

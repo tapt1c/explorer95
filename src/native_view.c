@@ -584,7 +584,10 @@ static LPITEMIDLIST SelectedAbsolute(NativeView *view,SFGAOF *attributes)
      * This fallback is deliberately unavailable in Dial-Up Networking. */
     if(!relative && view->controlPanel) relative=EnumeratedSelection(view,attributes);
     if(relative) {
-        absolute=Combine(view->absolute,relative); CoTaskMemFree(relative); return absolute;
+        LPITEMIDLIST target=view->controlPanel && !(*attributes&SFGAO_FOLDER) ?
+            FolderControlPanelTarget(view->absolute,view->folder,relative) : NULL;
+        absolute=target ? Combine(target,NULL) : Combine(view->absolute,relative);
+        CoTaskMemFree(target); CoTaskMemFree(relative); return absolute;
     }
     /* Some original Shell32 views lack IShellFolderView. Restore their CIDA
      * contract only on Desktop, My Computer and filesystem folders. Synthetic

@@ -149,6 +149,40 @@ LPITEMIDLIST FolderFontsPidl(const char *path,LPCITEMIDLIST absolute)
     if(same) return fonts;
     CoTaskMemFree(fonts); return NULL;
 }
+/* MinGW's C IExtractIconA declaration omits IUnknown. Preserve the original
+ * COM ABI, including all three inherited slots, on both x86 and test x64. */
+typedef struct FolderExtractIcon FolderExtractIcon;
+typedef struct FolderExtractIconVtbl {
+    HRESULT (STDMETHODCALLTYPE *QueryInterface)(FolderExtractIcon *,REFIID,void **);
+    ULONG (STDMETHODCALLTYPE *AddRef)(FolderExtractIcon *);
+    ULONG (STDMETHODCALLTYPE *Release)(FolderExtractIcon *);
+    HRESULT (STDMETHODCALLTYPE *GetIconLocation)(FolderExtractIcon *,UINT,LPSTR,UINT,int *,UINT *);
+    HRESULT (STDMETHODCALLTYPE *Extract)(FolderExtractIcon *,LPCSTR,UINT,HICON *,HICON *,UINT);
+} FolderExtractIconVtbl;
+struct FolderExtractIcon { const FolderExtractIconVtbl *lpVtbl; };
+LPITEMIDLIST FolderControlPanelTarget(LPCITEMIDLIST parent,IShellFolder *folder,LPCITEMIDLIST child)
+{
+    LPITEMIDLIST controls=NULL,fonts=NULL; FolderExtractIcon *icon=NULL;
+    char location[MAX_PATH],system[MAX_PATH]; DWORD length; int index=0; UINT flags=0; HRESULT result; BOOL same;
+    if(!parent || !folder || !child || FAILED(SHGetSpecialFolderLocation(NULL,CSIDL_CONTROLS,&controls))) return NULL;
+    same=SamePidl(parent,controls); CoTaskMemFree(controls);
+    if(!same) return NULL;
+    /* Win95 exposes Fonts as a CANLINK-only MAIN.CPL applet, not CSIDL_FONTS.
+     * Its public IExtractIcon location identifies the installed system
+     * resource (-400), without localized labels, private PIDLs or CPL code.
+     * Unknown/dynamic icon identities remain native commands. */
+    length=GetSystemDirectoryA(system,MAX_PATH);
+    if(!length || length+10>MAX_PATH) return NULL;
+    lstrcatA(system,"\\main.cpl");
+    result=IShellFolder_GetUIObjectOf(folder,NULL,1,&child,&IID_IExtractIconA,NULL,(void **)&icon);
+    if(FAILED(result) || !icon) { if(icon) icon->lpVtbl->Release(icon); return NULL; }
+    ZeroMemory(location,sizeof(location));
+    result=icon->lpVtbl->GetIconLocation(icon,0,location,MAX_PATH,&index,&flags);
+    icon->lpVtbl->Release(icon);
+    if(result!=S_OK || location[MAX_PATH-1] || (flags&GIL_NOTFILENAME) || index!=-400 || lstrcmpiA(location,system)) return NULL;
+    if(FAILED(SHGetSpecialFolderLocation(NULL,CSIDL_FONTS,&fonts))) return NULL;
+    return fonts;
+}
 static LPITEMIDLIST SelectionPidl(IDataObject *data, BOOL foldersOnly, SFGAOF *attributes)
 {
     FORMATETC format; STGMEDIUM medium; LPITEMIDLIST absolute = NULL;
