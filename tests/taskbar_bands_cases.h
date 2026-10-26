@@ -127,6 +127,6 @@ static void __attribute__((noinline)) TaskbarBandsRestartCheck(HWND bar)
     { HWND popup=SearchHistoryOpen(bar);
       Check(SendDlgItemMessageA(popup,4,LB_GETCOUNT,0,0)==2,"the saved query group reloads after a real shell restart");
       SearchEnter(bar); Check(SearchStatus("12")!=NULL,"a recalled calculation survives profile saving and a real restart");
-      SendMessageA(FindWindowExA(GetDlgItem(GetDlgItem(bar,ID_SEARCHBOX),2),NULL,"EDIT",NULL),WM_KEYDOWN,VK_ESCAPE,0); }
+      SendMessageA(GetDlgItem(GetDlgItem(bar,ID_SEARCHBOX),2),WM_KEYDOWN,VK_ESCAPE,0); }
     SendMessageA(bar,WM_COMMAND,ID_SEARCHBAR,0);
 }

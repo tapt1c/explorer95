@@ -8,7 +8,7 @@
 #undef GetTextExtentPoint32A
 
 typedef struct RecentProgram { char path[MAX_PATH], arguments[512]; } RecentProgram;
-typedef struct ProgramItem { char path[MAX_PATH], label[MAX_PATH]; BOOL folder, fresh, localize, classic, separator; HICON icon; LPITEMIDLIST pidl; } ProgramItem;
+typedef struct ProgramItem { char path[MAX_PATH], label[MAX_PATH]; BOOL folder, fresh, localize, classic, separator; int classicBelow; HICON icon; LPITEMIDLIST pidl; } ProgramItem;
 static RecentProgram recent[RECENT_LIMIT];
 static char recentShortcuts[RECENT_LIMIT][MAX_PATH];
 static ProgramItem programs[256];
@@ -22,7 +22,6 @@ static const int rightCommands[] = {ID_DOCUMENTS, ID_RECENTDOCS, ID_COMPUTER, ID
 static char user[128];
 static HFONT userFont;
 static HFONT classicUserFont;
-static HMENU classicMenu;
 #define CLASSIC_STRIP 28
 static BOOL popupActive, classicActive;
 static IContextMenu2 *applicationContext;
@@ -658,28 +657,28 @@ static BOOL OwnProgramItem(ULONG_PTR data)
     }
     return FALSE;
 }
-static void DrawClassicStrip(const DRAWITEMSTRUCT *draw)
+static SIZE ProgramItemSize(ProgramItem *entry,HDC dc)
 {
-    RECT strip=draw->rcItem,current,last; HGDIOBJ old; SIZE size;
+    SIZE size;
+    if(entry->separator) { size.cx=CLASSIC_STRIP+44; size.cy=6; return size; }
+    if(entry->localize) { UiMarkTranslated(entry->label); UiGetTextExtentPoint32A(dc,entry->label,lstrlenA(entry->label),&size); }
+    else UiGetNativeTextExtentA(dc,entry->label,lstrlenA(entry->label),&size);
+    size.cx+=44+(entry->classic ? CLASSIC_STRIP : 0);
+    size.cy=size.cy+4>22 ? size.cy+4 : 22; return size;
+}
+static void DrawClassicStrip(const DRAWITEMSTRUCT *draw,const ProgramItem *entry)
+{
+    RECT strip=draw->rcItem; HGDIOBJ old; SIZE size;
     strip.right=strip.left+CLASSIC_STRIP;
     FillRect(draw->hDC,&strip,(HBRUSH)(COLOR_ACTIVECAPTION+1));
-    if(!classicUserFont || !classicMenu ||
-        !GetMenuItemRect(NULL,classicMenu,GetMenuItemCount(classicMenu)-1,&last)) return;
-    /* Each native row clips the same rotated name to its piece of the strip,
-     * including separators. Submenus retain their ordinary menu geometry. */
-    int i,count=GetMenuItemCount(classicMenu);
-    for(i=0;i<count;++i) {
-        MENUITEMINFOA item; ZeroMemory(&item,sizeof(item));
-        item.cbSize=(UINT)((BYTE *)&item.hbmpItem-(BYTE *)&item); item.fMask=MIIM_DATA;
-        if(GetMenuItemInfoA(classicMenu,i,TRUE,&item) && item.dwItemData==draw->itemData &&
-            GetMenuItemRect(NULL,classicMenu,i,&current)) break;
-    }
-    if(i==count) return;
+    if(!classicUserFont) return;
+    /* Win95 need not expose popup item rectangles during owner drawing.
+     * Use the same measured row heights that USER receives instead. */
     old=SelectObject(draw->hDC,classicUserFont); SetBkMode(draw->hDC,TRANSPARENT);
     SetTextColor(draw->hDC,GetSysColor(COLOR_CAPTIONTEXT));
     GetTextExtentPoint32A(draw->hDC,user,lstrlenA(user),&size);
     ExtTextOutA(draw->hDC,strip.left+(CLASSIC_STRIP-size.cy)/2,
-        draw->rcItem.top+last.bottom-current.top-8,ETO_CLIPPED,&strip,user,lstrlenA(user),NULL);
+        draw->rcItem.bottom+entry->classicBelow-8,ETO_CLIPPED,&strip,user,lstrlenA(user),NULL);
     SelectObject(draw->hDC,old);
 }
 static BOOL DrawProgramItem(const DRAWITEMSTRUCT *draw)
@@ -690,7 +689,7 @@ static BOOL DrawProgramItem(const DRAWITEMSTRUCT *draw)
     BOOL selected = (draw->itemState & ODS_SELECTED) != 0;
     if (!entry) return FALSE;
     buffered.hDC = PaintBufferBegin(&itemBuffer, target, &draw->rcItem); draw = &buffered;
-    if(entry->classic) { DrawClassicStrip(draw); text.left+=CLASSIC_STRIP; }
+    if(entry->classic) { DrawClassicStrip(draw,entry); text.left+=CLASSIC_STRIP; }
     FillRect(draw->hDC, &text, (HBRUSH)(INT_PTR)((selected ? COLOR_HIGHLIGHT : entry->fresh ? COLOR_INFOBK : COLOR_MENU) + 1));
     if(entry->separator) {
         text.left+=3; text.right-=3; text.top+=(text.bottom-text.top)/2-1; text.bottom=text.top+2;
@@ -938,13 +937,10 @@ static LRESULT CALLBACK StartProc(HWND window, UINT message, WPARAM wp, LPARAM l
              * not implement IContextMenu2 or decline this notification. */
             if(!OwnProgramItem(item->itemData)) return FALSE;
             ProgramItem *entry = (ProgramItem *)item->itemData; SIZE size; HDC dc = GetDC(window); HFONT old;
-            if(entry->separator) { ReleaseDC(window,dc); item->itemWidth=CLASSIC_STRIP+44; item->itemHeight=6; return TRUE; }
             old = SelectObject(dc, env.host.font);
-            if(entry->localize) { UiMarkTranslated(entry->label); UiGetTextExtentPoint32A(dc,entry->label,lstrlenA(entry->label),&size); }
-            else UiGetNativeTextExtentA(dc,entry->label,lstrlenA(entry->label),&size);
+            size=ProgramItemSize(entry,dc);
             SelectObject(dc, old); ReleaseDC(window, dc);
-            item->itemWidth = size.cx + 44 + (entry->classic ? CLASSIC_STRIP : 0);
-            item->itemHeight = size.cy + 4 > 22 ? size.cy + 4 : 22; return TRUE;
+            item->itemWidth=size.cx; item->itemHeight=size.cy; return TRUE;
         }
         break;
     }
@@ -1153,13 +1149,17 @@ static void ClassicPopup(void)
         item->localize=TRUE;
         GetWindowTextA(GetDlgItem(env.start, ids[i]), item->label, MAX_PATH); item->icon = CopyIcon(StartIcon(ids[i])); AppendMenuA(menu, MF_OWNERDRAW, ids[i], (LPCSTR)item);
     }
-    for(i=0;i<used;++i) entries[i].classic=TRUE;
-    classicMenu=menu;
+    { HDC dc=GetDC(env.start); HGDIOBJ old=SelectObject(dc,env.host.font); int below=0;
+      for(i=used-1;i>=0;--i) {
+          entries[i].classic=TRUE; entries[i].classicBelow=below;
+          below+=ProgramItemSize(&entries[i],dc).cy;
+      }
+      SelectObject(dc,old); ReleaseDC(env.start,dc); }
     GetWindowRect(env.startButton, &button); classicActive = popupActive = TRUE;
     SendMessageA(env.startButton, BM_SETSTATE, TRUE, 0); SetForegroundWindow(env.bar);
     command = TrackApplications(menu,env.options.edge == ABE_BOTTOM ? TPM_BOTTOMALIGN : TPM_TOPALIGN,button.left,
         env.options.edge == ABE_BOTTOM ? button.top : button.bottom);
-    classicActive = popupActive = FALSE; classicMenu=NULL; SendMessageA(env.startButton, BM_SETSTATE, FALSE, 0); DestroyMenu(menu);
+    classicActive = popupActive = FALSE; SendMessageA(env.startButton, BM_SETSTATE, FALSE, 0); DestroyMenu(menu);
     for (i = 0; i < used; ++i) if (entries[i].icon) DestroyIcon(entries[i].icon);
     if (command >= 2000) ExecuteProgram(command);
     else if (command == ID_RECENTDOCS) { char recentPath[MAX_PATH]; if (env.host.specialPath(CSIDL_RECENT, recentPath)) env.host.openFolder(recentPath); }

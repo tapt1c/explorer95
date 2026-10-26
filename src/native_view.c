@@ -514,11 +514,26 @@ static void PaintDesktopFrame(NativeView *view, HWND window)
     ResumeDesktop(view);
 }
 
-/* Route filesystem and virtual folders through our browser. Shell IDList Array
- * carries My Computer/Recycle Bin without relying on a filesystem path. */
+/* Read owned relative PIDLs from the original Win95 folder-view interface.
+ * Clipboard/drag data is requested only for actual transfer operations. */
+static LPITEMIDLIST SelectedObject(NativeView *view,SFGAOF *attributes)
+{
+    LegacyFolderView *folderView=NULL; LPITEMIDLIST pidl=NULL; HRESULT result;
+    int index=ListView_GetNextItem(view->list,-1,LVNI_SELECTED);
+    if(index<0 || FAILED(IShellView_QueryInterface(view->view,&legacyFolderViewId,(void **)&folderView))) return NULL;
+    /* Selection metadata is not a clipboard operation. Win95 namespace views
+     * can contain action items (Dial-Up Networking's New Connection) which
+     * have a relative PIDL but are not transferable files. */
+    result=folderView->lpVtbl->GetObject(folderView,&pidl,index);
+    folderView->lpVtbl->Release(folderView);
+    if(FAILED(result) || !pidl) { if(pidl) CoTaskMemFree(pidl); return NULL; }
+    if(FAILED(IShellFolder_GetAttributesOf(view->folder,1,(LPCITEMIDLIST *)&pidl,attributes))) *attributes=0;
+    RenderTraceShell("view.selection",S_OK,index,*attributes);
+    return pidl;
+}
 BOOL NativeViewSelection(NativeView *view, NativeSelection *selection)
 {
-    IDataObject *data; LPITEMIDLIST pidl; SHFILEINFOA info;
+    LPITEMIDLIST relative,absolute; SHFILEINFOA info; int index;
     ZeroMemory(selection, sizeof(*selection));
     if (!view || !view->view) return FALSE;
     selection->count = ListView_GetSelectedCount(view->list);
@@ -529,15 +544,23 @@ BOOL NativeViewSelection(NativeView *view, NativeSelection *selection)
         selection->capabilities = SFGAO_CANDELETE | SFGAO_HASPROPSHEET;
         return TRUE;
     }
-    if (!selection->count || FAILED(IShellView_GetItemObject(view->view, SVGIO_SELECTION, &IID_IDataObject, (void **)&data))) return FALSE;
+    if (!selection->count) return FALSE;
+    index=ListView_GetNextItem(view->list,-1,LVNI_SELECTED);
+    ListView_GetItemText(view->list,index,0,selection->name,MAX_PATH);
     selection->capabilities = SFGAO_FOLDER | SFGAO_FILESYSTEM | SFGAO_CANMOVE | SFGAO_CANCOPY | SFGAO_CANDELETE | SFGAO_CANRENAME | SFGAO_HASPROPSHEET;
-    pidl = FolderSelectionFirstPidl(data, &selection->capabilities); IDataObject_Release(data);
-    if (!pidl) return FALSE;
-    SHGetPathFromIDListA(pidl, selection->path);
+    relative=SelectedObject(view,&selection->capabilities);
+    if(!relative) { selection->capabilities=0; return TRUE; }
+    /* A shell action is not a filesystem object or navigable folder. Keep
+     * its native label without probing it as an absolute file-information ID. */
+    if(!(selection->capabilities&(SFGAO_FOLDER|SFGAO_FILESYSTEM))) { CoTaskMemFree(relative); return TRUE; }
+    absolute=Combine(view->absolute,relative); CoTaskMemFree(relative);
+    if(!absolute) return TRUE;
+    SHGetPathFromIDListA(absolute, selection->path);
     ZeroMemory(&info, sizeof(info));
-    SHGetFileInfoA((LPCSTR)pidl, 0, &info, sizeof(info), SHGFI_PIDL | SHGFI_DISPLAYNAME | SHGFI_TYPENAME);
-    lstrcpynA(selection->name, info.szDisplayName, MAX_PATH); lstrcpynA(selection->type, info.szTypeName, sizeof(selection->type));
-    HeapFree(GetProcessHeap(), 0, pidl); return TRUE;
+    SHGetFileInfoA((LPCSTR)absolute, 0, &info, sizeof(info), SHGFI_PIDL | SHGFI_DISPLAYNAME | SHGFI_TYPENAME);
+    if(info.szDisplayName[0]) lstrcpynA(selection->name, info.szDisplayName, MAX_PATH);
+    lstrcpynA(selection->type, info.szTypeName, sizeof(selection->type));
+    HeapFree(GetProcessHeap(), 0, absolute); return TRUE;
 }
 IContextMenu *NativeViewSelectionContext(NativeView *view)
 {
@@ -572,41 +595,27 @@ char *NativeViewSelectedPaths(NativeView *view)
 }
 static BOOL OpenSelection(NativeView *view)
 {
-    IDataObject *data;
-    FORMATETC format;
-    STGMEDIUM medium;
-    char path[MAX_PATH];
-    BOOL handled = FALSE;
+    LPITEMIDLIST relative,absolute; SFGAOF attributes=SFGAO_FOLDER|SFGAO_FILESYSTEM;
+    char path[MAX_PATH]; BOOL handled=FALSE;
     /* Recycled folders are deleted objects, not navigable locations. Leave
      * their default action (usually Properties) to the installed shell. */
     if (view->recycleBin || (!view->desktop && !view->navigate) || !view->view || ListView_GetSelectedCount(view->list) != 1) return FALSE;
-    if (FAILED(IShellView_GetItemObject(view->view, SVGIO_SELECTION, &IID_IDataObject, (void **)&data))) return FALSE;
-    {
-        LPITEMIDLIST absolute = FolderSelectionPidl(data);
-        if (absolute) {
-            if (view->navigate) handled = view->navigate(view->parent, absolute);
-            else {
-                HWND opened = SHGetPathFromIDListA(absolute,path) ? host.openFolder(path) : OpenNativeFolder(absolute);
-                if (!opened) MessageBoxA(view->parent,"This folder could not be opened.","Explorer95",MB_OK | MB_ICONEXCLAMATION);
-                handled = TRUE;
-            }
-            HeapFree(GetProcessHeap(),0,absolute); IDataObject_Release(data); return handled;
-        }
+    relative=SelectedObject(view,&attributes);
+    if(!relative) return FALSE;
+    if(!(attributes&SFGAO_FOLDER) && (!view->desktop || !(attributes&SFGAO_FILESYSTEM))) {
+        CoTaskMemFree(relative); return FALSE;
     }
-    ZeroMemory(&format, sizeof(format));
-    format.cfFormat = CF_HDROP; format.dwAspect = DVASPECT_CONTENT;
-    format.lindex = -1; format.tymed = TYMED_HGLOBAL;
-    if (view->desktop && SUCCEEDED(IDataObject_GetData(data, &format, &medium))) {
-        if (DragQueryFileA((HDROP)medium.hGlobal, 0, path, MAX_PATH)) {
-            DWORD attr = GetFileAttributesA(path);
-            if (attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY)) host.openFolder(path);
-            else EnvironmentLaunch(view->parent, path, NULL, NULL);
-            handled = TRUE;
+    absolute=Combine(view->absolute,relative); CoTaskMemFree(relative);
+    if(!absolute) return FALSE;
+    if(attributes&SFGAO_FOLDER) {
+        if(view->navigate) handled=view->navigate(view->parent,absolute);
+        else {
+            HWND opened=SHGetPathFromIDListA(absolute,path) ? host.openFolder(path) : OpenNativeFolder(absolute);
+            if(!opened) MessageBoxA(view->parent,"This folder could not be opened.","Explorer95",MB_OK|MB_ICONEXCLAMATION);
+            handled=TRUE;
         }
-        ReleaseStgMedium(&medium);
-    }
-    IDataObject_Release(data);
-    return handled;
+    } else if(SHGetPathFromIDListA(absolute,path)) { EnvironmentLaunch(view->parent,path,NULL,NULL); handled=TRUE; }
+    HeapFree(GetProcessHeap(),0,absolute); return handled;
 }
 
 BOOL NativeViewMenuMessage(NativeView *view, UINT message, WPARAM wp, LPARAM lp)

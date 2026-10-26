@@ -353,6 +353,9 @@ Wine хранит Unix-корзину через XDG_DATA_HOME вне prefix п�
   и disabled-разделители рисуют общую полосу 28px цветами ACTIVECAPTION/CAPTIONTEXT.
   Одно native имя аккаунта повёрнуто на 90° и клиппируется каждой строкой;
   кэшируемый TrueType HFONT освобождается в StartDestroy. Подменю полосу не получают.
+  Положение имени берётся из суммы высот оставшихся строк, измеренных общим
+  ProgramItemSize. GetMenuItemRect во время owner-draw на Win95 может не дать
+  геометрию popup; отсутствие координат не должно убирать имя пользователя.
   Перед чтением owner-draw itemData проверяйте принадлежность элементу собственных
   массивов ProgramItem. У popup-строк itemID может быть HMENU любого диапазона;
   числовой порог ID не отличает наши подменю от непрозрачных данных Shell32.
@@ -1091,6 +1094,13 @@ explorer95.exe --settings="C:\EX95TEST\Explorer95.ini"
   desktop/taskbar owner и native view возвращают заимствованный IShellBrowser
   своего активного NativeView. Не добавляйте AddRef на возврате сообщения.
   Без этого native Arrange/View/Refresh могут молча ничего не делать.
+  Сведения о выделении и открытие папки получают owned relative PIDL через
+  IShellFolderView::GetObject и проверяют атрибуты у исходного IShellFolder.
+  Не запрашивайте IDataObject для простого выбора: служебные пункты namespace,
+  например New Connection, не являются переносимыми файлами. Не-folder команды
+  остаются у native view; clipboard/drag используют IDataObject только по действию.
+  Полный порядок IUnknown в LegacyFolderViewVtbl обязателен. Тесты блокируют
+  GetItemObject и проверяют сведения, Enter и ICommDlgBrowser::OnDefaultCommand.
   Верхнее View/Arrange вызывает NativeViewSort: исходный Win95 IShellFolderView
   Rearrange, затем при необходимости обратный порядок с папками в начале.
   MinGW C declaration пропускает IUnknown slots; LegacyFolderViewVtbl сохраняет
@@ -1468,7 +1478,9 @@ Rename со скрытым расширением, системные Properties
   общий draft/preview/Apply/Cancel и Toolbars menu используют один параметр.
   Popup называется `Explorer95.TaskbarSearchResults`: имя `Explorer95.SearchResults`
   уже принадлежит поиску Проводника. Не допускайте конфликта регистрации классов.
-  ComboBox остаётся полем ввода; приложения и запросы сохраняются отдельно
+  Строка — native EDIT с WS_EX_CLIENTEDGE, ES_AUTOHSCROLL и EM_LIMITTEXT, без ComboBox
+  и кнопки раскрытия. Высота учитывает шрифт, значок 16px и системную рамку;
+  изменения текста приходят через EN_CHANGE. Приложения и запросы сохраняются отдельно
   в TaskbarSearchHistory и показываются в собственном popup. Не заменяйте
   native RunFileDlg новым поиском: существующая команда Run остаётся в Shell32.
 - «Найти файлы…» передаёт точный запрос через EnvironmentHost.findFiles в
@@ -1489,9 +1501,9 @@ Rename со скрытым расширением, системные Properties
   status имеет SS_OWNERDRAW. При обновлении сначала согласуйте геометрию/данные
   под WM_SETREDRAW, затем перерисуйте всю иерархию. Скрывайте неактуальные list/copy
   при переходе между программами, вычислением и ошибкой.
-- Щелчок по Edit/значку, стрелка native ComboBox, F4 и Alt+Down открывают историю в том же popup;
+- Щелчок по Edit/значку, F4 и Alt+Down открывают историю в том же popup;
   щелчок сохраняет native caret/selection и не заменяет уже открытые результаты.
-  Не показывайте пустой native drop list. До восьми приложений и восьми запросов
+  До восьми приложений и восьми запросов
   хранятся отдельно в TaskbarSearchHistory через EnvCommitProfile. Префикс `!`
   сохраняет буквальные кавычки/пробелы INI; чтение проверяет длину и формат.
   Названия программ и запросы — native literal, заголовки/очистка — UiText.

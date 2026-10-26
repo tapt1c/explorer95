@@ -470,6 +470,66 @@ static void NativeDesktopPasteTests(HWND parent)
 }
 
 #include "native_sort_cases.h"
+static int nativeSelectionDataRequests,nativeSelectionNavigations;
+static char nativeSelectionTarget[MAX_PATH];
+static HRESULT STDMETHODCALLTYPE NativeSelectionNoData(IShellView *self,UINT scope,REFIID iid,void **object)
+{
+    (void)self; (void)scope; (void)iid; *object=NULL; ++nativeSelectionDataRequests; return E_NOINTERFACE;
+}
+static BOOL NativeSelectionNavigate(HWND parent,LPCITEMIDLIST pidl)
+{
+    char path[MAX_PATH]; (void)parent;
+    Check(SHGetPathFromIDListA(pidl,path) && !lstrcmpiA(path,nativeSelectionTarget),
+        "folder activation passes the selected relative object's absolute PIDL to its own browser");
+    ++nativeSelectionNavigations; return TRUE;
+}
+static void NativeSelectionTests(HWND parent)
+{
+    char temp[MAX_PATH],root[MAX_PATH],file[MAX_PATH],label[MAX_PATH]; WCHAR wide[MAX_PATH];
+    IShellFolder *desktop; LPITEMIDLIST pidl=NULL; IShellView *shell;
+    IShellViewVtbl *original,table; ICommDlgBrowser *dialog;
+    NativeView *view; NativeSelection selection; HWND list; RECT rect={0,0,320,200}; int i,fileIndex=-1,folderIndex=-1;
+    HANDLE created;
+    GetTempPathA(sizeof(temp),temp); wsprintfA(root,"%sex95-selection-%lu-%lu",temp,GetCurrentProcessId(),GetTickCount());
+    Check(CreateDirectoryA(root,NULL),"create only the native selection fixture directory");
+    wsprintfA(nativeSelectionTarget,"%s\\folder",root); wsprintfA(file,"%s\\item.txt",root);
+    Check(CreateDirectoryA(nativeSelectionTarget,NULL),"create only the native folder activation target");
+    created=CreateFileA(file,GENERIC_WRITE,0,NULL,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL);
+    Check(created!=INVALID_HANDLE_VALUE,"create only the native selected-file fixture"); CloseHandle(created);
+    MultiByteToWideChar(CP_ACP,0,root,-1,wide,MAX_PATH);
+    Check(SUCCEEDED(SHGetDesktopFolder(&desktop)),"obtain Shell32's desktop for a private selection view");
+    Check(SUCCEEDED(IShellFolder_ParseDisplayName(desktop,parent,NULL,wide,NULL,&pidl,NULL)),"parse only the private selection directory");
+    view=NativeViewCreateEx(parent,pidl,FALSE,0,&rect); CoTaskMemFree(pidl); IShellFolder_Release(desktop);
+    Check(view!=NULL,"host a real native selection view"); list=NativeViewList(view);
+    for(i=0;i<ListView_GetItemCount(list);++i) {
+        ListView_GetItemText(list,i,0,label,sizeof(label));
+        if(!lstrcmpiA(label,"item.txt") || !lstrcmpiA(label,"item")) fileIndex=i;
+        if(!lstrcmpiA(label,"folder")) folderIndex=i;
+    }
+    Check(fileIndex>=0 && folderIndex>=0,"the private view contains both real selection targets");
+    Check(SUCCEEDED(IShellBrowser_QueryActiveShellView(NativeViewShellBrowser(view),&shell)),"obtain the hosted view through its real shell-browser contract");
+    original=shell->lpVtbl; table=*original; table.GetItemObject=NativeSelectionNoData; shell->lpVtbl=&table;
+    nativeSelectionDataRequests=nativeSelectionNavigations=0;
+    NativeViewSetNavigator(view,NativeSelectionNavigate);
+    Check(SUCCEEDED(IShellBrowser_QueryInterface(NativeViewShellBrowser(view),&IID_ICommDlgBrowser,(void **)&dialog)),
+        "obtain the native default-command callback");
+    ListView_SetItemState(list,fileIndex,LVIS_SELECTED|LVIS_FOCUSED,LVIS_SELECTED|LVIS_FOCUSED);
+    Check(NativeViewSelection(view,&selection) && selection.count==1 && !lstrcmpiA(selection.path,file) &&
+        (selection.capabilities&SFGAO_FILESYSTEM) && !nativeSelectionDataRequests,
+        "reading native selection details never asks a namespace action provider for an IDataObject");
+    Check(ICommDlgBrowser_OnDefaultCommand(dialog,shell)==S_FALSE && !nativeSelectionNavigations && !nativeSelectionDataRequests,
+        "non-folder default actions remain with the native view without clipboard or navigation probes");
+    ListView_SetItemState(list,-1,0,LVIS_SELECTED|LVIS_FOCUSED);
+    ListView_SetItemState(list,folderIndex,LVIS_SELECTED|LVIS_FOCUSED,LVIS_SELECTED|LVIS_FOCUSED);
+    SendMessageA(list,WM_KEYDOWN,VK_RETURN,0);
+    Check(nativeSelectionNavigations==1 && !nativeSelectionDataRequests,
+        "native folder Enter routes once without obtaining a clipboard object");
+    Check(ICommDlgBrowser_OnDefaultCommand(dialog,shell)==S_OK && nativeSelectionNavigations==2 && !nativeSelectionDataRequests,
+        "the shell default-command callback shares the same PIDL-only folder routing");
+    ICommDlgBrowser_Release(dialog); NativeViewSetNavigator(view,NULL);
+    shell->lpVtbl=original; IShellView_Release(shell); NativeViewDestroy(view);
+    Check(DeleteFileA(file) && RemoveDirectoryA(nativeSelectionTarget) && RemoveDirectoryA(root),"remove only the native selection fixtures");
+}
 static void NativeViewMessageTests(void)
 {
     HRESULT ole = OleInitialize(NULL); HWND parent, list; NativeView *view; RECT rect = {0, 0, 320, 200};
@@ -479,6 +539,7 @@ static void NativeViewMessageTests(void)
         0, 0, 320, 200, NULL, NULL, GetModuleHandleA(NULL), NULL);
     Check(parent != NULL, "create hidden parent for native message probe");
     NativeSortTests(parent);
+    NativeSelectionTests(parent);
     NativeShellCommandTests(parent);
     ShellEditContractTests(parent);
     NativeDesktopPasteTests(parent);

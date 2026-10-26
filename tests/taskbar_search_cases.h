@@ -3,8 +3,8 @@ static HWND PaneControl(HWND parent,int id);
 static void WaitSearch(HWND browser);
 static void SearchInput(HWND bar,const char *text)
 {
-    HWND host=GetDlgItem(bar,ID_SEARCHBOX),combo=GetDlgItem(host,2);
-    SetWindowTextA(combo,text); SendMessageA(host,WM_COMMAND,MAKEWPARAM(2,CBN_EDITCHANGE),(LPARAM)combo);
+    HWND edit=GetDlgItem(GetDlgItem(bar,ID_SEARCHBOX),2);
+    SetWindowTextA(edit,text);
 }
 static HWND SearchStatus(const char *expected)
 {
@@ -18,7 +18,7 @@ static HWND SearchStatus(const char *expected)
 }
 static BOOL SearchFieldPainted(HWND bar)
 {
-    HWND combo=GetDlgItem(GetDlgItem(bar,ID_SEARCHBOX),2),edit=FindWindowExA(combo,NULL,"EDIT",NULL);
+    HWND combo=GetDlgItem(GetDlgItem(bar,ID_SEARCHBOX),2),edit=combo;
     RECT rect; HDC dc; int x,y,samples=0; BOOL painted=IsWindowVisible(edit);
     GetClientRect(edit,&rect); dc=GetDC(edit);
     /* The field is empty for band-drag checks. Ignore its icon, border and caret. */
@@ -75,21 +75,26 @@ static void SearchCloseChild(HWND window)
 }
 static HWND SearchHistoryOpen(HWND bar)
 {
-    HWND combo=GetDlgItem(GetDlgItem(bar,ID_SEARCHBOX),2),popup,edit=FindWindowExA(combo,NULL,"EDIT",NULL); RECT field;
+    HWND edit=GetDlgItem(GetDlgItem(bar,ID_SEARCHBOX),2),popup; RECT field; char kind[20];
     SendMessageA(edit,WM_KEYDOWN,VK_ESCAPE,0); SearchFocus(bar);
-    Check(SearchStatus("Search history")!=NULL,"clicking the search text field opens history without using the arrow");
-    GetWindowRect(combo,&field); PanelClick(combo,field.right-field.left-8);
-    Check(!IsWindowVisible(FindWindowA("Explorer95.TaskbarSearchResults",NULL)),"the arrow can still dismiss the history opened by a field click");
-    PanelClick(combo,field.right-field.left-8);
+    Check(SearchStatus("Search history")!=NULL,"clicking the search text field opens history");
+    GetClassNameA(edit,kind,sizeof(kind));
+    Check(!lstrcmpiA(kind,"EDIT") && !FindWindowExA(GetParent(edit),NULL,"COMBOBOX",NULL),
+        "search uses a native edit without a drop-down arrow or hidden combo list");
+    SendMessageA(edit,WM_KEYDOWN,VK_ESCAPE,0); GetWindowRect(edit,&field); PanelClick(edit,field.right-field.left-8);
+    Check(SearchStatus("Search history")!=NULL,"the former arrow area is editable and opens history like the rest of the field");
+    SendMessageA(edit,WM_KEYDOWN,VK_F4,0);
+    Check(!IsWindowVisible(FindWindowA("Explorer95.TaskbarSearchResults",NULL)),"F4 dismisses click-open history");
+    SendMessageA(edit,WM_KEYDOWN,VK_F4,0);
     popup=SearchStatus("Search history");
-    Check(popup && !SendMessageA(combo,CB_GETDROPPEDSTATE,0,0),"the search arrow opens a compact history popup instead of an empty native drop list");
+    Check(popup!=NULL,"F4 still opens the compact history popup without a combo box");
     return popup;
 }
 static void __attribute__((noinline)) SearchHistoryTests(HWND bar,const char *settings)
 {
     HWND popup,list,launched; char expected[514],text[512],recent[MAX_PATH],after[MAX_PATH]; int i,n; RECT frame,area;
     popup=SearchHistoryOpen(bar);
-    { HWND edit=FindWindowExA(GetDlgItem(GetDlgItem(bar,ID_SEARCHBOX),2),NULL,"EDIT",NULL);
+    { HWND edit=GetDlgItem(GetDlgItem(bar,ID_SEARCHBOX),2);
       SendMessageA(edit,WM_KEYDOWN,VK_ESCAPE,0); PanelClick(GetDlgItem(edit,1),3);
       Check(SearchStatus("Search history")==popup,"clicking the icon inside the search field also opens history");
       char before[512],typed[512]; SendMessageA(edit,WM_GETTEXT,sizeof(before),(LPARAM)before);
@@ -128,7 +133,7 @@ static void __attribute__((noinline)) SearchHistoryTests(HWND bar,const char *se
     Check(!(GetWindowLongA(GetDlgItem(popup,4),GWL_STYLE)&WS_VSCROLL),"a short search history has no vertical scrollbar");
     SaveScreen("build/taskbar-search-history-empty.bmp");
     SearchInput(bar,"5+7"); Check(SearchStatus("12")!=NULL,"a calculation remains available after clearing history"); SearchEnter(bar);
-    SendMessageA(FindWindowExA(GetDlgItem(GetDlgItem(bar,ID_SEARCHBOX),2),NULL,"EDIT",NULL),WM_KEYDOWN,VK_ESCAPE,0);
+    SendMessageA(GetDlgItem(GetDlgItem(bar,ID_SEARCHBOX),2),WM_KEYDOWN,VK_ESCAPE,0);
 }
 static void SearchFilesTest(HWND bar,const char *directory)
 {
@@ -197,8 +202,8 @@ static void __attribute__((noinline)) TaskbarSearchTests(HWND bar,const char *di
     BOOL wasTiles=GetPrivateProfileIntA("Taskbar","TaskTiles",FALSE,settings);
     if(!wasEnabled) SendMessageA(bar,WM_COMMAND,ID_SEARCHBAR,0);
     host=GetDlgItem(bar,ID_SEARCHBOX);
-    Check(host && IsWindowVisible(host),"the optional native combo search box appears beside Start");
-    Check(!GetDlgItem(host,1) && IsWindowVisible(GetDlgItem(FindWindowExA(GetDlgItem(host,2),NULL,"EDIT",NULL),1)),
+    Check(host && IsWindowVisible(host),"the optional native search edit appears beside Start");
+    Check(!GetDlgItem(host,1) && IsWindowVisible(GetDlgItem(GetDlgItem(host,2),1)),
         "search uses an icon inside its native edit and has no separate text label");
     SearchInput(bar,"6/2"); popup=SearchStatus("3");
     Check(popup!=NULL,"typing an expression shows its result in the compact search popup");
@@ -249,8 +254,8 @@ static void __attribute__((noinline)) TaskbarSearchTests(HWND bar,const char *di
     Check(launched && SendMessageA(launched,WM_APP+35,0,0),"the same edit executes a quoted command path and arguments without requiring a search match");
     SearchCloseChild(launched);
     SearchFocus(bar); wsprintfA(query,"Explorer95 query fixture %lu",GetCurrentProcessId()); SearchInput(bar,query);
-    SendMessageA(GetWindow(GetDlgItem(host,2),GW_CHILD),WM_KEYDOWN,VK_RETURN,0);
-    SendMessageA(GetWindow(GetDlgItem(host,2),GW_CHILD),WM_KEYDOWN,VK_RETURN,(1UL<<30));
+    SendMessageA(GetDlgItem(host,2),WM_KEYDOWN,VK_RETURN,0);
+    SendMessageA(GetDlgItem(host,2),WM_KEYDOWN,VK_RETURN,(1UL<<30));
     launched=WaitFor("Explorer95.SmokeChild","Explorer95 smoke child");
     Check(launched && SendMessageA(launched,WM_APP+35,0,0),"Enter before the search debounce waits for the matching shortcut instead of executing its label as a command");
     SearchCloseChild(launched);
