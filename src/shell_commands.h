@@ -7,6 +7,10 @@ HRESULT ShellBackgroundContext(IShellView *view, IShellFolder *folder, HWND owne
 HRESULT ShellCommandMenu(IContextMenu *context, HMENU menu);
 UINT ShellCommandFind(IContextMenu *context, HMENU menu, const char *verb, BOOL enabledOnly);
 HRESULT ShellCommandInvoke(IContextMenu *context, HMENU menu, HWND owner, const char *verb);
+HRESULT ShellCommandDefault(IContextMenu *context, HWND owner);
+/* Invoke through the item's owner; ShellExecute may apply folder associations
+ * to Win95 Control Panel applets, which are namespace actions rather than paths. */
+HRESULT ShellNamespaceInvoke(HWND owner, LPCITEMIDLIST absolute);
 void ShellCommandShortcuts(IContextMenu *context, HMENU menu);
 const char *ShellDesktopEditKey(UINT key, BOOL control, BOOL shift, BOOL alt);
 BOOL ShellCommandIsEdit(const char *verb);

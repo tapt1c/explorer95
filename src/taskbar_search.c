@@ -6,6 +6,8 @@
 #include "localization.h"
 #include "paint.h"
 #include "program_history.h"
+#include "shell_commands.h"
+#include "folder_open.h"
 
 #define RESULT_LIMIT 8
 #define WALK_LIMIT 16
@@ -199,7 +201,8 @@ static void ControlResult(LPCITEMIDLIST child)
         SearchResult *result=&search.results[search.count++]; ULONG attributes=SFGAO_FOLDER;
         result->pidl=absolute; lstrcpynA(result->label,info.szDisplayName,MAX_PATH);
         if(SHGetFileInfoA((LPCSTR)absolute,0,&info,sizeof(info),SHGFI_PIDL|SHGFI_ICON|SHGFI_SMALLICON)) result->icon=info.hIcon;
-        result->folder=SUCCEEDED(IShellFolder_GetAttributesOf(search.controls,1,&child,&attributes)) && (attributes&SFGAO_FOLDER);
+        if(FAILED(IShellFolder_GetAttributesOf(search.controls,1,&child,&attributes))) attributes=0;
+        result->folder=FolderObjectIsFolder(absolute,attributes);
     } else CoTaskMemFree(absolute);
 }
 static void SearchBatch(void)
@@ -402,13 +405,11 @@ static void __attribute__((noinline)) Submit(void)
             int command=result->command; TaskbarSearchHide(); StartHide(); RememberQuery(query); EnvCommand(command); return;
         }
         if(result->pidl) {
-            LPITEMIDLIST pidl=result->pidl; BOOL folder=result->folder; SHELLEXECUTEINFOA execute;
+            LPITEMIDLIST pidl=result->pidl; BOOL folder=result->folder;
             result->pidl=NULL; TaskbarSearchHide(); StartHide();
             RememberQuery(query);
-            ZeroMemory(&execute,sizeof(execute)); execute.cbSize=sizeof(execute); execute.fMask=SEE_MASK_IDLIST;
-            execute.hwnd=env.bar; execute.lpIDList=pidl; execute.nShow=SW_SHOWNORMAL;
             if(folder) OpenNativeFolder(pidl);
-            else if(!ShellExecuteExA(&execute)) EnvError(env.bar,"Cannot open this Control Panel item.",GetLastError());
+            else if(FAILED(ShellNamespaceInvoke(env.bar,pidl))) EnvError(env.bar,"Cannot open this Control Panel item.",ERROR_GEN_FAILURE);
             CoTaskMemFree(pidl); return;
         }
         lstrcpyA(file,result->path); lstrcpyA(arguments,result->arguments); lstrcpyA(label,result->label);
@@ -564,8 +565,9 @@ static LRESULT CALLBACK SearchProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
         if(window==search.popup && LOWORD(wp)==WA_INACTIVE && (HWND)lp!=env.bar) DismissSearch();
         /* Some window managers activate a newly shown owned popup despite
          * SW_SHOWNOACTIVATE. Keep typing in its owner's edit; clicking a list
-         * or button still gives that child its normal focus afterwards. */
-        if(window==search.popup && LOWORD(wp)!=WA_INACTIVE && GetFocus()==search.edit) {
+         * or button sends WA_CLICKACTIVE and must retain native activation;
+         * redirecting it here can swallow the press on original Win95. */
+        if(window==search.popup && LOWORD(wp)==WA_ACTIVE && GetFocus()==search.edit) {
             SetActiveWindow(env.bar); SetFocus(search.edit); return 0;
         }
         break;

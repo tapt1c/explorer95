@@ -109,19 +109,25 @@ static UINT PidlLength(const BYTE *data, SIZE_T size, UINT offset)
 }
 BOOL FolderObjectIsFolder(LPCITEMIDLIST absolute,SFGAOF attributes)
 {
-    LPITEMIDLIST controls=NULL; LPCITEMIDLIST scan; UINT bytes=2,i; BOOL same=FALSE;
+    static const int roots[]={CSIDL_CONTROLS,CSIDL_PRINTERS,CSIDL_NETWORK,CSIDL_DRIVES};
+    LPITEMIDLIST root=NULL; LPCITEMIDLIST scan; UINT bytes,i,r; BOOL same;
     if(!absolute) return FALSE;
     if(attributes&SFGAO_FOLDER) return TRUE;
-    /* Only the canonical root is a compatibility exception. A provider may
+    /* Only canonical roots are compatibility exceptions. A provider may
      * accept BindToObject for an applet too; that does not make it a folder.
      * New Connection and Control Panel's children retain native commands. */
-    if(FAILED(SHGetSpecialFolderLocation(NULL,CSIDL_CONTROLS,&controls))) return FALSE;
-    for(scan=controls;scan->mkid.cb;scan=(LPCITEMIDLIST)((const BYTE *)scan+scan->mkid.cb)) bytes+=scan->mkid.cb;
-    if(PidlLength((const BYTE *)absolute,bytes,0)==bytes) {
-        for(i=0;i<bytes && ((const BYTE *)absolute)[i]==((const BYTE *)controls)[i];++i) {}
-        same=i==bytes;
+    for(r=0;r<sizeof(roots)/sizeof(roots[0]);++r) {
+        if(FAILED(SHGetSpecialFolderLocation(NULL,roots[r],&root))) continue;
+        bytes=2; same=FALSE;
+        for(scan=root;scan->mkid.cb;scan=(LPCITEMIDLIST)((const BYTE *)scan+scan->mkid.cb)) bytes+=scan->mkid.cb;
+        if(PidlLength((const BYTE *)absolute,bytes,0)==bytes) {
+            for(i=0;i<bytes && ((const BYTE *)absolute)[i]==((const BYTE *)root)[i];++i) {}
+            same=i==bytes;
+        }
+        CoTaskMemFree(root);
+        if(same) return TRUE;
     }
-    CoTaskMemFree(controls); return same;
+    return FALSE;
 }
 static LPITEMIDLIST SelectionPidl(IDataObject *data, BOOL foldersOnly, SFGAOF *attributes)
 {

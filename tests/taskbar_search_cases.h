@@ -125,7 +125,13 @@ static void __attribute__((noinline)) SearchHistoryTests(HWND bar,const char *se
           "recalling a query restores literal text and search results without executing it");
     popup=SearchHistoryOpen(bar);
     GetPrivateProfileStringA("Recent","Program0","",recent,sizeof(recent),settings);
-    SendMessageA(GetDlgItem(popup,7),BM_CLICK,0,0); PumpFor(80);
+    { HWND clear=GetDlgItem(popup,7); RECT button; POINT point;
+      GetWindowRect(clear,&button); point.x=(button.left+button.right)/2; point.y=(button.top+button.bottom)/2;
+      mouse_event(MOUSEEVENTF_MOVE|MOUSEEVENTF_ABSOLUTE,point.x*65535/(GetSystemMetrics(SM_CXSCREEN)-1),point.y*65535/(GetSystemMetrics(SM_CYSCREEN)-1),0,0);
+      PumpFor(60); mouse_event(MOUSEEVENTF_LEFTDOWN,0,0,0,0); PumpFor(60);
+      Check(IsWindowVisible(popup) && (SendMessageA(clear,BM_GETSTATE,0,0)&BST_PUSHED),
+          "clicking the inactive search popup presses its real Clear button without redirecting activation to the edit");
+      mouse_event(MOUSEEVENTF_LEFTUP,0,0,0,0); PumpFor(80); }
     GetPrivateProfileStringA("TaskbarSearchHistory","Query0","",text,sizeof(text),settings);
     GetPrivateProfileStringA("Recent","Program0","",after,sizeof(after),settings);
     Check(!text[0] && !IsWindowEnabled(GetDlgItem(popup,7)) && SendDlgItemMessageA(popup,4,LB_GETCOUNT,0,0)==1 && !lstrcmpA(recent,after),

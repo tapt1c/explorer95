@@ -37,6 +37,15 @@ static void FolderSelectionTests(void)
     UINT bytes = 2; DWORD header[] = {1,12,14}; char path[MAX_PATH];
     Check(SUCCEEDED(OleInitialize(NULL)),"initialize shell selection test");
     Check(!FolderObjectIsFolder(NULL,SFGAO_FOLDER),"folder classification rejects a missing absolute PIDL");
+    {
+        static const int roots[]={CSIDL_DRIVES,CSIDL_CONTROLS,CSIDL_PRINTERS,CSIDL_NETWORK}; UINT i;
+        for(i=0;i<sizeof(roots)/sizeof(roots[0]);++i) {
+            LPITEMIDLIST root=NULL;
+            Check(SUCCEEDED(SHGetSpecialFolderLocation(NULL,roots[i],&root)),"obtain a canonical system folder PIDL");
+            Check(FolderObjectIsFolder(root,0),"system roots remain folders when original Shell32 omits their attributes");
+            CoTaskMemFree(root);
+        }
+    }
     Check(SUCCEEDED(SHGetSpecialFolderLocation(NULL,CSIDL_DRIVES,&computer)),"obtain the real My Computer namespace PIDL");
     for (scan = computer; scan->mkid.cb; scan = (LPCITEMIDLIST)((const BYTE *)scan+scan->mkid.cb)) bytes += scan->mkid.cb;
     Check(bytes+14 <= sizeof(selectionBytes),"namespace PIDL fits the bounded selection fixture");

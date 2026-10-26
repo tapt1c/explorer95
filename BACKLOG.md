@@ -1,5 +1,27 @@
 # Следующие задачи Explorer95
 
+## Выполнено: системные папки, апплеты из поиска и активация его кнопок
+
+При отсутствии IShellFolderView вернулся проверяемый CIDA fallback на Desktop,
+в My Computer и файловых каталогах. Виртуальные папки действий в этот список
+не входят: Dial-Up Networking/New Connection сохраняют прежний безопасный путь.
+Точные корни Control Panel, Printers, Network Neighborhood и My Computer
+распознаются даже без SFGAO_FOLDER; дочерние апплеты не становятся папками.
+
+Taskbar search использует тот же вызов числовой native-команды через владельца
+PIDL, что namespace-меню Start. ShellExecuteEx больше не направляет апплеты
+в Directory handler с непригодными аргументами. При WA_CLICKACTIVE popup
+не возвращает фокус строке ввода посреди клика: кнопки получают mouse-down.
+
+Проверены x86/PE (328 импортов, восемь DLL, без CRT), menu/browser при 640×480
+и точечные NativeSelection/FolderSelection/native default-command проверки.
+Проверены отсутствие legacy interface, три виртуальных назначения, запрет
+transfer fallback в виртуальной папке действий, точный default offset,
+отмена и ошибки native меню, реальный mouse-down/BST_PUSHED и очистка истории.
+Полный локальный UI снова остановился на прежнем контрасте подписи native
+ListView в Wine; это не успешный full. Реальная Win95 с этим EXE ещё не проверена.
+Проверки публикации остаются обязательными.
+
 ## Выполнено: открытие Панели управления и приветствие при запуске
 
 Enter и двойной щелчок по Панели управления из «Моего компьютера» остаются в

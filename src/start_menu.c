@@ -2,6 +2,8 @@
 #include "shell_internal.h"
 #include "program_history.h"
 #include "shell_sounds.h"
+#include "shell_commands.h"
+#include "folder_open.h"
 #include "taskbar_panels.h"
 #define EX95_LOCALIZE_UI
 #include "localization.h"
@@ -283,30 +285,8 @@ static LPITEMIDLIST JoinPidl(LPCITEMIDLIST parent, LPCITEMIDLIST child)
 }
 static void InvokeNamespace(LPCITEMIDLIST absolute)
 {
-    IShellFolder *desktop = NULL, *parent = NULL; IContextMenu *context = NULL;
-    LPITEMIDLIST copy = JoinPidl(absolute, (LPCITEMIDLIST)"\0\0"); LPCITEMIDLIST child;
-    UINT offset = 0, last = 0; CMINVOKECOMMANDINFO invoke;
-    if (!copy) return;
-    while (((LPCITEMIDLIST)((BYTE *)copy + offset))->mkid.cb) { last = offset; offset += ((LPCITEMIDLIST)((BYTE *)copy + offset))->mkid.cb; }
-    child = (LPCITEMIDLIST)((const BYTE *)absolute + last); ((LPITEMIDLIST)((BYTE *)copy + last))->mkid.cb = 0;
-    if (SUCCEEDED(SHGetDesktopFolder(&desktop))) {
-        if (!last) { parent = desktop; IShellFolder_AddRef(parent); }
-        else IShellFolder_BindToObject(desktop, copy, NULL, &IID_IShellFolder, (void **)&parent);
-        if (parent && SUCCEEDED(IShellFolder_GetUIObjectOf(parent, env.bar, 1, &child, &IID_IContextMenu, NULL, (void **)&context))) {
-            HMENU commands = CreatePopupMenu(); UINT command;
-            IContextMenu_QueryContextMenu(context, commands, 0, 1, 0x7fff, CMF_DEFAULTONLY);
-            command = GetMenuDefaultItem(commands, FALSE, 0);
-            if (command == (UINT)-1) command = GetMenuItemID(commands, 0);
-            ZeroMemory(&invoke, sizeof(invoke)); invoke.cbSize = sizeof(invoke); invoke.hwnd = env.bar;
-            invoke.lpVerb = command != (UINT)-1 && command >= 1 ? (LPCSTR)(UINT_PTR)(command - 1) : "open";
-            invoke.nShow = SW_SHOWNORMAL;
-            if (FAILED(IContextMenu_InvokeCommand(context, &invoke))) MessageBoxA(env.bar, "Windows could not open this item.", "Explorer95", MB_OK | MB_ICONEXCLAMATION);
-            DestroyMenu(commands); IContextMenu_Release(context);
-        }
-        if (parent) IShellFolder_Release(parent);
-        IShellFolder_Release(desktop);
-    }
-    CoTaskMemFree(copy);
+    if(FAILED(ShellNamespaceInvoke(env.bar,absolute)))
+        MessageBoxA(env.bar,"Windows could not open this item.","Explorer95",MB_OK|MB_ICONEXCLAMATION);
 }
 static void ExecuteProgram(int command)
 {
@@ -1078,7 +1058,8 @@ static HMENU NamespaceMenu(int csidl)
                 ZeroMemory(&info, sizeof(info));
                 SHGetFileInfoA((LPCSTR)entry->pidl, 0, &info, sizeof(info), SHGFI_PIDL | SHGFI_DISPLAYNAME | SHGFI_ICON | SHGFI_SMALLICON);
                 lstrcpynA(entry->label, info.szDisplayName[0] ? info.szDisplayName : "Item", MAX_PATH); entry->icon = info.hIcon;
-                IShellFolder_GetAttributesOf(folder, 1, &relative, &attributes); entry->folder = (attributes & SFGAO_FOLDER) != 0;
+                if(FAILED(IShellFolder_GetAttributesOf(folder,1,&relative,&attributes))) attributes=0;
+                entry->folder=FolderObjectIsFolder(entry->pidl,attributes);
                 AppendMenuA(menu, MF_OWNERDRAW, 2000 + programCount++, (LPCSTR)entry);
             }
             CoTaskMemFree(child);

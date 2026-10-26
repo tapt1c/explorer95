@@ -531,9 +531,31 @@ static LPITEMIDLIST SelectedObject(NativeView *view,SFGAOF *attributes)
     RenderTraceShell("view.selection",S_OK,index,*attributes);
     return pidl;
 }
+static LPITEMIDLIST SelectedAbsolute(NativeView *view,SFGAOF *attributes)
+{
+    LPITEMIDLIST relative=SelectedObject(view,attributes),absolute,computer=NULL;
+    IDataObject *data=NULL; char path[MAX_PATH]; BOOL transferable=view->desktop;
+    if(relative) {
+        absolute=Combine(view->absolute,relative); CoTaskMemFree(relative); return absolute;
+    }
+    /* Some original Shell32 views lack IShellFolderView. Restore their CIDA
+     * contract only on Desktop, My Computer and filesystem folders. Synthetic
+     * actions (notably Dial-Up Networking's New Connection) must never be
+     * queried for a transfer object while inspecting or activating them. */
+    if(!transferable) transferable=SHGetPathFromIDListA(view->absolute,path);
+    if(!transferable && SUCCEEDED(SHGetSpecialFolderLocation(view->parent,CSIDL_DRIVES,&computer))) {
+        UINT bytes=PidlBytes(computer),i;
+        transferable=bytes==PidlBytes(view->absolute);
+        for(i=0;transferable && i<bytes;++i)
+            if(((const BYTE *)computer)[i]!=((const BYTE *)view->absolute)[i]) transferable=FALSE;
+        CoTaskMemFree(computer);
+    }
+    if(!transferable || FAILED(IShellView_GetItemObject(view->view,SVGIO_SELECTION,&IID_IDataObject,(void **)&data))) return NULL;
+    absolute=FolderSelectionFirstPidl(data,attributes); IDataObject_Release(data); return absolute;
+}
 BOOL NativeViewSelection(NativeView *view, NativeSelection *selection)
 {
-    LPITEMIDLIST relative,absolute; SHFILEINFOA info; int index;
+    LPITEMIDLIST absolute; SHFILEINFOA info; int index;
     ZeroMemory(selection, sizeof(*selection));
     if (!view || !view->view) return FALSE;
     selection->count = ListView_GetSelectedCount(view->list);
@@ -548,13 +570,12 @@ BOOL NativeViewSelection(NativeView *view, NativeSelection *selection)
     index=ListView_GetNextItem(view->list,-1,LVNI_SELECTED);
     ListView_GetItemText(view->list,index,0,selection->name,MAX_PATH);
     selection->capabilities = SFGAO_FOLDER | SFGAO_FILESYSTEM | SFGAO_CANMOVE | SFGAO_CANCOPY | SFGAO_CANDELETE | SFGAO_CANRENAME | SFGAO_HASPROPSHEET;
-    relative=SelectedObject(view,&selection->capabilities);
-    if(!relative) { selection->capabilities=0; return TRUE; }
+    absolute=SelectedAbsolute(view,&selection->capabilities);
+    if(!absolute) { selection->capabilities=0; return TRUE; }
+    if(FolderObjectIsFolder(absolute,selection->capabilities)) selection->capabilities|=SFGAO_FOLDER;
     /* A shell action is not a filesystem object or navigable folder. Keep
      * its native label without probing it as an absolute file-information ID. */
-    if(!(selection->capabilities&(SFGAO_FOLDER|SFGAO_FILESYSTEM))) { CoTaskMemFree(relative); return TRUE; }
-    absolute=Combine(view->absolute,relative); CoTaskMemFree(relative);
-    if(!absolute) return TRUE;
+    if(!(selection->capabilities&(SFGAO_FOLDER|SFGAO_FILESYSTEM))) { HeapFree(GetProcessHeap(),0,absolute); return TRUE; }
     SHGetPathFromIDListA(absolute, selection->path);
     ZeroMemory(&info, sizeof(info));
     SHGetFileInfoA((LPCSTR)absolute, 0, &info, sizeof(info), SHGFI_PIDL | SHGFI_DISPLAYNAME | SHGFI_TYPENAME);
@@ -595,14 +616,12 @@ char *NativeViewSelectedPaths(NativeView *view)
 }
 static BOOL OpenSelection(NativeView *view)
 {
-    LPITEMIDLIST relative,absolute; SFGAOF attributes=SFGAO_FOLDER|SFGAO_FILESYSTEM;
+    LPITEMIDLIST absolute; SFGAOF attributes=SFGAO_FOLDER|SFGAO_FILESYSTEM;
     char path[MAX_PATH]; BOOL handled=FALSE;
     /* Recycled folders are deleted objects, not navigable locations. Leave
      * their default action (usually Properties) to the installed shell. */
     if (view->recycleBin || (!view->desktop && !view->navigate) || !view->view || ListView_GetSelectedCount(view->list) != 1) return FALSE;
-    relative=SelectedObject(view,&attributes);
-    if(!relative) return FALSE;
-    absolute=Combine(view->absolute,relative); CoTaskMemFree(relative);
+    absolute=SelectedAbsolute(view,&attributes);
     if(!absolute) return FALSE;
     if(FolderObjectIsFolder(absolute,attributes)) attributes|=SFGAO_FOLDER;
     if(!(attributes&SFGAO_FOLDER) && (!view->desktop || !(attributes&SFGAO_FILESYSTEM))) {

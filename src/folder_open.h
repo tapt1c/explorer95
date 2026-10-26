@@ -10,7 +10,7 @@ DWORD FolderSettingsPath(const char *command, char *path);
 BOOL FolderRequestValid(const FolderRequest *request);
 BOOL FolderRequestCopy(const COPYDATASTRUCT *copy, FolderRequest *request);
 DWORD FolderRequestSend(HWND owner, const FolderRequest *request);
-/* Recognize the canonical Control Panel root even when Win95 omits its flag. */
+/* Recognize canonical system roots even when Win95 omits their folder flag. */
 BOOL FolderObjectIsFolder(LPCITEMIDLIST absolute,SFGAOF attributes);
 /* A validated absolute folder PIDL copied from Shell IDList Array; HeapFree. */
 LPITEMIDLIST FolderSelectionPidl(IDataObject *data);

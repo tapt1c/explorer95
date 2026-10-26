@@ -1098,13 +1098,16 @@ explorer95.exe --settings="C:\EX95TEST\Explorer95.ini"
   Без этого native Arrange/View/Refresh могут молча ничего не делать.
   Сведения о выделении и открытие папки получают owned relative PIDL через
   IShellFolderView::GetObject и проверяют атрибуты у исходного IShellFolder.
-  Не запрашивайте IDataObject для простого выбора: служебные пункты namespace,
-  например New Connection, не являются переносимыми файлами. Не-folder команды
-  остаются у native view; clipboard/drag используют IDataObject только по действию.
+  Если IShellFolderView недоступен, запасной CIDA разрешён только на Desktop,
+  в точном CSIDL_DRIVES и в файловых каталогах. У виртуальных папок действий,
+  включая Dial-Up Networking/New Connection, IDataObject при выборе/открытии
+  по-прежнему запрещён. Не-folder команды остаются у native view; clipboard/drag
+  запрашивают IDataObject по явному действию.
   Полный порядок IUnknown в LegacyFolderViewVtbl обязателен. Тесты блокируют
   GetItemObject и проверяют сведения, Enter и ICommDlgBrowser::OnDefaultCommand.
-  Исключение для Control Panel без SFGAO_FOLDER проверяет точный системный PIDL
-  CSIDL_CONTROLS в общем FolderObjectIsFolder. Успешный BindToObject недостаточен:
+  Исключения без SFGAO_FOLDER проверяют точные системные PIDL CSIDL_CONTROLS,
+  CSIDL_PRINTERS, CSIDL_NETWORK и CSIDL_DRIVES в общем FolderObjectIsFolder.
+  Успешный BindToObject недостаточен:
   некоторые провайдеры принимают и PIDL апплета. Не превращайте дочерние апплеты
   и New Connection в запросы перехода. Проверяйте Enter и двойной щелчок.
   Верхнее View/Arrange вызывает NativeViewSort: исходный Win95 IShellFolderView
@@ -1200,7 +1203,8 @@ explorer95.exe --settings="C:\EX95TEST\Explorer95.ini"
   Разрешены только каталоги и shell namespace; это не интерфейс запуска программ.
   `--settings` разбирается тем же tokenizer, без поиска подстроки внутри пути папки;
   неоднозначные повторные параметры профиля и незакрытые кавычки отклоняются.
-- На рабочем столе сначала читайте Shell IDList Array для виртуальных папок.
+- На рабочем столе предпочитайте IShellFolderView::GetObject; при его отсутствии
+  используйте Shell IDList Array.
   Проверяйте размер HGLOBAL, число элементов, смещения и окончания PIDL перед
   объединением. Копия принадлежит HeapAlloc; возвращённые Shell32 PIDL освобождайте
   по существующему COM-контракту. CF_HDROP остаётся запасным путём для файлов.
@@ -2007,6 +2011,16 @@ WelcomeClose вызывается при завершении. Окно WS_EX_TO
 Изменения welcome.bmp должны инвалидировать оба resources.o; это проверяется
 tests/check_incremental.py. Остальные языковые/focus-сценарии используют отдельный
 профиль с отключённой плашкой, а welcome_cases проверяет default-on и реальный restart.
+
+Апплеты из taskbar search и namespace-меню Start используют общий
+ShellNamespaceInvoke: привязка родительского IShellFolder, GetUIObjectOf,
+CMF_DEFAULTONLY и числовой offset штатной команды. Не передавайте их
+ShellExecuteEx/SEE_MASK_IDLIST: в Win95 это может применить команду Directory
+и запустить клиент Explorer95 с непригодным аргументом. Canonical system roots
+используют FolderObjectIsFolder, обычные апплеты остаются действиями.
+При активации popup поиска перенаправляйте фокус в EDIT только для WA_ACTIVE;
+WA_CLICKACTIVE должен дойти до штатной кнопки/ListBox. Проверяйте реальный
+mouse-down и BST_PUSHED, а не только BM_CLICK.
 
 ## GitHub, CI и релизы
 

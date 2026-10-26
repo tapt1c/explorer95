@@ -103,6 +103,16 @@ static void DeleteProbeReset(HRESULT object, HRESULT name, HRESULT invoke, HRESU
     ZeroMemory(&deleteProbe, sizeof(deleteProbe)); deleteProbe.valid = TRUE;
     deleteProbe.object = object; deleteProbe.name = name; deleteProbe.invoke = invoke; deleteProbe.accelerator = accelerator;
 }
+static HRESULT STDMETHODCALLTYPE DefaultProbeMenu(IContextMenu *self,HMENU menu,UINT index,UINT first,UINT last,UINT flags)
+{
+    (void)self; (void)index; (void)last;
+    deleteProbe.valid &= flags==CMF_DEFAULTONLY;
+    if(FAILED(deleteProbe.object)) return deleteProbe.object;
+    if(deleteProbe.object==S_FALSE) return S_OK; /* no default command */
+    AppendMenuA(menu,MF_STRING,first+3,"Other action");
+    AppendMenuA(menu,MF_STRING,first+23,"Native default action");
+    SetMenuDefaultItem(menu,first+23,FALSE); return MAKE_HRESULT(SEVERITY_SUCCESS,0,24);
+}
 static void NativeShellCommandTests(HWND parent)
 {
     IShellView view; IShellViewVtbl viewTable; IContextMenuVtbl contextTable; HWND list; HRESULT result;
@@ -128,6 +138,16 @@ static void NativeShellCommandTests(HWND parent)
     DeleteProbeReset(E_NOINTERFACE, S_OK, S_OK, E_ABORT); result = NativeShellDelete(&view, parent, list);
     Check(result == E_ABORT && deleteProbe.valid && !deleteProbe.invoked && deleteProbe.translated == 1 && !deleteProbe.keys,
         "accelerator cancellation or failure is never retried as another Delete");
+    contextTable.QueryContextMenu=DefaultProbeMenu;
+    DeleteProbeReset(S_OK,S_OK,S_OK,S_OK); result=ShellCommandDefault(&deleteContext,parent);
+    Check(result==S_OK && deleteProbe.valid && deleteProbe.invoked==1,
+        "namespace activation invokes the marked native numeric default, not a folder association or the first menu row");
+    DeleteProbeReset(S_OK,S_OK,E_ABORT,S_OK); result=ShellCommandDefault(&deleteContext,parent);
+    Check(result==E_ABORT && deleteProbe.invoked==1,"cancelled native applet activation is never retried");
+    DeleteProbeReset(E_FAIL,S_OK,S_OK,S_OK); result=ShellCommandDefault(&deleteContext,parent);
+    Check(result==E_FAIL && !deleteProbe.invoked,"failed menu preparation never invokes an undefined command");
+    DeleteProbeReset(S_FALSE,S_OK,S_OK,S_OK); result=ShellCommandDefault(&deleteContext,parent);
+    Check(FAILED(result) && !deleteProbe.invoked,"an empty native menu cannot fall through to a guessed Open verb");
     DestroyWindow(list);
 }
 
@@ -471,6 +491,27 @@ static void NativeDesktopPasteTests(HWND parent)
 
 #include "native_sort_cases.h"
 static int nativeSelectionDataRequests,nativeSelectionNavigations;
+static IShellViewVtbl *nativeSelectionOriginal;
+static BOOL nativeSelectionLegacyMissing;
+static LPITEMIDLIST nativeSelectionNamespace;
+static HRESULT STDMETHODCALLTYPE NativeSelectionQuery(IShellView *self,REFIID iid,void **object)
+{
+    if(nativeSelectionLegacyMissing && iid->Data1==0x37a378c0) { *object=NULL; return E_NOINTERFACE; }
+    return nativeSelectionOriginal->QueryInterface(self,iid,object);
+}
+static HRESULT STDMETHODCALLTYPE NativeSelectionData(IShellView *self,UINT scope,REFIID iid,void **object)
+{
+    ++nativeSelectionDataRequests;
+    if(nativeSelectionNamespace) {
+        static IDataObject data={&selectionMethods}; LPCITEMIDLIST scan; UINT bytes=2; DWORD header[]={1,12,14};
+        Check(scope==SVGIO_SELECTION && iid->Data1==IID_IDataObject.Data1,"fallback requests only the native selection transfer contract");
+        for(scan=nativeSelectionNamespace;scan->mkid.cb;scan=(LPCITEMIDLIST)((const BYTE *)scan+scan->mkid.cb)) bytes+=scan->mkid.cb;
+        ZeroMemory(selectionBytes,sizeof(selectionBytes)); CopyMemory(selectionBytes,header,sizeof(header));
+        CopyMemory(selectionBytes+14,nativeSelectionNamespace,bytes); selectionSize=14+bytes;
+        *object=&data; return S_OK;
+    }
+    return nativeSelectionOriginal->GetItemObject(self,scope,iid,object);
+}
 static char nativeSelectionTarget[MAX_PATH];
 static HRESULT STDMETHODCALLTYPE NativeSelectionNoData(IShellView *self,UINT scope,REFIID iid,void **object)
 {
@@ -479,7 +520,12 @@ static HRESULT STDMETHODCALLTYPE NativeSelectionNoData(IShellView *self,UINT sco
 static BOOL NativeSelectionNavigate(HWND parent,LPCITEMIDLIST pidl)
 {
     char path[MAX_PATH]; (void)parent;
-    Check(SHGetPathFromIDListA(pidl,path) && !lstrcmpiA(path,nativeSelectionTarget),
+    if(nativeSelectionNamespace) {
+        IShellFolder *desktop; HRESULT comparison;
+        Check(SUCCEEDED(SHGetDesktopFolder(&desktop)),"obtain the desktop to compare canonical navigation targets");
+        comparison=IShellFolder_CompareIDs(desktop,0,pidl,nativeSelectionNamespace); IShellFolder_Release(desktop);
+        Check(SUCCEEDED(comparison) && !(short)HRESULT_CODE(comparison),"virtual folder activation preserves the canonical target PIDL");
+    } else Check(SHGetPathFromIDListA(pidl,path) && !lstrcmpiA(path,nativeSelectionTarget),
         "folder activation passes the selected relative object's absolute PIDL to its own browser");
     ++nativeSelectionNavigations; return TRUE;
 }
@@ -508,7 +554,8 @@ static void NativeSelectionTests(HWND parent)
     }
     Check(fileIndex>=0 && folderIndex>=0,"the private view contains both real selection targets");
     Check(SUCCEEDED(IShellBrowser_QueryActiveShellView(NativeViewShellBrowser(view),&shell)),"obtain the hosted view through its real shell-browser contract");
-    original=shell->lpVtbl; table=*original; table.GetItemObject=NativeSelectionNoData; shell->lpVtbl=&table;
+    original=shell->lpVtbl; nativeSelectionOriginal=original; nativeSelectionLegacyMissing=FALSE;
+    table=*original; table.GetItemObject=NativeSelectionNoData; table.QueryInterface=NativeSelectionQuery; shell->lpVtbl=&table;
     nativeSelectionDataRequests=nativeSelectionNavigations=0;
     NativeViewSetNavigator(view,NativeSelectionNavigate);
     Check(SUCCEEDED(IShellBrowser_QueryInterface(NativeViewShellBrowser(view),&IID_ICommDlgBrowser,(void **)&dialog)),
@@ -526,9 +573,44 @@ static void NativeSelectionTests(HWND parent)
         "native folder Enter routes once without obtaining a clipboard object");
     Check(ICommDlgBrowser_OnDefaultCommand(dialog,shell)==S_OK && nativeSelectionNavigations==2 && !nativeSelectionDataRequests,
         "the shell default-command callback shares the same PIDL-only folder routing");
+    nativeSelectionLegacyMissing=TRUE; table.GetItemObject=NativeSelectionData;
+    Check(NativeViewSelection(view,&selection) && (selection.capabilities&SFGAO_FOLDER) &&
+        !lstrcmpiA(selection.path,nativeSelectionTarget) && nativeSelectionDataRequests==1,
+        "an original view without IShellFolderView reads a validated CIDA from its filesystem selection");
+    SendMessageA(list,WM_KEYDOWN,VK_RETURN,0);
+    Check(nativeSelectionNavigations==3 && nativeSelectionDataRequests==2,
+        "Enter still navigates inside Explorer95 when the legacy PIDL interface is unavailable");
+    ListView_SetItemState(list,-1,0,LVIS_SELECTED|LVIS_FOCUSED);
+    ListView_SetItemState(list,fileIndex,LVIS_SELECTED|LVIS_FOCUSED,LVIS_SELECTED|LVIS_FOCUSED);
+    Check(ICommDlgBrowser_OnDefaultCommand(dialog,shell)==S_FALSE && nativeSelectionNavigations==3,
+        "CIDA fallback preserves nonfolder native actions");
+    {
+        static const int roots[]={CSIDL_CONTROLS,CSIDL_PRINTERS,CSIDL_NETWORK}; UINT r;
+        for(r=0;r<sizeof(roots)/sizeof(roots[0]);++r) {
+            int before=nativeSelectionNavigations;
+            Check(SUCCEEDED(SHGetSpecialFolderLocation(NULL,roots[r],&nativeSelectionNamespace)),"prepare a canonical virtual selection medium");
+            Check(NativeViewSelection(view,&selection) && (selection.capabilities&SFGAO_FOLDER),
+                "canonical system folder selection remains navigable on the legacy-interface fallback");
+            Check(ICommDlgBrowser_OnDefaultCommand(dialog,shell)==S_OK && nativeSelectionNavigations==before+1,
+                "system folder default activation stays inside Explorer95 when IShellFolderView is absent");
+            CoTaskMemFree(nativeSelectionNamespace); nativeSelectionNamespace=NULL;
+        }
+    }
     ICommDlgBrowser_Release(dialog); NativeViewSetNavigator(view,NULL);
     shell->lpVtbl=original; IShellView_Release(shell); NativeViewDestroy(view);
     Check(DeleteFileA(file) && RemoveDirectoryA(nativeSelectionTarget) && RemoveDirectoryA(root),"remove only the native selection fixtures");
+    Check(SUCCEEDED(SHGetSpecialFolderLocation(NULL,CSIDL_CONTROLS,&pidl)),"obtain a native virtual action folder for the no-transfer guard");
+    view=NativeViewCreateEx(parent,pidl,FALSE,0,&rect); CoTaskMemFree(pidl);
+    Check(view!=NULL,"host a real virtual action folder without launching any action"); list=NativeViewList(view);
+    Check(ListView_GetItemCount(list)>0,"the virtual no-transfer fixture contains a native action");
+    Check(SUCCEEDED(IShellBrowser_QueryActiveShellView(NativeViewShellBrowser(view),&shell)),"obtain the virtual action view contract");
+    original=shell->lpVtbl; nativeSelectionOriginal=original; table=*original;
+    table.QueryInterface=NativeSelectionQuery; table.GetItemObject=NativeSelectionNoData; shell->lpVtbl=&table;
+    nativeSelectionLegacyMissing=TRUE; nativeSelectionDataRequests=0;
+    ListView_SetItemState(list,0,LVIS_SELECTED|LVIS_FOCUSED,LVIS_SELECTED|LVIS_FOCUSED);
+    Check(NativeViewSelection(view,&selection) && !selection.capabilities && !nativeSelectionDataRequests,
+        "virtual action folders never enter the transfer fallback even when the legacy interface is missing");
+    shell->lpVtbl=original; IShellView_Release(shell); NativeViewDestroy(view);
 }
 static void NativeViewMessageTests(void)
 {

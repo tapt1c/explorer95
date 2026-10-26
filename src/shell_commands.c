@@ -61,6 +61,45 @@ HRESULT ShellCommandInvoke(IContextMenu *context, HMENU menu, HWND owner, const 
     return IContextMenu_InvokeCommand(context,&action);
 }
 
+HRESULT ShellCommandDefault(IContextMenu *context, HWND owner)
+{
+    HMENU menu=CreatePopupMenu(); HRESULT result; UINT command; CMINVOKECOMMANDINFO action;
+    if(!menu) return E_OUTOFMEMORY;
+    result=IContextMenu_QueryContextMenu(context,menu,0,1,0x7fff,CMF_DEFAULTONLY);
+    if(SUCCEEDED(result)) {
+        command=GetMenuDefaultItem(menu,FALSE,0);
+        if(command==(UINT)-1) command=GetMenuItemID(menu,0);
+        if(command<1 || command>0x7fff) result=E_FAIL;
+        else {
+            ZeroMemory(&action,sizeof(action)); action.cbSize=sizeof(action); action.hwnd=owner;
+            action.lpVerb=MAKEINTRESOURCEA(command-1); action.nShow=SW_SHOWNORMAL;
+            result=IContextMenu_InvokeCommand(context,&action);
+        }
+    }
+    DestroyMenu(menu); return result;
+}
+HRESULT ShellNamespaceInvoke(HWND owner, LPCITEMIDLIST absolute)
+{
+    IShellFolder *desktop=NULL,*parent=NULL; IContextMenu *context=NULL;
+    LPCITEMIDLIST scan=absolute,child; LPITEMIDLIST copy; UINT size=0,last=0; HRESULT result;
+    if(!absolute || !absolute->mkid.cb) return E_INVALIDARG;
+    while(scan->mkid.cb) { last=size; size+=scan->mkid.cb; scan=(LPCITEMIDLIST)((const BYTE *)absolute+size); }
+    copy=CoTaskMemAlloc(last+2); if(!copy) return E_OUTOFMEMORY;
+    CopyMemory(copy,absolute,last); ((LPITEMIDLIST)((BYTE *)copy+last))->mkid.cb=0;
+    child=(LPCITEMIDLIST)((const BYTE *)absolute+last);
+    result=SHGetDesktopFolder(&desktop);
+    if(SUCCEEDED(result)) {
+        if(!last) { parent=desktop; IShellFolder_AddRef(parent); }
+        else result=IShellFolder_BindToObject(desktop,copy,NULL,&IID_IShellFolder,(void **)&parent);
+        if(SUCCEEDED(result)) result=IShellFolder_GetUIObjectOf(parent,owner,1,&child,&IID_IContextMenu,NULL,(void **)&context);
+        if(SUCCEEDED(result)) result=ShellCommandDefault(context,owner);
+    }
+    if(context) IContextMenu_Release(context);
+    if(parent) IShellFolder_Release(parent);
+    if(desktop) IShellFolder_Release(desktop);
+    CoTaskMemFree(copy); return result;
+}
+
 void ShellCommandShortcuts(IContextMenu *context, HMENU menu)
 {
     static const char *verbs[]={"paste","pastelink","undo"};
