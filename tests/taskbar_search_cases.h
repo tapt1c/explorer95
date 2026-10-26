@@ -47,10 +47,18 @@ static void SearchFocus(HWND bar)
     HWND combo=GetDlgItem(GetDlgItem(bar,ID_SEARCHBOX),2); DWORD started=GetTickCount(),settled=0;
     PanelClick(combo,30);
     do {
+        HWND foreground=GetForegroundWindow(),popup=FindWindowA("Explorer95.TaskbarSearchResults",NULL); char text[80]="";
         PumpFor(20);
-        if(GetForegroundWindow()!=bar) settled=0; else if(!settled) settled=GetTickCount();
+        if(popup) GetDlgItemTextA(popup,3,text,sizeof(text));
+        if(foreground!=bar && !(foreground==popup && IsWindowVisible(popup) && !lstrcmpA(text,"Search history"))) settled=0;
+        else if(!settled) settled=GetTickCount();
     } while((!settled || GetTickCount()-settled<200) && GetTickCount()-started<3000);
-    Check(settled && GetTickCount()-settled>=200,"the search edit owns a settled taskbar foreground before one real Enter");
+    if(!settled || GetTickCount()-settled<200) {
+        char kind[80],caption[160],detail[300]; HWND foreground=GetForegroundWindow();
+        GetClassNameA(foreground,kind,sizeof(kind)); GetWindowTextA(foreground,caption,sizeof(caption));
+        wsprintfA(detail,"Search focus: foreground=%s caption=%s\r\n",kind,caption); Log(detail);
+    }
+    Check(settled && GetTickCount()-settled>=200,"the search field or its newly opened history owns settled foreground before one real Enter");
 }
 static void SearchEnter(HWND bar)
 {
@@ -67,8 +75,12 @@ static void SearchCloseChild(HWND window)
 }
 static HWND SearchHistoryOpen(HWND bar)
 {
-    HWND combo=GetDlgItem(GetDlgItem(bar,ID_SEARCHBOX),2),popup; RECT field;
-    SearchFocus(bar); GetWindowRect(combo,&field); PanelClick(combo,field.right-field.left-8);
+    HWND combo=GetDlgItem(GetDlgItem(bar,ID_SEARCHBOX),2),popup,edit=FindWindowExA(combo,NULL,"EDIT",NULL); RECT field;
+    SendMessageA(edit,WM_KEYDOWN,VK_ESCAPE,0); SearchFocus(bar);
+    Check(SearchStatus("Search history")!=NULL,"clicking the search text field opens history without using the arrow");
+    GetWindowRect(combo,&field); PanelClick(combo,field.right-field.left-8);
+    Check(!IsWindowVisible(FindWindowA("Explorer95.TaskbarSearchResults",NULL)),"the arrow can still dismiss the history opened by a field click");
+    PanelClick(combo,field.right-field.left-8);
     popup=SearchStatus("Search history");
     Check(popup && !SendMessageA(combo,CB_GETDROPPEDSTATE,0,0),"the search arrow opens a compact history popup instead of an empty native drop list");
     return popup;
@@ -76,7 +88,21 @@ static HWND SearchHistoryOpen(HWND bar)
 static void __attribute__((noinline)) SearchHistoryTests(HWND bar,const char *settings)
 {
     HWND popup,list,launched; char expected[514],text[512],recent[MAX_PATH],after[MAX_PATH]; int i,n; RECT frame,area;
-    popup=SearchHistoryOpen(bar); list=GetDlgItem(popup,4); n=(int)SendMessageA(list,LB_GETCOUNT,0,0);
+    popup=SearchHistoryOpen(bar);
+    { HWND edit=FindWindowExA(GetDlgItem(GetDlgItem(bar,ID_SEARCHBOX),2),NULL,"EDIT",NULL);
+      SendMessageA(edit,WM_KEYDOWN,VK_ESCAPE,0); PanelClick(GetDlgItem(edit,1),3);
+      Check(SearchStatus("Search history")==popup,"clicking the icon inside the search field also opens history");
+      char before[512],typed[512]; SendMessageA(edit,WM_GETTEXT,sizeof(before),(LPARAM)before);
+      keybd_event(VK_HOME,0,0,0); keybd_event(VK_HOME,0,KEYEVENTF_KEYUP,0);
+      keybd_event('X',0,0,0); keybd_event('X',0,KEYEVENTF_KEYUP,0); PumpFor(60); SendMessageA(edit,WM_GETTEXT,sizeof(typed),(LPARAM)typed);
+      if((typed[0]!='x' && typed[0]!='X') || lstrcmpA(typed+1,before)) {
+          Log("Keyboard before: "); Log(before); Log("\r\nKeyboard after: "); Log(typed); Log("\r\n");
+      }
+      Check((typed[0]=='x' || typed[0]=='X') && !lstrcmpA(typed+1,before),"real keyboard input stays in the search edit after click-open history");
+      keybd_event(VK_BACK,0,0,0); keybd_event(VK_BACK,0,KEYEVENTF_KEYUP,0); PumpFor(50);
+      SendMessageA(edit,WM_GETTEXT,sizeof(typed),(LPARAM)typed); Check(!lstrcmpA(typed,before),"typing can be undone normally without losing the original query");
+      popup=SearchHistoryOpen(bar); }
+    list=GetDlgItem(popup,4); n=(int)SendMessageA(list,LB_GETCOUNT,0,0);
     Check(n>=4 && IsWindowEnabled(GetDlgItem(popup,7)),"history offers separate groups of programs and queries with an enabled Clear action");
     GetWindowRect(popup,&frame); SystemParametersInfoA(SPI_GETWORKAREA,0,&area,0);
     Check(frame.left>=area.left && frame.top>=area.top && frame.right<=area.right && frame.bottom<=area.bottom,

@@ -509,6 +509,13 @@ static void DrawStatus(const DRAWITEMSTRUCT *item)
 }
 static LRESULT CALLBACK EditProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
 {
+    if(message==WM_LBUTTONDOWN) {
+        LRESULT result=CallWindowProcA(search.original,window,message,wp,lp);
+        /* Keep native caret/selection handling and an active result list.
+         * A fresh click anywhere in the field exposes the saved history. */
+        if(!search.open && !search.pending) PostMessageA(search.host,HISTORY_OPEN,1,0);
+        return result;
+    }
     if((message==WM_KEYDOWN && wp==VK_F4) || (message==WM_SYSKEYDOWN && wp==VK_DOWN)) {
         if(lp&(1UL<<30)) return 0;
         if(search.history) TaskbarSearchHide(); else ShowHistory(); return 0;
@@ -519,7 +526,9 @@ static LRESULT CALLBACK EditProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
         if(search.searchIcon) DrawIconEx(item->hDC,1,0,search.searchIcon,16,16,0,NULL,DI_NORMAL);
         return TRUE;
     }
-    if(message==WM_COMMAND && (HWND)lp==search.icon) { SetFocus(window); return 0; }
+    if(message==WM_COMMAND && (HWND)lp==search.icon) {
+        SetFocus(window); if(!search.open && !search.pending) PostMessageA(search.host,HISTORY_OPEN,1,0); return 0;
+    }
     if(message==WM_SIZE || message==WM_SETFONT) {
         LRESULT result=CallWindowProcA(search.original,window,message,wp,lp); LayoutEditIcon(); return result;
     }
@@ -544,7 +553,12 @@ static LRESULT CALLBACK SearchProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
 {
     switch(message) {
     case HISTORY_OPEN:
-        SendMessageA(search.combo,CB_SHOWDROPDOWN,FALSE,0); ShowHistory(); return 0;
+        /* Finish native mouse activation first, or an owned popup can become
+         * the owner's last-active window midway through the field click. */
+        if(!wp || (!search.open && !search.pending && GetFocus()==search.edit)) {
+            SendMessageA(search.combo,CB_SHOWDROPDOWN,FALSE,0); ShowHistory();
+        }
+        return 0;
     case WM_COMMAND:
         if((HWND)lp==search.combo && !search.updating) {
             if(HIWORD(wp)==CBN_EDITCHANGE || HIWORD(wp)==CBN_SELENDOK) { TaskbarSearchHide(); search.pending=TRUE; SetTimer(window,1,200,NULL); }
@@ -563,6 +577,12 @@ static LRESULT CALLBACK SearchProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
         return 0;
     case WM_ACTIVATE:
         if(window==search.popup && LOWORD(wp)==WA_INACTIVE && (HWND)lp!=env.bar) DismissSearch();
+        /* Some window managers activate a newly shown owned popup despite
+         * SW_SHOWNOACTIVATE. Keep typing in its owner's edit; clicking a list
+         * or button still gives that child its normal focus afterwards. */
+        if(window==search.popup && LOWORD(wp)!=WA_INACTIVE && GetFocus()==search.edit) {
+            SetActiveWindow(env.bar); SetFocus(search.edit); return 0;
+        }
         break;
     case WM_ERASEBKGND: return TRUE;
     case WM_PAINT: {

@@ -257,6 +257,17 @@ static void LanguageTests(const char *directory)
     { LRESULT action=SendMessageW(window,WM_MENUCHAR,0x043a,(LPARAM)menu);
       Check(HIWORD(action)==MNC_EXECUTE && LOWORD(action)==1,"the Cyrillic menu mnemonic resolves to the unchanged command position"); }
     {
+        HMENU headings=UiCreateMenu(),file=CreatePopupMenu(),editMenu=CreatePopupMenu(); RECT first,next,bounds={0,0,0,0};
+        HDC dc=GetDC(window); HGDIOBJ old=SelectObject(dc,UiFont(NULL));
+        UiDrawTextA(dc,UiText("&File"),-1,&bounds,DT_CALCRECT|DT_SINGLELINE); SelectObject(dc,old); ReleaseDC(window,dc);
+        Check(UiAppendMenuA(headings,MF_POPUP,(UINT_PTR)file,"&File") && UiAppendMenuA(headings,MF_POPUP,(UINT_PTR)editMenu,"&Edit") &&
+            SetMenu(window,headings) && DrawMenuBar(window),"show real translated menu-bar headings with submenus");
+        Check(GetMenuItemRect(window,headings,0,&first) && GetMenuItemRect(window,headings,1,&next) &&
+            next.left==first.right && first.right-first.left>=bounds.right && first.right-first.left<=bounds.right+16,
+            "translated menu headings have native compact spacing without counting mnemonic ampersands or popup gutters");
+        SetMenu(window,NULL); UiDestroyMenu(headings);
+    }
+    {
         /* Direct ANSI drawing is the Win95 path. Compare its actual pixels to
          * Unicode drawing with the same font under the English Wine locale. */
         HDC target=GetDC(window),a=CreateCompatibleDC(target),b=CreateCompatibleDC(target);
@@ -402,6 +413,13 @@ static void LanguageRestartTests(const char *directory,const char *executable)
           "the real Russian Start menu has no phantom translated system caption over its custom header"); }
     SendMessageA(GetDlgItem(bar,100),BM_CLICK,0,0);
     SendMessageA(bar,WM_COMMAND,600,0); properties=WaitFor("Explorer95.Properties",NULL); Check(properties!=NULL,"open translated environment settings");
+    SettingsPage(properties,SETTINGS_START,0); SendDlgItemMessageA(properties,1002,CB_SETCURSEL,1,0); SendMessageA(properties,WM_COMMAND,0x3021,0);
+    PostMessageA(bar,WM_COMMAND,100,0);
+    { HWND classic=WaitFor("#32768",NULL); Check(classic!=NULL,"Russian classic Start retains a native menu with its account strip");
+      PumpFor(100); SaveScreen("build/classic-start-account-ru.bmp"); PostMessageA(bar,WM_COMMAND,100,0);
+      DWORD started=GetTickCount(); while(IsWindowVisible(classic) && GetTickCount()-started<2000) PumpFor(20);
+      Check(!IsWindowVisible(classic),"the account strip preserves native Start toggle dismissal"); }
+    SendDlgItemMessageA(properties,1002,CB_SETCURSEL,0,0); SendMessageA(properties,WM_COMMAND,0x3021,0);
     SettingsPage(properties,SETTINGS_LANGUAGE,-1); SaveScreen("build/language-settings-ru.bmp");
     Check(SendDlgItemMessageA(properties,ID_LANGUAGE,CB_GETCURSEL,0,0)==1,"the language selector restores Russian");
     SetDlgItemTextA(properties,ID_STARTLABEL,"Copy"); SendMessageA(properties,WM_COMMAND,MAKEWPARAM(ID_STARTLABEL,EN_CHANGE),0);

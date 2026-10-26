@@ -1033,6 +1033,48 @@ static void ConfigTests(const char *directory)
             "missing installation source returns a copy error before boot settings change");
     }
     DeleteFileA(ini); DeleteFileA(backup); DeleteFileA(recovery);
+    {
+        const char *raw="; boot configuration\r\n[other]\r\nshell=OTHER.EXE\r\n"
+            "[ boot ]\r\noemfonts.fon=vgaoem.fon\r\n Shell \t= \"C:\\OLD SHELL\\shell.exe\" /n \t\r\n"
+            "keyboard.drv=keyboard.drv\r\n";
+        HANDLE file=CreateFileA(ini,GENERIC_WRITE,0,NULL,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL); DWORD written;
+        Check(file!=INVALID_HANDLE_VALUE && WriteFile(file,raw,lstrlenA(raw),&written,NULL) && written==(DWORD)lstrlenA(raw),
+            "write a real boot file with section/key whitespace, CRLF and a quoted shell command");
+        CloseHandle(file);
+        Check(ConfigureBootShell(ini,backup,recovery,"EX950002.EXE",FALSE)==ERROR_SUCCESS,
+            "shell installation reads the actual boot file without whole-section profile enumeration");
+        GetPrivateProfileStringA("Recovery","OriginalShell","",text,sizeof(text),recovery);
+        Check(!lstrcmpA(text,"!\"C:\\OLD SHELL\\shell.exe\" /n"),
+            "boot parsing selects only the boot section and preserves literal quotes and arguments");
+        Check(ConfigureBootShell(ini,backup,recovery,"EX950002.EXE",TRUE)==ERROR_SUCCESS,
+            "raw boot commands round-trip through installation and restoration");
+        DeleteFileA(ini); DeleteFileA(backup); DeleteFileA(recovery);
+        raw="[boot]\nshell=\t \n";
+        file=CreateFileA(ini,GENERIC_WRITE,0,NULL,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL);
+        Check(file!=INVALID_HANDLE_VALUE && WriteFile(file,raw,lstrlenA(raw),&written,NULL),"create an empty boot-shell fixture"); CloseHandle(file);
+        Check(ConfigureBootShell(ini,backup,recovery,"EX950002.EXE",FALSE)==ERROR_INVALID_DATA &&
+            GetFileAttributesA(backup)==INVALID_FILE_ATTRIBUTES && GetFileAttributesA(recovery)==INVALID_FILE_ATTRIBUTES,
+            "an empty boot shell fails before creating recovery files or changing startup");
+        DeleteFileA(ini);
+        raw="[boot]\r\nshell=explorer.exe\r\n";
+        file=CreateFileA(ini,GENERIC_WRITE,0,NULL,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL);
+        BOOL okay=file!=INVALID_HANDLE_VALUE && WriteFile(file,raw,lstrlenA(raw),&written,NULL); int i;
+        for(i=0;i<1500 && okay;++i) {
+            wsprintfA(text,"driver%04d=01234567890123456789\r\n",i);
+            okay=WriteFile(file,text,lstrlenA(text),&written,NULL) && written==(DWORD)lstrlenA(text);
+        }
+        Check(okay && GetFileSize(file,NULL)>32768,"create an actual boot section beyond legacy whole-section enumeration limits"); CloseHandle(file);
+        Check(ConfigureBootShell(ini,backup,recovery,"EX950002.EXE",FALSE)==ERROR_SUCCESS &&
+            ConfigureBootShell(ini,backup,recovery,"EX950002.EXE",TRUE)==ERROR_SUCCESS,
+            "installation and exact restoration do not depend on the whole boot section fitting an INI API buffer");
+        DeleteFileA(ini); DeleteFileA(backup); DeleteFileA(recovery);
+        raw="[boot]\nshell=explorer.exe";
+        file=CreateFileA(ini,GENERIC_WRITE,0,NULL,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL);
+        Check(file!=INVALID_HANDLE_VALUE && WriteFile(file,raw,lstrlenA(raw)+1,&written,NULL),"create a boot file with an embedded NUL byte"); CloseHandle(file);
+        Check(ConfigureBootShell(ini,backup,recovery,"EX950002.EXE",FALSE)==ERROR_INVALID_DATA &&
+            GetFileAttributesA(backup)==INVALID_FILE_ATTRIBUTES,"malformed boot bytes cannot be used as a startup recovery command");
+        DeleteFileA(ini);
+    }
 }
 
 static void SettingsPage(HWND window, int mainPage, int startPage)
@@ -1431,6 +1473,18 @@ static void StartBehaviorTests(HWND properties, HWND bar, HWND menu, const char 
     Check(GetPrivateProfileIntA("Start", "Classic", 0, settings) == 1, "classic Start style is persisted");
     PostMessageA(bar, WM_COMMAND, 100, 0); popup = WaitFor("#32768", NULL);
     Check(popup != NULL && !IsWindowVisible(menu), "classic mode opens a native single-column menu");
+    {
+        RECT frame; HDC dc; int x,y,strip=0,letters=0; PumpFor(120); GetWindowRect(popup,&frame); dc=GetDC(NULL);
+        for(y=frame.top+5;y<frame.bottom-5;++y) {
+            if(GetPixel(dc,frame.left+6,y)==GetSysColor(COLOR_ACTIVECAPTION)) ++strip;
+            for(x=frame.left+8;x<frame.left+28;++x)
+                if(GetPixel(dc,x,y)==GetSysColor(COLOR_CAPTIONTEXT)) ++letters;
+        }
+        ReleaseDC(NULL,dc); SaveScreen("build/classic-start-account.bmp");
+        Check(strip>=frame.bottom-frame.top-12 && letters>15,
+            "classic Start paints a continuous system-caption strip with the native account name across rows and separators");
+        PostMessageA(menu,WM_KEYDOWN,VK_HOME,0); PumpFor(80); SaveScreen("build/classic-start-account-selected.bmp");
+    }
     PostMessageA(bar, WM_COMMAND, 100, 0);
     {
         DWORD started = GetTickCount();

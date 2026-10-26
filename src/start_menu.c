@@ -8,7 +8,7 @@
 #undef GetTextExtentPoint32A
 
 typedef struct RecentProgram { char path[MAX_PATH], arguments[512]; } RecentProgram;
-typedef struct ProgramItem { char path[MAX_PATH], label[MAX_PATH]; BOOL folder, fresh, localize; HICON icon; LPITEMIDLIST pidl; } ProgramItem;
+typedef struct ProgramItem { char path[MAX_PATH], label[MAX_PATH]; BOOL folder, fresh, localize, classic, separator; HICON icon; LPITEMIDLIST pidl; } ProgramItem;
 static RecentProgram recent[RECENT_LIMIT];
 static char recentShortcuts[RECENT_LIMIT][MAX_PATH];
 static ProgramItem programs[256];
@@ -21,6 +21,9 @@ static const char *rightLabels[] = {"My Documents", "Recent Documents", "My Comp
 static const int rightCommands[] = {ID_DOCUMENTS, ID_RECENTDOCS, ID_COMPUTER, ID_NETWORK, ID_CONTROL, ID_PRINTERS, ID_HELP, ID_FIND, ID_RUN, ID_FAVORITES, ID_COMMAND};
 static char user[128];
 static HFONT userFont;
+static HFONT classicUserFont;
+static HMENU classicMenu;
+#define CLASSIC_STRIP 28
 static BOOL popupActive, classicActive;
 static IContextMenu2 *applicationContext;
 static HHOOK applicationMenuHook;
@@ -35,6 +38,7 @@ static char seenShortcuts[64][MAX_PATH];
 static int seenNext;
 /* Storage order preserves VisibleItems/FolderMenus bits in existing profiles. */
 #define RIGHT_COUNT 11
+static ProgramItem classicEntries[PIN_LIMIT+RIGHT_COUNT+10],moreEntries[RIGHT_COUNT];
 static const int rightOrder[RIGHT_COUNT] = {0,1,9,2,3,4,5,10,6,7,8};
 static int rightSeparators[2], rightSeparatorCount;
 static void ClassicPopup(void);
@@ -644,6 +648,40 @@ void StartRefresh(void)
     DragAcceptFiles(env.start, env.options.allowDrop);
     LayoutStart(env.start); InvalidateRect(env.start, NULL, FALSE);
 }
+static BOOL OwnProgramItem(ULONG_PTR data)
+{
+    const ProgramItem *arrays[]={programs,classicEntries,moreEntries};
+    const UINT sizes[]={sizeof(programs),sizeof(classicEntries),sizeof(moreEntries)}; int i;
+    for(i=0;i<3;++i) {
+        ULONG_PTR offset=data-(ULONG_PTR)arrays[i];
+        if(offset<sizes[i] && !(offset%sizeof(ProgramItem))) return TRUE;
+    }
+    return FALSE;
+}
+static void DrawClassicStrip(const DRAWITEMSTRUCT *draw)
+{
+    RECT strip=draw->rcItem,current,last; HGDIOBJ old; SIZE size;
+    strip.right=strip.left+CLASSIC_STRIP;
+    FillRect(draw->hDC,&strip,(HBRUSH)(COLOR_ACTIVECAPTION+1));
+    if(!classicUserFont || !classicMenu ||
+        !GetMenuItemRect(NULL,classicMenu,GetMenuItemCount(classicMenu)-1,&last)) return;
+    /* Each native row clips the same rotated name to its piece of the strip,
+     * including separators. Submenus retain their ordinary menu geometry. */
+    int i,count=GetMenuItemCount(classicMenu);
+    for(i=0;i<count;++i) {
+        MENUITEMINFOA item; ZeroMemory(&item,sizeof(item));
+        item.cbSize=(UINT)((BYTE *)&item.hbmpItem-(BYTE *)&item); item.fMask=MIIM_DATA;
+        if(GetMenuItemInfoA(classicMenu,i,TRUE,&item) && item.dwItemData==draw->itemData &&
+            GetMenuItemRect(NULL,classicMenu,i,&current)) break;
+    }
+    if(i==count) return;
+    old=SelectObject(draw->hDC,classicUserFont); SetBkMode(draw->hDC,TRANSPARENT);
+    SetTextColor(draw->hDC,GetSysColor(COLOR_CAPTIONTEXT));
+    GetTextExtentPoint32A(draw->hDC,user,lstrlenA(user),&size);
+    ExtTextOutA(draw->hDC,strip.left+(CLASSIC_STRIP-size.cy)/2,
+        draw->rcItem.top+last.bottom-current.top-8,ETO_CLIPPED,&strip,user,lstrlenA(user),NULL);
+    SelectObject(draw->hDC,old);
+}
 static BOOL DrawProgramItem(const DRAWITEMSTRUCT *draw)
 {
     DRAWITEMSTRUCT buffered = *draw; HDC target = draw->hDC;
@@ -652,7 +690,13 @@ static BOOL DrawProgramItem(const DRAWITEMSTRUCT *draw)
     BOOL selected = (draw->itemState & ODS_SELECTED) != 0;
     if (!entry) return FALSE;
     buffered.hDC = PaintBufferBegin(&itemBuffer, target, &draw->rcItem); draw = &buffered;
+    if(entry->classic) { DrawClassicStrip(draw); text.left+=CLASSIC_STRIP; }
     FillRect(draw->hDC, &text, (HBRUSH)(INT_PTR)((selected ? COLOR_HIGHLIGHT : entry->fresh ? COLOR_INFOBK : COLOR_MENU) + 1));
+    if(entry->separator) {
+        text.left+=3; text.right-=3; text.top+=(text.bottom-text.top)/2-1; text.bottom=text.top+2;
+        DrawEdge(draw->hDC,&text,EDGE_ETCHED,BF_TOP);
+        PaintBufferEnd(&itemBuffer,target,&draw->rcItem); return TRUE;
+    }
     SelectObject(draw->hDC, env.host.font); SetBkMode(draw->hDC, TRANSPARENT);
     SetTextColor(draw->hDC, GetSysColor(selected ? COLOR_HIGHLIGHTTEXT : COLOR_MENUTEXT));
     DrawIconEx(draw->hDC, text.left + 4, text.top + (text.bottom - text.top - iconSize) / 2,
@@ -691,7 +735,7 @@ static HICON StartIcon(int id)
 }
 static void MorePopup(BOOL pins)
 {
-    static ProgramItem entries[RIGHT_COUNT];
+    ProgramItem *entries=moreEntries;
     HMENU menu = CreatePopupMenu(); RECT rect; int i, used = 0, visible = 0, command;
     int skip = pins ? geometry.pinRows - 1 : geometry.rightRows - 1;
     for (i = 0; i < (pins ? startPinCount : RIGHT_COUNT); ++i) {
@@ -823,8 +867,8 @@ static void LoadItemIcons(void)
 static LRESULT CALLBACK StartProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
 {
     if(applicationContext && (message==WM_INITMENUPOPUP ||
-        (message==WM_DRAWITEM && ((DRAWITEMSTRUCT *)lp)->CtlType==ODT_MENU && ((DRAWITEMSTRUCT *)lp)->itemID>=0x4000) ||
-        (message==WM_MEASUREITEM && ((MEASUREITEMSTRUCT *)lp)->CtlType==ODT_MENU && ((MEASUREITEMSTRUCT *)lp)->itemID>=0x4000))) {
+        (message==WM_DRAWITEM && ((DRAWITEMSTRUCT *)lp)->CtlType==ODT_MENU && !OwnProgramItem(((DRAWITEMSTRUCT *)lp)->itemData)) ||
+        (message==WM_MEASUREITEM && ((MEASUREITEMSTRUCT *)lp)->CtlType==ODT_MENU && !OwnProgramItem(((MEASUREITEMSTRUCT *)lp)->itemData)))) {
         if(SUCCEEDED(IContextMenu2_HandleMenuMsg(applicationContext,message,wp,lp))) return message==WM_INITMENUPOPUP ? 0 : TRUE;
     }
     switch (message) {
@@ -839,6 +883,10 @@ static LRESULT CALLBACK StartProc(HWND window, UINT message, WPARAM wp, LPARAM l
         if (!GetUserNameA(user, &bytes)) lstrcpyA(user, "Explorer95");
         if (GetObjectA(env.host.font, sizeof(font), &font)) {
             font.lfWeight = FW_BOLD; userFont = CreateFontIndirectA(&font);
+            /* Stock bitmap menu fonts cannot rotate. Arial is a base Win95
+             * TrueType face; the account name keeps its native ANSI charset. */
+            font.lfEscapement=font.lfOrientation=900; font.lfOutPrecision=OUT_TT_ONLY_PRECIS;
+            lstrcpyA(font.lfFaceName,"Arial"); classicUserFont=CreateFontIndirectA(&font);
         }
         for (i = 0; i < PIN_LIMIT; ++i) Item(window, "", ID_PINNED + i);
         Item(window, "All Programs", ID_PROGRAMS);
@@ -888,20 +936,21 @@ static LRESULT CALLBACK StartProc(HWND window, UINT message, WPARAM wp, LPARAM l
         if (item->CtlType == ODT_MENU) {
             /* Shell extensions own their opaque itemData, even if they do
              * not implement IContextMenu2 or decline this notification. */
-            if(item->itemID>=0x4000) return FALSE;
+            if(!OwnProgramItem(item->itemData)) return FALSE;
             ProgramItem *entry = (ProgramItem *)item->itemData; SIZE size; HDC dc = GetDC(window); HFONT old;
+            if(entry->separator) { ReleaseDC(window,dc); item->itemWidth=CLASSIC_STRIP+44; item->itemHeight=6; return TRUE; }
             old = SelectObject(dc, env.host.font);
             if(entry->localize) { UiMarkTranslated(entry->label); UiGetTextExtentPoint32A(dc,entry->label,lstrlenA(entry->label),&size); }
             else UiGetNativeTextExtentA(dc,entry->label,lstrlenA(entry->label),&size);
             SelectObject(dc, old); ReleaseDC(window, dc);
-            item->itemWidth = size.cx + 44;
+            item->itemWidth = size.cx + 44 + (entry->classic ? CLASSIC_STRIP : 0);
             item->itemHeight = size.cy + 4 > 22 ? size.cy + 4 : 22; return TRUE;
         }
         break;
     }
     case WM_DRAWITEM: {
         DRAWITEMSTRUCT *item = (DRAWITEMSTRUCT *)lp;
-        if (item->CtlType == ODT_MENU) return item->itemID>=0x4000 ? FALSE : DrawProgramItem(item);
+        if (item->CtlType == ODT_MENU) return OwnProgramItem(item->itemData) ? DrawProgramItem(item) : FALSE;
         DRAWITEMSTRUCT buffered = *item; HDC target = item->hDC;
         int iconSize = (item->CtlID == ID_EXIT || item->CtlID == ID_LOGOFF || item->CtlID == ID_SHUTDOWN) ? 16 : IconSize();
         RECT text = item->rcItem; char label[MAX_PATH]; HICON icon = NULL;
@@ -1004,6 +1053,7 @@ void StartDestroy(void)
     if (env.start) DestroyWindow(env.start);
     PaintBufferFree(&menuBuffer); PaintBufferFree(&itemBuffer); loadedIconSize = 0;
     if (userFont) { DeleteObject(userFont); userFont = NULL; }
+    if (classicUserFont) { DeleteObject(classicUserFont); classicUserFont = NULL; }
     for (i = 0; i < 16; ++i) if (itemIcons[i]) { DestroyIcon(itemIcons[i]); itemIcons[i] = NULL; }
     for (i = 0; i < RECENT_LIMIT; ++i) if (recentIcons[i]) { DestroyIcon(recentIcons[i]); recentIcons[i] = NULL; }
     for (i = 0; i < PIN_LIMIT; ++i) if (pinIcons[i]) { DestroyIcon(pinIcons[i]); pinIcons[i] = NULL; }
@@ -1058,10 +1108,15 @@ static BOOL FolderPopup(int id)
     if (command) { StartHide(); ExecuteProgram(command); }
     FreePrograms(); return TRUE;
 }
+static void ClassicSeparator(HMENU menu,ProgramItem *entry)
+{
+    entry->separator=TRUE;
+    AppendMenuA(menu,MF_OWNERDRAW|MF_DISABLED,0,(LPCSTR)entry);
+}
 static void ClassicPopup(void)
 {
-    static ProgramItem entries[24]; HMENU menu = CreatePopupMenu(); RECT button; int i, used = 0, command; char path[MAX_PATH];
-    FreePrograms(); ZeroMemory(entries, sizeof(entries));
+    ProgramItem *entries=classicEntries; HMENU menu = CreatePopupMenu(); RECT button; int i, used = 0, command; char path[MAX_PATH];
+    FreePrograms(); ZeroMemory(classicEntries, sizeof(classicEntries));
     for (i = 0; i < startPinCount; ++i) {
         ProgramItem *item = &entries[used++]; lstrcpynA(item->label, startPins[i].label, MAX_PATH);
         item->localize = (!lstrcmpA(startPins[i].path,"@explorer") && !lstrcmpA(startPins[i].label,"Windows Explorer")) ||
@@ -1069,7 +1124,7 @@ static void ClassicPopup(void)
         item->icon = startPins[i].path[0] == '@' ? SystemIcon(!lstrcmpA(startPins[i].path, "@explorer") ? 5 : 2, FALSE) : EnvPathIcon(startPins[i].path);
         AppendMenuA(menu, MF_OWNERDRAW, ID_PINNED + i, (LPCSTR)item);
     }
-    if (startPinCount) AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
+    if (startPinCount) ClassicSeparator(menu,&entries[used++]);
     if (env.host.specialPath(CSIDL_PROGRAMS, path)) {
         ProgramItem *item = &entries[used++]; lstrcpyA(item->label, "Programs"); item->icon = SystemIcon(37, FALSE);
         item->localize=TRUE;
@@ -1081,7 +1136,7 @@ static void ClassicPopup(void)
         static const int folders[] = {CSIDL_PERSONAL, CSIDL_RECENT, CSIDL_DRIVES, CSIDL_NETWORK, CSIDL_CONTROLS, CSIDL_PRINTERS};
         ProgramItem *item;
         if(!(VisibleItems() & RightBit(index))) continue;
-        if(previous>=0 && previous!=group) AppendMenuA(menu,MF_SEPARATOR,0,NULL);
+        if(previous>=0 && previous!=group) ClassicSeparator(menu,&entries[used++]);
         previous=group;
         item=&entries[used++]; lstrcpynA(item->label,rightLabels[index],MAX_PATH);
         item->localize=TRUE;
@@ -1092,17 +1147,19 @@ static void ClassicPopup(void)
             AppendMenuA(menu, MF_OWNERDRAW | MF_POPUP, (UINT_PTR)child, (LPCSTR)item);
         } else AppendMenuA(menu, MF_OWNERDRAW, rightCommands[index], (LPCSTR)item);
     } }
-    AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
+    ClassicSeparator(menu,&entries[used++]);
     for (i = 0; i < 3; ++i) if (VisibleItems() & (1U << (9 + i))) {
         const int ids[] = {ID_EXIT, ID_LOGOFF, ID_SHUTDOWN}; ProgramItem *item = &entries[used++];
         item->localize=TRUE;
         GetWindowTextA(GetDlgItem(env.start, ids[i]), item->label, MAX_PATH); item->icon = CopyIcon(StartIcon(ids[i])); AppendMenuA(menu, MF_OWNERDRAW, ids[i], (LPCSTR)item);
     }
+    for(i=0;i<used;++i) entries[i].classic=TRUE;
+    classicMenu=menu;
     GetWindowRect(env.startButton, &button); classicActive = popupActive = TRUE;
     SendMessageA(env.startButton, BM_SETSTATE, TRUE, 0); SetForegroundWindow(env.bar);
     command = TrackApplications(menu,env.options.edge == ABE_BOTTOM ? TPM_BOTTOMALIGN : TPM_TOPALIGN,button.left,
         env.options.edge == ABE_BOTTOM ? button.top : button.bottom);
-    classicActive = popupActive = FALSE; SendMessageA(env.startButton, BM_SETSTATE, FALSE, 0); DestroyMenu(menu);
+    classicActive = popupActive = FALSE; classicMenu=NULL; SendMessageA(env.startButton, BM_SETSTATE, FALSE, 0); DestroyMenu(menu);
     for (i = 0; i < used; ++i) if (entries[i].icon) DestroyIcon(entries[i].icon);
     if (command >= 2000) ExecuteProgram(command);
     else if (command == ID_RECENTDOCS) { char recentPath[MAX_PATH]; if (env.host.specialPath(CSIDL_RECENT, recentPath)) env.host.openFolder(recentPath); }

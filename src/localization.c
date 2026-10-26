@@ -292,19 +292,27 @@ static BOOL MenuMessage(UINT message,LPARAM lp)
     const char *text=UiText(entries[index].english);
     if(message==WM_MEASUREITEM) {
         MEASUREITEMSTRUCT *m=(MEASUREITEMSTRUCT *)lp; SIZE size; HDC dc=GetDC(NULL); HFONT old=SelectObject(dc,UiFont(NULL));
-        UiGetTextExtentPoint32A(dc,text,lstrlenA(text),&size); SelectObject(dc,old); ReleaseDC(NULL,dc);
-        m->itemWidth=size.cx+((token&0x4000) ? 12 : 38); m->itemHeight=size.cy+6; if(m->itemHeight<20) m->itemHeight=20;
+        UiGetTextExtentPoint32A(dc,text,lstrlenA(text),&size);
+        if(token&0x4000) {
+            RECT bounds={0,0,0,0};
+            /* Match the drawn mnemonic, not its literal ampersand. USER
+             * supplies menu-bar spacing; popup check/arrow gutters do not. */
+            UiDrawTextA(dc,text,-1,&bounds,DT_CALCRECT|DT_SINGLELINE);
+            size.cx=bounds.right; size.cy=bounds.bottom;
+        }
+        SelectObject(dc,old); ReleaseDC(NULL,dc);
+        m->itemWidth=size.cx+((token&0x4000) ? 0 : 38); m->itemHeight=size.cy+6; if(m->itemHeight<20) m->itemHeight=20;
     } else {
         DRAWITEMSTRUCT *d=(DRAWITEMSTRUCT *)lp; RECT rect=d->rcItem,arrow=rect; BOOL selected=!!(d->itemState&ODS_SELECTED);
         COLORREF color=GetSysColor(d->itemState&(ODS_DISABLED|ODS_GRAYED) ? COLOR_GRAYTEXT : selected ? COLOR_HIGHLIGHTTEXT : COLOR_MENUTEXT);
         HGDIOBJ old=SelectObject(d->hDC,UiFont(NULL)); int saved=SaveDC(d->hDC); const char *tab=text;
         FillRect(d->hDC,&rect,(HBRUSH)(INT_PTR)(selected ? COLOR_HIGHLIGHT+1 : COLOR_MENU+1)); SetBkMode(d->hDC,TRANSPARENT); SetTextColor(d->hDC,color);
         while(*tab && *tab!='\t') ++tab;
-        rect.left+=(token&0x4000) ? 6 : 22; rect.right-=(token&0x4000) ? 6 : 16;
+        rect.left+=(token&0x4000) ? 0 : 22; rect.right-=(token&0x4000) ? 0 : 16;
         if(*tab) {
             UiDrawTextA(d->hDC,text,(int)(tab-text),&rect,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
             UiDrawTextA(d->hDC,tab+1,-1,&rect,DT_RIGHT|DT_VCENTER|DT_SINGLELINE|DT_NOPREFIX);
-        } else UiDrawTextA(d->hDC,text,-1,&rect,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
+        } else UiDrawTextA(d->hDC,text,-1,&rect,((token&0x4000) ? DT_CENTER : DT_LEFT)|DT_VCENTER|DT_SINGLELINE);
         if(d->itemState&ODS_CHECKED) {
             RECT mark=d->rcItem; mark.left+=3; mark.right=mark.left+GetSystemMetrics(SM_CXMENUCHECK);
             int height=GetSystemMetrics(SM_CYMENUCHECK); mark.top+=(mark.bottom-mark.top-height)/2; mark.bottom=mark.top+height;

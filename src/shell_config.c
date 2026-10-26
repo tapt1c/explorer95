@@ -18,29 +18,58 @@ DWORD StageShellExecutable(const char *source, const char *directory, char *sele
     return ERROR_FILE_EXISTS;
 }
 
+static char *Trim(char *text)
+{
+    char *end;
+    while(*text==' ' || *text=='\t') ++text;
+    end=text+lstrlenA(text);
+    while(end>text && (end[-1]==' ' || end[-1]=='\t')) --end;
+    *end=0; return text;
+}
 static DWORD ReadShell(const char *ini, char *out, DWORD capacity)
 {
-    char *section = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, 32768), *entry;
-    DWORD count, result = ERROR_INVALID_DATA;
-    if (!section) return ERROR_NOT_ENOUGH_MEMORY;
-    /* Unlike GetPrivateProfileString, section enumeration preserves enclosing
-     * quotes around a shell executable whose path contains spaces. */
-    count = GetPrivateProfileSectionA("boot", section, 32768, ini);
-    if (count >= 32766) result = ERROR_MORE_DATA;
-    else for (entry = section; *entry; entry += lstrlenA(entry) + 1) {
-        char *equal = entry;
-        while (*equal && *equal != '=') ++equal;
-        if (!*equal) continue;
-        *equal = 0;
-        if (!lstrcmpiA(entry, "shell")) {
-            if (!equal[1]) result = ERROR_INVALID_DATA;
-            else if ((DWORD)lstrlenA(equal + 1) >= capacity) result = ERROR_MORE_DATA;
-            else { lstrcpyA(out, equal + 1); result = ERROR_SUCCESS; }
-            *equal = '='; break;
-        }
-        *equal = '=';
+    HANDLE file; char *data,*line,*end; BOOL boot=FALSE;
+    DWORD size,high,count,result=ERROR_INVALID_DATA;
+    /* Read the actual boot file instead of enumerating an entire section
+     * through Win95's size-limited profile API. Do not strip command quotes. */
+    WritePrivateProfileStringA(NULL,NULL,NULL,ini);
+    file=CreateFileA(ini,GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE,NULL,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,NULL);
+    if(file==INVALID_HANDLE_VALUE) return GetLastError();
+    size=GetFileSize(file,&high);
+    if(size==INVALID_FILE_SIZE || high || size>65535) { CloseHandle(file); return ERROR_MORE_DATA; }
+    data=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,size+1);
+    if(!data) { CloseHandle(file); return ERROR_NOT_ENOUGH_MEMORY; }
+    if(!ReadFile(file,data,size,&count,NULL) || count!=size) {
+        CloseHandle(file); HeapFree(GetProcessHeap(),0,data); return ERROR_READ_FAULT;
     }
-    HeapFree(GetProcessHeap(), 0, section); return result;
+    CloseHandle(file); end=data+size;
+    for(line=data;line<end;++line) if(!*line) goto done;
+    for(line=data;line<end;) {
+        char *next=line,*key,*equal;
+        while(next<end && *next!='\r' && *next!='\n') ++next;
+        if(next<end) *next++=0;
+        key=Trim(line); line=next;
+        if(!*key || *key==';') continue;
+        if(*key=='[') {
+            equal=key+1; while(*equal && *equal!=']') ++equal;
+            boot=FALSE;
+            if(*equal) { *equal=0; boot=!lstrcmpiA(Trim(key+1),"boot"); }
+            continue;
+        }
+        if(!boot) continue;
+        equal=key; while(*equal && *equal!='=') ++equal;
+        if(!*equal) continue;
+        *equal++=0;
+        if(!lstrcmpiA(Trim(key),"shell")) {
+            char *value=Trim(equal);
+            if(!*value) break;
+            if((DWORD)lstrlenA(value)>=capacity) result=ERROR_MORE_DATA;
+            else { lstrcpyA(out,value); result=ERROR_SUCCESS; }
+            break;
+        }
+    }
+done:
+    HeapFree(GetProcessHeap(),0,data); return result;
 }
 
 /* Never restore the entire INI: other software may have changed it meanwhile.
