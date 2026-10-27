@@ -1534,7 +1534,11 @@ Rename со скрытым расширением, системные Properties
   Startup из file request, secondary shell или Log Off client; не используйте
   StartRecord для фонового автозапуска. UI-тест меняет только собственный ярлык
   в disposable Wine, вне Wine этот сценарий пропускается.
-- Только primary shell добавляет ARW_HIDE через SPI_SETMINIMIZEDMETRICS,
+- Primary shell регистрирует Desktop через динамический USER32.SetShellWindow
+  только при пустом GetShellWindow; чужой shell slot не заменяется. Уничтожение
+  собственного Desktop освобождает регистрацию. Desktop пересылает SC_TASKLIST
+  обычному обработчику панели задач, как bridge штатного трея.
+  Только primary shell добавляет ARW_HIDE через SPI_SETMINIMIZEDMETRICS,
   сохраняя прежнюю структуру. При выходе убирается собственное изменение,
   если iArrange не менялся извне; остальные текущие метрики сохраняются.
   SPIF_UPDATEINIFILE не используется. Не маскируйте свёрнутые заголовки

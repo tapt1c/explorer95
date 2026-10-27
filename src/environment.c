@@ -981,6 +981,9 @@ static LRESULT CALLBACK DesktopProc(HWND window, UINT message, WPARAM wp, LPARAM
     if(message==NATIVE_GETSHELLBROWSER) return env.closing ? 0 : (LRESULT)NativeViewShellBrowser(env.desktopView);
     RenderTraceEvent("desktop", window, message, wp, lp);
     if (env.closing) return DefWindowProcA(window, message, wp, lp);
+    if (message == WM_SYSCOMMAND && (wp & 0xfff0) == SC_TASKLIST) {
+        PostMessageA(env.bar, message, wp, lp); return 0;
+    }
     if (message == WM_LBUTTONDBLCLK) return 0;
     if (message == WM_WINDOWPOSCHANGING) {
         WINDOWPOS *pos = (WINDOWPOS *)lp;
@@ -1273,16 +1276,6 @@ HWND EnvironmentCreate(const EnvironmentHost *callbacks)
     NativeViewSetHost(callbacks); PaintColorsChanged(&desktopColors); EnvRefreshStartItems();
     SystemParametersInfoA(SPI_GETWORKAREA, 0, &env.originalArea, 0);
     env.primary = FindWindowA("Shell_TrayWnd", NULL) == NULL;
-    /* Win95 otherwise paints minimized windows as caption bars on Desktop.
-     * Own only ARW_HIDE for this shell session; leave the user's other metrics. */
-    if(env.primary) {
-        ZeroMemory(&originalMinimized,sizeof(originalMinimized)); originalMinimized.cbSize=sizeof(originalMinimized);
-        if(SystemParametersInfoA(SPI_GETMINIMIZEDMETRICS,sizeof(originalMinimized),&originalMinimized,0) &&
-           !(originalMinimized.iArrange&ARW_HIDE)) {
-            MINIMIZEDMETRICS hidden=originalMinimized; hidden.iArrange|=ARW_HIDE;
-            minimizedChanged=SystemParametersInfoA(SPI_SETMINIMIZEDMETRICS,sizeof(hidden),&hidden,0);
-        }
-    }
     if (!EnvRegister("Explorer95.Session",SessionProc,NULL,0) ||
         !EnvRegister("Explorer95.Desktop", DesktopProc, (HBRUSH)(COLOR_BACKGROUND + 1), 0) ||
         !EnvRegister("Explorer95.Taskbar", BarProc, (HBRUSH)(COLOR_BTNFACE + 1), 0) || !EnvRegister("Explorer95.QuickGrip", QuickGripProc, NULL, 0) || !PropertiesRegister()) return NULL;
@@ -1300,6 +1293,31 @@ HWND EnvironmentCreate(const EnvironmentHost *callbacks)
     env.bar = CreateWindowExA(WS_EX_TOOLWINDOW | (env.options.topmost ? WS_EX_TOPMOST : 0), "Explorer95.Taskbar", "Explorer95", WS_POPUP | WS_CLIPCHILDREN,
         0, 0, 640, 30, NULL, NULL, env.host.instance, NULL);
     if (!env.desktop || !env.bar) return NULL;
+    if(env.primary) {
+        typedef HWND (WINAPI *GetShell)(void);
+        typedef BOOL (WINAPI *SetShell)(HWND);
+        HMODULE user=GetModuleHandleA("user32.dll");
+        GetShell getShell=(GetShell)(void *)GetProcAddress(user,"GetShellWindow");
+        SetShell setShell=(SetShell)(void *)GetProcAddress(user,"SetShellWindow");
+        BOOL saved,applied=FALSE;
+        ZeroMemory(&originalMinimized,sizeof(originalMinimized)); originalMinimized.cbSize=sizeof(originalMinimized);
+        saved=SystemParametersInfoA(SPI_GETMINIMIZEDMETRICS,sizeof(originalMinimized),&originalMinimized,0);
+        RenderTraceShell("shell.minimized.read",saved ? S_OK : E_FAIL,GetLastError(),originalMinimized.iArrange);
+        /* Original Win95 exports SetShellWindow. Claim only an empty shell
+         * slot, never another desktop. Destroying our HWND releases the slot. */
+        if(getShell && setShell && !getShell()) {
+            BOOL registered=setShell(env.desktop);
+            RenderTraceShell("shell.register",registered ? S_OK : E_FAIL,GetLastError(),getShell()==env.desktop);
+        }
+        if(saved) {
+            MINIMIZEDMETRICS hidden=originalMinimized; hidden.iArrange|=ARW_HIDE;
+            /* Reapply after registering the shell, even when the saved
+             * metrics already contain the flag. */
+            applied=SystemParametersInfoA(SPI_SETMINIMIZEDMETRICS,sizeof(hidden),&hidden,0);
+            minimizedChanged=applied && !(originalMinimized.iArrange&ARW_HIDE);
+        }
+        RenderTraceShell("shell.minimized.apply",applied ? S_OK : E_FAIL,GetLastError(),GetSystemMetrics(SM_ARRANGE));
+    }
     env.startButton = EnvControl(env.bar, "BUTTON", "Start", BS_OWNERDRAW, ID_START);
     desktopButton = QuickButton("Show / Restore Desktop", ID_SHOWDESKTOP);
     desktopEdgeButton = QuickButton("Show / Restore Desktop", ID_SHOWDESKTOP_EDGE);
