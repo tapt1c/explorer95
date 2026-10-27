@@ -71,7 +71,7 @@ static void SearchCloseChild(HWND window)
     GetWindowThreadProcessId(window,&pid); process=OpenProcess(SYNCHRONIZE,FALSE,pid);
     Check(process!=NULL,"observe termination of only the launched search fixture process");
     SendMessageA(window,WM_CLOSE,0,0);
-    Check(WaitForSingleObject(process,4000)==WAIT_OBJECT_0,"the launched search fixture exits before the next execution"); CloseHandle(process);
+    Check(WaitForGuiProcess(process,4000)==WAIT_OBJECT_0,"the launched search fixture exits before the next execution"); CloseHandle(process);
 }
 static HWND SearchHistoryOpen(HWND bar)
 {
@@ -83,6 +83,14 @@ static HWND SearchHistoryOpen(HWND bar)
         "search uses a native edit without a drop-down arrow or hidden combo list");
     SendMessageA(edit,WM_KEYDOWN,VK_ESCAPE,0); GetWindowRect(edit,&field); PanelClick(edit,field.right-field.left-8);
     Check(SearchStatus("Search history")!=NULL,"the former arrow area is editable and opens history like the rest of the field");
+    SendMessageA(edit,WM_KEYDOWN,VK_ESCAPE,0); GetClientRect(edit,&field);
+    /* Native EDIT receives WM_LBUTTONDBLCLK instead of a second WM_LBUTTONDOWN.
+     * Keep this deterministic even when CI's real clicks straddle that limit. */
+    SendMessageA(edit,WM_LBUTTONDBLCLK,MK_LBUTTON,MAKELPARAM(30,field.bottom/2));
+    SendMessageA(edit,WM_LBUTTONUP,0,MAKELPARAM(30,field.bottom/2));
+    Check(SearchStatus("Search history")!=NULL,"double-clicking the search field also opens history");
+    { DWORD selection=(DWORD)SendMessageA(edit,EM_GETSEL,0,0);
+      Check(HIWORD(selection)>LOWORD(selection),"opening history preserves native double-click word selection"); }
     SendMessageA(edit,WM_KEYDOWN,VK_F4,0);
     Check(!IsWindowVisible(FindWindowA("Explorer95.TaskbarSearchResults",NULL)),"F4 dismisses click-open history");
     SendMessageA(edit,WM_KEYDOWN,VK_F4,0);

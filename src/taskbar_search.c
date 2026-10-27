@@ -508,7 +508,7 @@ static void DrawStatus(const DRAWITEMSTRUCT *item)
 }
 static LRESULT CALLBACK EditProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
 {
-    if(message==WM_LBUTTONDOWN) {
+    if(message==WM_LBUTTONDOWN || message==WM_LBUTTONDBLCLK) {
         LRESULT result=CallWindowProcA(search.original,window,message,wp,lp);
         /* Keep native caret/selection handling and an active result list.
          * A fresh click anywhere in the field exposes the saved history. */
