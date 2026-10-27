@@ -16,6 +16,16 @@ Fonts и сохраняет отказ для остальных апплето�
 но пользователь подтвердил, что исходная ошибка Win95 осталась. Нужна
 трассировка настоящих текста ComboBox/EDIT и последовательности уведомлений;
 не объявлять всю проблему исправленной по одному Wine-сценарию.
+Подготовлен address88-trace.iso с opt-in событиями address.begin/built/layout,
+address.notify и address.edit.before/after. В a — код CBN/WM либо current index;
+в b — flags: 1 rebuilding, 2 свой dropdown, 4 pending, 8 native dropped,
+16 ComboBox text==model path, 32 EDIT text==model path, 64 ComboBox==EDIT,
+128 UiGetWindowText==native ComboBox, 256 selection valid, 512 edit focus.
+Пути и введённый текст не записываются. Запрошен гостевой TEMP\EX95REND.LOG
+на Desktop хоста как EX95ADDR.LOG после воспроизведения.
+Browser и language прошли; отдельная регрессия подтверждает literal Search
+при отмене в русском интерфейсе. Для чтения текста чужого ComboBox тест
+использует WM_GETTEXT, а не GetWindowText (последний читает лишь caption).
 
 ## Закрыто: Log Off после alpha.86
 

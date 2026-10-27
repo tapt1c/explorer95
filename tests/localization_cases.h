@@ -376,6 +376,12 @@ static void LanguageRestartTests(const char *directory,const char *executable)
     {
         HWND browser=WaitFor(BROWSER_CLASS,NULL); Check(browser!=NULL,"the Russian shell opens its own filesystem browser"); PumpFor(400);
         Check(LanguageWideEqual(GetDlgItem(browser,ID_GO),L"\u041f\u0435\u0440\u0435\u0445\u043e\u0434"),"the Explorer address bar uses Russian commands");
+        { HWND address=GetDlgItem(browser,ID_ADDRESS); char typed[64];
+          SetWindowTextA(address,"Search"); SendMessageA(address,CB_SHOWDROPDOWN,TRUE,0);
+          SendMessageA(address,CB_SETCURSEL,0,0); PostMessageA(address,WM_KEYDOWN,VK_ESCAPE,0); PumpFor(80);
+          SendMessageA(address,WM_GETTEXT,sizeof(typed),(LPARAM)typed);
+          Check(!lstrcmpA(typed,"Search"),"cancelling the Russian address dropdown preserves literal input equal to an English UI label");
+          Navigate(browser,folder); }
         BrowserToolbarGeometry(browser,process.hProcess,16);
         HWND list=GetDlgItem(browser,ID_FILES); int index=NativeItemIndex(list,"Copy");
         Check(index>=0,"the Russian Explorer preserves an actual filename named Copy"); NativeSelectItem(list,index);

@@ -20,6 +20,7 @@ static HWND child;
 static char programsShortcut[MAX_PATH];
 static void PumpFor(DWORD duration);
 static void NativeSelectItem(HWND list, int index);
+static int NativeItemIndex(HWND list, const char *name);
 typedef enum TestGroup { GROUP_FULL, GROUP_CORE, GROUP_MENU, GROUP_BROWSER, GROUP_LANGUAGE } TestGroup;
 
 void *memset(void *destination, int value, size_t count)

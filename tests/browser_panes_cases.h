@@ -292,6 +292,38 @@ static void BrowserTransitionTests(HWND browser, BOOL native)
     Check(!IsWindowVisible(caption) && IsWindowVisible(GetDlgItem(browser,ID_BROWSER_SIDEBAR)) &&
         PaneText(browser,"Other Places"), "the caption close button returns to Common Tasks");
 }
+static void BrowserAddressLocationSyncTests(HWND browser,const char *fixture)
+{
+    HWND address=GetDlgItem(browser,ID_ADDRESS),edit=FindWindowExA(address,NULL,"EDIT",NULL);
+    char sub[MAX_PATH],text[MAX_PATH],typed[MAX_PATH]; int commands[]={ID_UP,ID_BACK,ID_FORWARD},i;
+    wsprintfA(sub,"%s\\sub",fixture); Navigate(browser,sub);
+    SendMessageA(address,CB_SHOWDROPDOWN,TRUE,0); SendMessageA(address,CB_SHOWDROPDOWN,FALSE,0); PumpFor(40);
+    for(i=0;i<3;++i) {
+        const char *expected=i==1 ? sub : fixture;
+        SendMessageA(browser,WM_COMMAND,commands[i],0);
+        /* Original Win95 can finish an old ComboBox interaction after the
+         * folder transaction. A stale cancel must not restore its snapshot. */
+        SendMessageA(browser,WM_COMMAND,MAKEWPARAM(ID_ADDRESS,CBN_SELENDCANCEL),(LPARAM)address); PumpFor(30);
+        SendMessageA(address,WM_GETTEXT,MAX_PATH,(LPARAM)text); SendMessageA(edit,WM_GETTEXT,MAX_PATH,(LPARAM)typed);
+        Check(!lstrcmpiA(text,expected) && !lstrcmpiA(typed,expected),
+            "Up, Back and Forward keep the displayed address synchronized despite a late native dropdown cancellation");
+        if(i!=1) Check(NativeItemIndex(GetDlgItem(browser,ID_FILES),"sub")>=0,
+            "the visible folder contents agree with the updated parent address");
+    }
+    Navigate(browser,sub); SetWindowTextA(address,"unfinished input"); SendMessageA(address,CB_SHOWDROPDOWN,TRUE,0);
+    SendMessageA(browser,WM_COMMAND,ID_UP,0);
+    SendMessageA(browser,WM_COMMAND,MAKEWPARAM(ID_ADDRESS,CBN_SELENDCANCEL),(LPARAM)address); PumpFor(40);
+    SendMessageA(address,WM_GETTEXT,MAX_PATH,(LPARAM)text);
+    Check(!lstrcmpiA(text,fixture),"navigation supersedes the typed snapshot of an interrupted address dropdown");
+    SendMessageA(address,CB_SHOWDROPDOWN,TRUE,0);
+    i=(int)SendMessageA(address,CB_FINDSTRINGEXACT,(WPARAM)-1,(LPARAM)sub);
+    Check(i>=0,"the already visited child is available as an owned dropdown destination");
+    SendMessageA(address,CB_SETCURSEL,i,0);
+    SendMessageA(browser,WM_COMMAND,MAKEWPARAM(ID_ADDRESS,CBN_SELENDOK),(LPARAM)address);
+    Navigate(browser,fixture); PumpFor(60);
+    SendMessageA(address,WM_GETTEXT,MAX_PATH,(LPARAM)text);
+    Check(!lstrcmpiA(text,fixture),"a newer Go command supersedes an older queued dropdown destination");
+}
 static void BrowserAddressTests(HWND browser, const char *fixture)
 {
     HWND address = GetDlgItem(browser, ID_ADDRESS), edit = FindWindowExA(address, NULL, "EDIT", NULL), icon = GetDlgItem(edit, 475);
@@ -352,7 +384,7 @@ static void BrowserAddressTests(HWND browser, const char *fixture)
     SendMessageA(browser, WM_COMMAND, ID_SHOW_ADDRESS, 0); Navigate(browser, "sub");
     SendMessageA(address, WM_GETTEXT, MAX_PATH, (LPARAM)text);
     Check(!lstrcmpiA(text, path) && IsWindowVisible(icon), "address editing still accepts relative paths after dropdown navigation");
-    Navigate(browser, fixture);
+    Navigate(browser, fixture); BrowserAddressLocationSyncTests(browser,fixture);
 }
 static void __attribute__((noinline)) BrowserAddressProgramTests(HWND browser,const char *fixture)
 {

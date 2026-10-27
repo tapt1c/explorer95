@@ -2,6 +2,7 @@
  * No ComboBoxEx/IE dependency; opening the list never enumerates a drive. */
 #define WIN32_LEAN_AND_MEAN
 #include "browser_internal.h"
+#include "render_trace.h"
 #define EX95_LOCALIZE_UI
 #include "localization.h"
 
@@ -13,12 +14,32 @@ struct BrowserAddress {
     HICON images[10], currentIcon;
     AddressRow *rows[ADDRESS_LIMIT];
     int count, current;
-    BOOL rebuilding, pending;
+    BOOL rebuilding, pending, dropdown;
     BrowserPlace destination;
     char dropText[MAX_PATH];
     PaintBuffer buffer;
 };
 static const char property[] = "Explorer95.Address";
+static void TraceAddress(Browser *browser,const char *stage,UINT code)
+{
+    BrowserAddress *address=browser->location; char combo[MAX_PATH],edit[MAX_PATH],cached[MAX_PATH]; DWORD flags=0;
+    if(!address || !address->edit || !browser->address || !RenderTraceRequested()) return;
+    combo[0]=edit[0]=cached[0]=0;
+    SendMessageA(browser->address,WM_GETTEXT,MAX_PATH,(LPARAM)combo);
+    SendMessageA(address->edit,WM_GETTEXT,MAX_PATH,(LPARAM)edit);
+    GetWindowTextA(browser->address,cached,MAX_PATH);
+    if(address->rebuilding) flags|=1;
+    if(address->dropdown) flags|=2;
+    if(address->pending) flags|=4;
+    if(SendMessageA(browser->address,CB_GETDROPPEDSTATE,0,0)) flags|=8;
+    if(browser->path[0] && !lstrcmpA(combo,browser->path)) flags|=16;
+    if(browser->path[0] && !lstrcmpA(edit,browser->path)) flags|=32;
+    if(!lstrcmpA(combo,edit)) flags|=64;
+    if(!lstrcmpA(combo,cached)) flags|=128;
+    if(SendMessageA(browser->address,CB_GETCURSEL,0,0)>=0) flags|=256;
+    if(GetFocus()==address->edit) flags|=512;
+    RenderTraceShell(stage,S_OK,code,flags);
+}
 static BOOL SamePlace(const BrowserPlace *place, const char *path, LPCITEMIDLIST pidl)
 { return path && path[0] ? !lstrcmpiA(place->path, path) : !place->path[0] && BrowserSamePidl(place->pidl, pidl); }
 static int Add(Browser *browser, const char *label, const char *path, LPCITEMIDLIST pidl, int image, int indent)
@@ -118,12 +139,16 @@ UINT BrowserAddressHeight(Browser *browser)
 static LRESULT CALLBACK AddressProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
 {
     Browser *browser = (Browser *)GetPropA(window, property);
+    LRESULT result; BOOL traced=message==WM_SETTEXT || message==WM_SETFOCUS || message==WM_KILLFOCUS;
     if (!browser || !browser->location) return DefWindowProcA(window, message, wp, lp);
     /* The native edit owns the icon, so ComboBox may move or raise the edit
      * without covering a sibling icon. Forward only the child's drawing. */
     if (message == WM_DRAWITEM && ((DRAWITEMSTRUCT *)lp)->CtlID == ID_ADDRESS_ICON)
         return SendMessageA(browser->window, message, wp, lp);
-    return CallWindowProcA(browser->location->original, window, message, wp, lp);
+    if(traced) TraceAddress(browser,"address.edit.before",message);
+    result=CallWindowProcA(browser->location->original, window, message, wp, lp);
+    if(traced && (Browser *)GetPropA(window,property)==browser) TraceAddress(browser,"address.edit.after",message);
+    return result;
 }
 BOOL BrowserAddressCreate(Browser *browser)
 {
@@ -160,12 +185,21 @@ void BrowserAddressLayout(Browser *browser)
     }
     if (y < 0) y = 0;
     EnvMoveControl(address->icon, 0, y, 18, 16);
+    TraceAddress(browser,"address.layout",0);
 }
 void BrowserAddressUpdate(Browser *browser)
 {
     BrowserAddress *address = browser->location; SHFILEINFOA info; HICON old;
     if (!address) return;
+    TraceAddress(browser,"address.begin",0);
+    /* A committed location supersedes both the dropdown's edit snapshot and
+     * any queued selection. Win95 may deliver its cancel after navigation. */
+    address->dropdown=FALSE; address->pending=FALSE;
+    EnvFree(address->destination.pidl); address->destination.pidl=NULL;
+    address->destination.path[0]=0; address->rebuilding=TRUE;
+    SendMessageA(browser->address,CB_SHOWDROPDOWN,FALSE,0);
     Build(browser); ZeroMemory(&info, sizeof(info));
+    TraceAddress(browser,"address.built",address->current);
     SHGetFileInfoA(browser->path[0] ? browser->path : (LPCSTR)browser->pidl, 0, &info, sizeof(info),
         SHGFI_ICON | SHGFI_SMALLICON | (browser->path[0] ? 0 : SHGFI_PIDL));
     old = address->currentIcon; address->currentIcon = info.hIcon; if (old) DestroyIcon(old);
@@ -197,12 +231,18 @@ BOOL BrowserAddressDraw(Browser *browser, const DRAWITEMSTRUCT *draw)
 void BrowserAddressCommand(Browser *browser, int code)
 {
     BrowserAddress *address = browser->location; int selected;
+    if(address) TraceAddress(browser,"address.notify",code);
     if (!address || address->rebuilding || browser->closing) return;
     if (code == CBN_DROPDOWN) {
+        address->dropdown=FALSE;
         GetWindowTextA(browser->address, address->dropText, MAX_PATH); Build(browser);
-        SetWindowTextA(browser->address, address->dropText);
-    } else if (code == CBN_SELENDCANCEL) SetWindowTextA(browser->address, address->dropText);
+        UiSetLiteralWindowTextA(browser->address, address->dropText); address->dropdown=TRUE;
+    } else if (code == CBN_SELENDCANCEL) {
+        if(!address->dropdown) return;
+        address->dropdown=FALSE; UiSetLiteralWindowTextA(browser->address, address->dropText);
+    }
     else if (code == CBN_SELENDOK) {
+        address->dropdown=FALSE;
         selected = (int)SendMessageA(browser->address, CB_GETCURSEL, 0, 0);
         if (selected >= 0 && selected < address->count) {
             BrowserPlace *place = &address->rows[selected]->target;
@@ -216,7 +256,7 @@ void BrowserAddressCommand(Browser *browser, int code)
                 error = GetLastError(); if (!error) error = ERROR_NOT_ENOUGH_MEMORY;
             }
             address->pending = FALSE; EnvFree(address->destination.pidl); address->destination.pidl = NULL;
-            SetWindowTextA(browser->address, address->dropText);
+            UiSetLiteralWindowTextA(browser->address, address->dropText);
             BrowserError(browser->window, "Cannot queue the selected folder.", error);
         }
     }
