@@ -1546,8 +1546,9 @@ Rename со скрытым расширением, системные Properties
   В primary Win9x дополнительно используется штатная регистрация SHELL32 ordinal
   181, command 1. Панель отвечает TRUE на SHELLHOOK/HSHELL_GETMINRECT: Win95
   сама убирает свёрнутое окно за экран. lParam не читается и не записывается:
-  legacy RECT16 принадлежит Shell32. Command 3 не используется, роль системного
-  task list не перехватывается. При выходе command 0 снимает только собственную
+  legacy RECT16 принадлежит Shell32. Command 3 не используется; HSHELL_TASKMAN
+  направляется существующему SC_TASKLIST с защитой от двойного переключения Start.
+  При выходе command 0 снимает только собственную
   регистрацию до уничтожения HWND; secondary shell и NT этот путь не включают.
 
 - `[Taskbar] SearchBox` управляет отдельным `Explorer95.SearchBox` рядом с Start;

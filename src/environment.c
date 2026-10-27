@@ -1079,6 +1079,9 @@ static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
         if(wp==HSHELL_GETMINRECT && !env.closing) {
             RenderTraceShell("shell.minimized.handled",S_OK,0,0); return TRUE;
         }
+        if(wp==HSHELL_TASKMAN && !env.closing) {
+            PostMessageA(window,WM_SYSCOMMAND,SC_TASKLIST,0); return TRUE;
+        }
         return 0;
     }
     LRESULT menuResult;
