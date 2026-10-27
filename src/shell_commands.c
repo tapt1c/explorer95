@@ -32,6 +32,25 @@ HRESULT ShellCommandMenu(IContextMenu *context, HMENU menu)
     }
     return result;
 }
+void ShellFolderMenuUnique(IContextMenu *context,HMENU menu)
+{
+    UINT kept[2]={0}; int i=0;
+    /* Win95 can merge Folder and a CLSID/Directory registration without
+     * coalescing inherited verbs. Keep IDs and unrelated extension commands. */
+    while(i<GetMenuItemCount(menu)) {
+        UINT id=GetMenuItemID(menu,i); char verb[80]={0}; int which=-1;
+        if(id && id<0x7000 && !GetSubMenu(menu,i) &&
+           SUCCEEDED(IContextMenu_GetCommandString(context,id-1,GCS_VERBA,NULL,verb,sizeof(verb)-1))) {
+            if(!lstrcmpiA(verb,"open")) which=0;
+            else if(!lstrcmpiA(verb,"explore")) which=1;
+        }
+        if(which>=0 && kept[which]) {
+            BOOL wasDefault=GetMenuDefaultItem(menu,FALSE,0)==id;
+            DeleteMenu(menu,i,MF_BYPOSITION);
+            if(wasDefault) SetMenuDefaultItem(menu,kept[which],FALSE);
+        } else { if(which>=0) kept[which]=id; ++i; }
+    }
+}
 
 static UINT FindCommand(IContextMenu *context, HMENU menu, const char *verb, BOOL enabledOnly, int depth)
 {

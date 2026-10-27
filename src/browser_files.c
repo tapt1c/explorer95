@@ -2,6 +2,7 @@
 #include "browser_internal.h"
 #include "render_trace.h"
 #include "file_operations.h"
+#include "shell_commands.h"
 #define EX95_LOCALIZE_UI
 #include "localization.h"
 #undef DrawTextA
@@ -434,10 +435,26 @@ void BrowserFilesTransfer(Browser *browser, BOOL move)
     }
     EnvFree(paths); BrowserUpdate(browser);
 }
+static void RenameCreated(Browser *browser,const char *path)
+{
+    const char *name=path,*p; int i,count;
+    if(!path[0]) return;
+    for(p=path;*p;++p) if(*p=='\\' || *p=='/') name=p+1;
+    BrowserRefresh(browser); count=ListView_GetItemCount(browser->files);
+    for(i=0;i<count;++i) {
+        FileEntry *entry=Selected(browser,i);
+        if(entry && !lstrcmpiA(entry->name,name)) {
+            ListView_SetItemState(browser->files,-1,0,LVIS_SELECTED|LVIS_FOCUSED);
+            ListView_SetItemState(browser->files,i,LVIS_SELECTED|LVIS_FOCUSED,LVIS_SELECTED|LVIS_FOCUSED);
+            ListView_EnsureVisible(browser->files,i,FALSE); SetFocus(browser->files);
+            ListView_EditLabel(browser->files,i); break;
+        }
+    }
+}
 void BrowserFilesContext(Browser *browser, LPARAM coordinates)
 {
     POINT point; HMENU menu = CreatePopupMenu(); IContextMenu *context = NULL; UINT command;
-    int newPosition = -1; BOOL background = FALSE;
+    int newPosition = -1; BOOL background = FALSE,rename=FALSE; char created[MAX_PATH]={0};
     if (browser->busy || browser->newMenu) { DestroyMenu(menu); return; }
     if (coordinates == (LPARAM)-1) { RECT rect; GetWindowRect(browser->files, &rect); point.x = rect.left + 20; point.y = rect.top + 20; }
     else {
@@ -449,6 +466,10 @@ void BrowserFilesContext(Browser *browser, LPARAM coordinates)
     if (!background && ListView_GetSelectedCount(browser->files)) context = SelectionContext(browser);
     if (context) {
         IContextMenu_QueryContextMenu(context, menu, 0, 1, 0x6fff, CMF_NORMAL | CMF_CANRENAME);
+        if(ListView_GetSelectedCount(browser->files)==1) {
+            FileEntry *entry=Selected(browser,ListView_GetNextItem(browser->files,-1,LVNI_SELECTED));
+            if(entry && (entry->attributes&FILE_ATTRIBUTE_DIRECTORY)) ShellFolderMenuUnique(context,menu);
+        }
         IContextMenu_QueryInterface(context, &IID_IContextMenu2, (void **)&browser->context);
     } else {
         AppendMenuA(menu, MF_STRING, ID_VIEWS, "Views..."); AppendMenuA(menu, MF_STRING, ID_REFRESH, "Refresh");
@@ -465,13 +486,14 @@ void BrowserFilesContext(Browser *browser, LPARAM coordinates)
     }
     browser->busy = TRUE;
     command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, 0, browser->window, NULL);
-    if (command && ShellNewInvoke(browser->newMenu, command, browser->window, NULL))
-        PostMessageA(browser->window, WM_BROWSER_REFRESH, 0, 0);
+    if (command && ShellNewInvoke(browser->newMenu, command, browser->window, created)) {
+        if(!created[0]) PostMessageA(browser->window, WM_BROWSER_REFRESH, 0, 0);
+    }
     else if (command && context) {
         char verb[80]; CMINVOKECOMMANDINFO invoke; verb[0] = 0;
         IContextMenu_GetCommandString(context, command - 1, GCS_VERBA, NULL, verb, sizeof(verb));
         if (!lstrcmpiA(verb, "open") || !lstrcmpiA(verb, "explore")) BrowserFilesOpen(browser);
-        else if (!lstrcmpiA(verb, "rename")) BrowserFilesCommand(browser, ID_RENAME);
+        else if (!lstrcmpiA(verb, "rename")) rename=TRUE;
         else {
             ZeroMemory(&invoke, sizeof(invoke)); invoke.cbSize = sizeof(invoke); invoke.hwnd = browser->window;
             invoke.lpVerb = MAKEINTRESOURCEA(command - 1); invoke.nShow = SW_SHOWNORMAL;
@@ -484,6 +506,9 @@ void BrowserFilesContext(Browser *browser, LPARAM coordinates)
     ShellNewDestroy(browser->newMenu); browser->newMenu = NULL;
     browser->busy = FALSE;
     DestroyMenu(menu);
+    /* Label editing must start after the menu's busy guard and COM lifetime. */
+    if(rename) BrowserFilesCommand(browser,ID_RENAME);
+    if(created[0]) RenameCreated(browser,created);
 }
 void BrowserFilesCommand(Browser *browser, int command)
 {
@@ -516,7 +541,7 @@ void BrowserFilesCommand(Browser *browser, int command)
         for (i = 0; i < 1000; ++i) {
             if (i) wsprintfA(name, "New Folder (%d)", i + 1); else lstrcpyA(name, "New Folder");
             if (!EnvJoin(path, browser->path, name)) return;
-            if (CreateDirectoryA(path, NULL)) { BrowserRefresh(browser); return; }
+            if (CreateDirectoryA(path, NULL)) { RenameCreated(browser,path); return; }
             if (GetLastError() != ERROR_ALREADY_EXISTS) { BrowserError(browser->window, "Cannot create a folder.", GetLastError()); return; }
         }
     }

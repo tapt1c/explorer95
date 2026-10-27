@@ -19,6 +19,7 @@ static PROCESS_INFORMATION process;
 static HWND child;
 static char programsShortcut[MAX_PATH];
 static void PumpFor(DWORD duration);
+static HWND WaitFor(const char *kind,const char *title);
 static void NativeSelectItem(HWND list, int index);
 static int NativeItemIndex(HWND list, const char *name);
 typedef enum TestGroup { GROUP_FULL, GROUP_CORE, GROUP_MENU, GROUP_BROWSER, GROUP_LANGUAGE } TestGroup;
@@ -1174,6 +1175,7 @@ static void PumpFor(DWORD duration)
 #include "backlog_menu_cases.h"
 #include "shutdown_dos_cases.h"
 #include "session_logoff_cases.h"
+#include "shell_startup_cases.h"
 #include "task_groups_cases.h"
 #include "task_switch_cases.h"
 #include "browser_panes_cases.h"
@@ -2008,8 +2010,17 @@ void start(void)
     if (group == GROUP_FULL || group == GROUP_CORE || group == GROUP_MENU) { ShutdownDosTests(settingsDir); SessionLogoffTests(settingsDir); }
     if (group != GROUP_BROWSER) { LayoutTests(); HistoryTests(settingsDir, module, settings); ShellFeatureTests(); }
     if (group == GROUP_FULL || group == GROUP_CORE) { PaintTests(); ConfigTests(settingsDir); DesktopIconTests(settingsDir); LanguageTests(settingsDir); NativeRunTests(); FolderHandlerTests(module,settings); FolderSelectionTests(); DragDataTests(); NativeViewMessageTests(); TrayMirrorTests(); TrayMirrorCrossProcessTests(); }
+    if(group==GROUP_BROWSER) {
+        Check(SUCCEEDED(OleInitialize(NULL)),"initialize the native item-action regression host");
+        HWND parent=CreateWindowA("STATIC","Native item actions",WS_OVERLAPPEDWINDOW|WS_CLIPCHILDREN|WS_VISIBLE,0,0,400,300,NULL,NULL,GetModuleHandleA(NULL),NULL);
+        Check(parent!=NULL,"create only our visible native item-action fixture");
+        NativeSortTests(parent); ShellEditContractTests(parent);
+        DestroyWindow(parent); OleUninitialize();
+    }
     if(group==GROUP_FULL || group==GROUP_MENU || group==GROUP_CORE) { TaskbarQueryTests(settingsDir,module); TaskbarLinksTests(settingsDir,module); TaskMenuNativeTests(); }
+    ShellStartupTests(settingsDir);
     if (group == GROUP_CORE) goto cleanup;
+    if(group==GROUP_MENU || group==GROUP_FULL) ShellStartupUiTests(settingsDir,executable,module);
     if(group==GROUP_MENU || group==GROUP_FULL) TaskbarAppearanceMetricsTest(settingsDir,executable);
     if (group == GROUP_MENU) NativeDesktopIconSizeTests();
     if(group==GROUP_MENU || group==GROUP_FULL) WritePrivateProfileStringA("Desktop","IconSize","16",settings);

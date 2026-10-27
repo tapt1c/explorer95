@@ -16,6 +16,7 @@ typedef struct EnvironmentHost {
 } EnvironmentHost;
 
 HWND EnvironmentCreate(const EnvironmentHost *host);
+void EnvironmentStartSession(void);
 BOOL EnvironmentTranslate(MSG *message);
 BOOL EnvironmentOpenRequest(const FolderRequest *request);
 void EnvironmentRecordLaunch(const char *path, const char *arguments);

@@ -69,9 +69,9 @@ static void TaskbarDesktopEdgeLayout(HWND bar)
         GetWindowRect(bar,&bounds); GetWindowRect(tail,&button); GetWindowRect(tray,&notifications);
         GetWindowRect(GetDlgItem(tray,1),&clock);
         Check(IsWindowVisible(tail) && !IntersectRect(&overlap,&button,&notifications),"desktop edge button remains outside the tray on all four docks and multiple rows");
-        Check(vertical ? button.bottom==bounds.bottom && button.bottom-button.top==SHOW_DESKTOP_EXTENT && button.top>=notifications.bottom :
-            button.right==bounds.right && button.right-button.left==SHOW_DESKTOP_EXTENT && button.left>=notifications.right,
-            "desktop edge button touches the screen end after notifications");
+        Check(vertical ? button.bottom==bounds.bottom-SHOW_DESKTOP_GAP && button.bottom-button.top==SHOW_DESKTOP_EXTENT && button.top>=notifications.bottom :
+            button.right==bounds.right-SHOW_DESKTOP_GAP && button.right-button.left==SHOW_DESKTOP_EXTENT && button.left>=notifications.right,
+            "desktop edge button keeps the requested two-pixel inset after notifications");
         Check(clock.right-clock.left==58 && clock.bottom-clock.top==20,"docking and multiple rows preserve the clock dimensions");
     }
     SendMessageA(bar,WM_COMMAND,ID_ROWS_MENU+1,0);
@@ -108,7 +108,7 @@ static void TaskbarAppearanceTests(HWND bar,const char *settings)
     GetWindowRect(tray,&trayAfter);
     Check(IsWindow(properties) && !IsWindowVisible(tail) && !GetPrivateProfileIntA("Taskbar","ShowDesktopButton",1,settings),
         "Apply hides the desktop button and persists the preference without closing settings");
-    Check(trayAfter.right-trayBefore.right==SHOW_DESKTOP_EXTENT && trayAfter.right-trayAfter.left==trayBefore.right-trayBefore.left,
+    Check(trayAfter.right-trayBefore.right==SHOW_DESKTOP_EXTENT+SHOW_DESKTOP_GAP && trayAfter.right-trayAfter.left==trayBefore.right-trayBefore.left,
         "hiding the edge button returns its space without resizing the tray");
     SendMessageA(properties,WM_COMMAND,IDCANCEL,0); properties=OpenSettings(bar);
     Check(SendDlgItemMessageA(properties,ID_SHOWDESKTOP_EDGE,BM_GETCHECK,0,0)==BST_UNCHECKED,"reopening settings retains the applied desktop-button preference");

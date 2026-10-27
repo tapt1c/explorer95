@@ -30,6 +30,7 @@ typedef struct NativeSelection {
 BOOL NativeViewSelection(NativeView *view, NativeSelection *selection);
 char *NativeViewSelectedPaths(NativeView *view);
 IContextMenu *NativeViewSelectionContext(NativeView *view);
+BOOL NativeViewSelectionMenu(NativeView *view,POINT point,HWND owner);
 BOOL NativeViewIsRecycleBin(NativeView *view);
 void NativeViewStateHandled(NativeView *view);
 BOOL NativeViewTakeRefresh(NativeView *view);

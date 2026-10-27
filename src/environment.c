@@ -11,6 +11,7 @@
 #include "task_switch.h"
 #include "shell_sounds.h"
 #include "welcome.h"
+#include "shell_startup.h"
 #define EX95_LOCALIZE_UI
 #include "localization.h"
 
@@ -36,12 +37,27 @@ static BOOL hotkeyDesktop, hotkeyStart;
 static BOOL hotkeyLeftWin, hotkeyRightWin, winPending, winUsed;
 static PaintColors desktopColors;
 static BOOL changingDesktopColors;
+static MINIMIZEDMETRICS originalMinimized;
+static BOOL minimizedChanged;
+static ShellStartup sessionStartup;
+static BOOL startupStarted;
+static BOOL startupLaunching;
 /* Internal wakeups carry no pointer: only validated WM_COPYDATA payloads enter
  * this bounded, process-owned queue. External WM_APP messages cannot free data. */
 static FolderRequest folderRequests[16];
 static UINT folderHead, folderCount;
 static void QuickTip(HWND button, const char *text, BOOL remove);
 static LRESULT CALLBACK TaskButtonProc(HWND window,UINT message,WPARAM wp,LPARAM lp);
+void EnvironmentStartSession(void)
+{
+    char user[MAX_PATH]={0},common[MAX_PATH]={0};
+    if(!env.primary || startupStarted || env.closing) return;
+    startupStarted=TRUE;
+    if(!env.host.specialPath(CSIDL_STARTUP,user)) user[0]=0;
+    if(!env.host.specialPath(CSIDL_COMMON_STARTUP,common)) common[0]=0;
+    ShellStartupInit(&sessionStartup,user,common);
+    if(!PostMessageA(env.bar,WM_APP+36,0,0)) ShellStartupClose(&sessionStartup);
+}
 
 BOOL EnvRefreshStartItems(void)
 {
@@ -664,7 +680,7 @@ static void AddQuickFile(const char *source)
 void EnvLayoutBar(void)
 {
     RECT rect; int width, height;
-    int i, begin, end, trayWidth, rows, tail = env.options.showDesktopButton ? SHOW_DESKTOP_EXTENT : 0;
+    int i, begin, end, trayWidth, rows, tail = env.options.showDesktopButton ? SHOW_DESKTOP_EXTENT + SHOW_DESKTOP_GAP : 0;
     BOOL changed = FALSE;
     BOOL vertical = env.options.edge == ABE_LEFT || env.options.edge == ABE_RIGHT;
     if (!env.bar || !env.tray) return;
@@ -684,7 +700,7 @@ void EnvLayoutBar(void)
             begin=TaskbarPinsLayout(begin,end,width,TRUE);
         }
         changed |= EnvMoveControl(env.tray, 2, height - 30 - tail, width - 4, 28); TrayLayout(width - 6, 26);
-        if (tail) changed |= EnvMoveControl(desktopEdgeButton, 2, height-tail, width-4, tail);
+        if (tail) changed |= EnvMoveControl(desktopEdgeButton, 2, height-tail, width-4, SHOW_DESKTOP_EXTENT);
     } else {
         rows = env.options.rows;
         changed |= EnvMoveControl(env.startButton, 2, 3, EnvStartButtonWidth(), EnvBarButtonHeight(height, rows)); begin = EnvStartButtonWidth() + 10;
@@ -698,7 +714,7 @@ void EnvLayoutBar(void)
             begin=TaskbarPinsLayout(begin,end,height,FALSE);
         }
         changed |= EnvMoveControl(env.tray, width - trayWidth - 3 - tail, 3, trayWidth, height - 6); TrayLayout(trayWidth - 2, height - 8);
-        if (tail) changed |= EnvMoveControl(desktopEdgeButton, width-tail, 3, tail, height-6);
+        if (tail) changed |= EnvMoveControl(desktopEdgeButton, width-tail, 3, SHOW_DESKTOP_EXTENT, height-6);
     }
     if (changed) InvalidateRect(env.bar, NULL, FALSE);
 }
@@ -836,7 +852,13 @@ BOOL EnvironmentDesktopLayoutCommand(UINT command)
 BOOL EnvironmentDesktopIconsVisible(void) { return env.options.desktopIcons; }
 BOOL EnvironmentDesktopAutoArrange(void) { return env.options.autoArrange; }
 void EnvironmentShowDesktopMenu(POINT point)
-{ if (env.desktopView && !env.closing) DesktopBackgroundMenu(env.desktopView, point, env.bar); }
+{
+    LVHITTESTINFO hit; HWND list;
+    if(!env.desktopView || env.closing) return;
+    list=NativeViewList(env.desktopView); ZeroMemory(&hit,sizeof(hit)); hit.pt=point; ScreenToClient(list,&hit.pt);
+    if(ListView_HitTest(list,&hit)>=0 && NativeViewSelectionMenu(env.desktopView,point,env.bar)) return;
+    DesktopBackgroundMenu(env.desktopView,point,env.bar);
+}
 void EnvironmentToggleDesktopIcons(void)
 {
     env.options.desktopIcons = !env.options.desktopIcons; EnvSaveOptions();
@@ -1111,6 +1133,17 @@ static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
         }
         return 0;
     }
+    case WM_APP + 36: {
+        char path[MAX_PATH]; SHELLEXECUTEINFOA launch;
+        if(!startupStarted || startupLaunching || env.closing) return 0;
+        if(!ShellStartupNext(&sessionStartup,path)) { ShellStartupClose(&sessionStartup); return 0; }
+        ZeroMemory(&launch,sizeof(launch)); launch.cbSize=sizeof(launch); launch.fMask=SEE_MASK_FLAG_NO_UI;
+        launch.hwnd=window; launch.lpFile=path; launch.lpDirectory=sessionStartup.folders[sessionStartup.directory]; launch.nShow=SW_SHOWNORMAL;
+        startupLaunching=TRUE; BOOL okay=ShellExecuteExA(&launch); startupLaunching=FALSE;
+        RenderTraceShell("startup.launch",okay ? S_OK : E_FAIL,okay ? 0 : GetLastError(),sessionStartup.directory);
+        if(!PostMessageA(window,WM_APP+36,0,0)) ShellStartupClose(&sessionStartup);
+        return 0;
+    }
     case WM_SETTINGCHANGE: case WM_DISPLAYCHANGE:
         if (message == WM_DISPLAYCHANGE) { EndQuickResize(FALSE); TaskbarPanelsCancelResize(); }
         if (message == WM_DISPLAYCHANGE || wp != SPI_SETWORKAREA) StartRefresh();
@@ -1239,6 +1272,16 @@ HWND EnvironmentCreate(const EnvironmentHost *callbacks)
     NativeViewSetHost(callbacks); PaintColorsChanged(&desktopColors); EnvRefreshStartItems();
     SystemParametersInfoA(SPI_GETWORKAREA, 0, &env.originalArea, 0);
     env.primary = FindWindowA("Shell_TrayWnd", NULL) == NULL;
+    /* Win95 otherwise paints minimized windows as caption bars on Desktop.
+     * Own only ARW_HIDE for this shell session; leave the user's other metrics. */
+    if(env.primary) {
+        ZeroMemory(&originalMinimized,sizeof(originalMinimized)); originalMinimized.cbSize=sizeof(originalMinimized);
+        if(SystemParametersInfoA(SPI_GETMINIMIZEDMETRICS,sizeof(originalMinimized),&originalMinimized,0) &&
+           !(originalMinimized.iArrange&ARW_HIDE)) {
+            MINIMIZEDMETRICS hidden=originalMinimized; hidden.iArrange|=ARW_HIDE;
+            minimizedChanged=SystemParametersInfoA(SPI_SETMINIMIZEDMETRICS,sizeof(hidden),&hidden,0);
+        }
+    }
     if (!EnvRegister("Explorer95.Session",SessionProc,NULL,0) ||
         !EnvRegister("Explorer95.Desktop", DesktopProc, (HBRUSH)(COLOR_BACKGROUND + 1), 0) ||
         !EnvRegister("Explorer95.Taskbar", BarProc, (HBRUSH)(COLOR_BTNFACE + 1), 0) || !EnvRegister("Explorer95.QuickGrip", QuickGripProc, NULL, 0) || !PropertiesRegister()) return NULL;
@@ -1318,6 +1361,7 @@ void EnvironmentShutdown(void)
     APPBARDATA data; int i;
     if (env.closing) return;
     env.closing = TRUE;
+    if(startupStarted) ShellStartupClose(&sessionStartup);
     WelcomeClose();
     TaskSwitchDestroy();
     RenderTraceShutdown("exit.begin",S_OK,0);
@@ -1354,6 +1398,15 @@ void EnvironmentShutdown(void)
     if (env.appbar) {
         ZeroMemory(&data, sizeof(data)); data.cbSize = sizeof(data); data.hWnd = env.bar; SHAppBarMessage(ABM_REMOVE, &data);
     } else if (env.primary) SystemParametersInfoA(SPI_SETWORKAREA, 0, &env.originalArea, SPIF_SENDCHANGE);
+    if(minimizedChanged) {
+        MINIMIZEDMETRICS current; ZeroMemory(&current,sizeof(current)); current.cbSize=sizeof(current);
+        if(SystemParametersInfoA(SPI_GETMINIMIZEDMETRICS,sizeof(current),&current,0) &&
+           current.iArrange==(originalMinimized.iArrange|ARW_HIDE)) {
+            current.iArrange=originalMinimized.iArrange;
+            SystemParametersInfoA(SPI_SETMINIMIZEDMETRICS,sizeof(current),&current,0);
+        }
+        minimizedChanged=FALSE;
+    }
     for (i = 0; i < quickCount; ++i) if (quick[i].icon) DestroyIcon(quick[i].icon);
     if (quickTip) DestroyWindow(quickTip);
     if (desktopIcon) DestroyIcon(desktopIcon);

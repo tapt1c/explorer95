@@ -46,6 +46,18 @@ static void NativeSortTests(HWND parent)
     Check(NativeViewSort(view,1,FALSE),"type sorting is connected to the native type column");
     { char first[MAX_PATH],last[MAX_PATH]; ListView_GetItemText(list,1,0,first,MAX_PATH); ListView_GetItemText(list,3,0,last,MAX_PATH);
       Check(!lstrcmpA(first,"b.bmp") || !lstrcmpA(last,"b.bmp"),"the two text files stay adjacent when arranged by type"); }
+    { int index; HWND edit; char renamed[MAX_PATH],original[MAX_PATH]; DWORD started; BOOL visible=IsWindowVisible(parent);
+      ShowWindow(parent,SW_SHOW); SetForegroundWindow(parent);
+      for(index=0;index<4;++index) { char label[MAX_PATH]; ListView_GetItemText(list,index,0,label,MAX_PATH); if(!lstrcmpA(label,"a.txt")) break; }
+      ListView_SetItemState(list,-1,0,LVIS_SELECTED|LVIS_FOCUSED);
+      ListView_SetItemState(list,index,LVIS_SELECTED|LVIS_FOCUSED,LVIS_SELECTED|LVIS_FOCUSED);
+      Check(NativeViewInvoke(view,"rename",FALSE),"native Rename starts the original shell view's label editor");
+      edit=ListView_GetEditControl(list); Check(edit!=NULL,"native Rename exposes a real edit control");
+      SetWindowTextA(edit,"renamed.txt"); PostMessageA(edit,WM_KEYDOWN,VK_RETURN,0);
+      wsprintfA(renamed,"%s\\renamed.txt",root); wsprintfA(original,"%s\\a.txt",root); started=GetTickCount();
+      while(GetFileAttributesA(renamed)==INVALID_FILE_ATTRIBUTES && GetTickCount()-started<3000) PumpFor(20);
+      Check(GetFileAttributesA(renamed)!=INVALID_FILE_ATTRIBUTES && MoveFileA(renamed,original),"native label editing renames the actual file through its shell folder");
+      if(!visible) ShowWindow(parent,SW_HIDE); }
     NativeViewDestroy(view);
     for(i=0;i<3;++i) { wsprintfA(path,"%s\\%s",root,names[i]); Check(DeleteFileA(path),"remove only the native sort fixture file"); }
     wsprintfA(path,"%s\\directory",root); Check(RemoveDirectoryA(path) && RemoveDirectoryA(root),"remove only the native sort fixture directories");

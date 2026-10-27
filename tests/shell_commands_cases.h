@@ -36,6 +36,9 @@ static HRESULT STDMETHODCALLTYPE EditProbeName(IContextMenu2 *self, UINT_PTR id,
     if(id==76) verb="undo";
     if(id==3) verb="copy";
     if(id==9) verb="cut";
+    if(id==100 || id==102) verb="open";
+    if(id==101 || id==103) verb="explore";
+    if(id==104) verb="openas";
     if(!verb) return E_INVALIDARG;
     lstrcpynA(text,verb,size); return S_OK;
 }
@@ -100,6 +103,15 @@ static void ShellEditContractTests(HWND parent)
     EnableMenuItem(menu,15,MF_BYCOMMAND|MF_GRAYED); ShellCommandShortcuts(context,menu); state=GetMenuState(menu,15,MF_BYCOMMAND);
     Check((state&MF_GRAYED) && ShellCommandInvoke(context,menu,parent,"paste")==S_FALSE && editProbe.invoked==2,
         "keyboard dispatch and menu hints respect a newly disabled clipboard command");
+    DestroyMenu(menu);
+    menu=CreatePopupMenu();
+    AppendMenuA(menu,MF_STRING,101,"First open"); AppendMenuA(menu,MF_STRING,102,"First explore");
+    AppendMenuA(menu,MF_STRING,103,"Localized duplicate"); AppendMenuA(menu,MF_STRING,104,"Another duplicate");
+    AppendMenuA(menu,MF_STRING,105,"Different verb"); AppendMenuA(menu,MF_STRING,901,"Unknown extension command");
+    SetMenuDefaultItem(menu,103,FALSE); ShellFolderMenuUnique(context,menu);
+    Check(GetMenuItemCount(menu)==4 && GetMenuItemID(menu,0)==101 && GetMenuItemID(menu,1)==102 &&
+        GetMenuItemID(menu,2)==105 && GetMenuItemID(menu,3)==901 && GetMenuDefaultItem(menu,FALSE,0)==101,
+        "duplicate folder verbs collapse by canonical identity while keeping command IDs, extensions and the default action");
     DestroyMenu(menu); IContextMenu_Release(context);
     editProbe.backgroundSupported=TRUE;
     Check(SUCCEEDED(ShellBackgroundContext(&view,&folder,parent,&context)) && editProbe.objects==2 && editProbe.folders==1,

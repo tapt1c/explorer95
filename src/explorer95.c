@@ -133,6 +133,7 @@ void start(void)
     if (!bar) { EnvironmentShutdown(); UiShutdown(); RenderTraceClose(); ExitProcess(1); }
     ReleaseMutex(startup); CloseHandle(startup);
     if (requested) EnvironmentOpenRequest(&request);
+    else EnvironmentStartSession();
     while (GetMessageA(&message, NULL, 0, 0) > 0) {
         if (BrowserTranslate(&message)) continue;
         if (EnvironmentTranslate(&message)) continue;

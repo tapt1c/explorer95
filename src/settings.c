@@ -206,7 +206,7 @@ static void PreviewTaskbar(HDC dc, const RECT *bounds, BOOL sampleTasks)
     int startWidth, begin, end, i, count, taskWidth;
     BOOL quick = Checked(env.properties, ID_QUICK), large = Checked(env.properties, ID_LARGE);
     int iconSize = large ? 32 : 16, slot = EnvBarButtonSize(large ? 36 : 22);
-    int tail = Checked(env.properties, ID_SHOWDESKTOP_EDGE) ? SHOW_DESKTOP_EXTENT : 0;
+    int tail = Checked(env.properties, ID_SHOWDESKTOP_EDGE) ? SHOW_DESKTOP_EXTENT + SHOW_DESKTOP_GAP : 0;
     int rows = (int)SendDlgItemMessageA(env.properties, ID_ROWS, CB_GETCURSEL, 0, 0) + 1;
     if (rows < 1) rows = 1;
     int buttonHeight = EnvBarButtonHeight(EnvBarRowHeight(large, Checked(env.properties,ID_TASKTILES)) * rows, rows);
@@ -217,7 +217,7 @@ static void PreviewTaskbar(HDC dc, const RECT *bounds, BOOL sampleTasks)
     EnvPaintStartButton(dc, &part, label, FALSE, FALSE);
     begin = bounds->left + startWidth + 10; end = bounds->right - 8 - tail;
     if (tail) {
-        SetRect(&part, bounds->right-tail, bounds->top+3, bounds->right, bounds->bottom-3);
+        SetRect(&part, bounds->right-tail, bounds->top+3, bounds->right-SHOW_DESKTOP_GAP, bounds->bottom-3);
         EnvPaintDesktopButton(dc, &part, FALSE, FALSE, FALSE);
     }
     if(Checked(env.properties,ID_SEARCHBAR)) {

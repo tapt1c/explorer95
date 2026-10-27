@@ -12,6 +12,7 @@ HRESULT ShellCommandDefault(IContextMenu *context, HWND owner);
  * to Win95 Control Panel applets, which are namespace actions rather than paths. */
 HRESULT ShellNamespaceInvoke(HWND owner, LPCITEMIDLIST absolute);
 void ShellCommandShortcuts(IContextMenu *context, HMENU menu);
+void ShellFolderMenuUnique(IContextMenu *context, HMENU menu);
 const char *ShellDesktopEditKey(UINT key, BOOL control, BOOL shift, BOOL alt);
 BOOL ShellCommandIsEdit(const char *verb);
 /* Shell32 on Win95 can return a valid but empty background menu. These IDs

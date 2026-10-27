@@ -181,6 +181,30 @@ static void BrowserNewContextTests(HWND browser, const char *directory)
     while (GetFileAttributesA(created) == INVALID_FILE_ATTRIBUTES && GetTickCount() - started < 3000) PumpFor(20);
     Check(GetFileAttributesA(created) != INVALID_FILE_ATTRIBUTES && (GetFileAttributesA(created) & FILE_ATTRIBUTE_DIRECTORY),
         "choosing Folder through the actual browser New popup creates in the current directory");
-    Check(RemoveDirectoryA(created), "remove the folder created through the real context menu");
+    { HWND edit=NULL; char renamed[MAX_PATH];
+      started=GetTickCount();
+      do { edit=(HWND)SendMessageA(list,LVM_GETEDITCONTROL,0,0); if(!edit) PumpFor(20); } while(!edit && GetTickCount()-started<3000);
+      Check(edit!=NULL,"creating a folder from New immediately starts label editing");
+      SetWindowTextA(edit,"Created and named"); PostMessageA(edit,WM_KEYDOWN,VK_RETURN,0);
+      wsprintfA(renamed,"%s\\Created and named",directory); started=GetTickCount();
+      while(GetFileAttributesA(renamed)==INVALID_FILE_ATTRIBUTES && GetTickCount()-started<3000) PumpFor(20);
+      Check(GetFileAttributesA(renamed)!=INVALID_FILE_ATTRIBUTES,"the initial editor names the newly created folder");
+      SendMessageA(browser,WM_COMMAND,ID_REFRESH,0); PumpFor(80);
+      NativeSelectItem(list,NativeItemIndex(list,"Created and named"));
+      SetForegroundWindow(browser); PostMessageA(browser,WM_CONTEXTMENU,(WPARAM)list,(LPARAM)-1);
+      popup=WaitFor("#32768",NULL); Check(popup && IsWindowVisible(popup),"open the real selected folder context menu for Rename");
+      SetCursorPos(GetSystemMetrics(SM_CXSCREEN)-3,2); PumpFor(80);
+      NewTestKey(VK_END); NewTestKey(VK_UP); NewTestKey(VK_RETURN);
+      started=GetTickCount(); edit=NULL;
+      do { edit=(HWND)SendMessageA(list,LVM_GETEDITCONTROL,0,0); if(!edit) PumpFor(20); } while(!edit && GetTickCount()-started<3000);
+      Check(edit!=NULL,"the context menu's Rename command starts editing after releasing its busy guard");
+      SetWindowTextA(edit,"Renamed through context"); PostMessageA(edit,WM_KEYDOWN,VK_RETURN,0);
+      wsprintfA(created,"%s\\Renamed through context",directory); started=GetTickCount();
+      while(GetFileAttributesA(created)==INVALID_FILE_ATTRIBUTES && GetTickCount()-started<3000) PumpFor(20);
+      Check(GetFileAttributesA(created)!=INVALID_FILE_ATTRIBUTES && RemoveDirectoryA(created),"context Rename changes the actual folder name and its owned fixture is removed");
+      SendMessageA(browser,WM_COMMAND,ID_NEWFOLDER,0); edit=(HWND)SendMessageA(list,LVM_GETEDITCONTROL,0,0);
+      Check(edit!=NULL,"the New Folder toolbar command also begins naming immediately");
+      PostMessageA(edit,WM_KEYDOWN,VK_ESCAPE,0); PumpFor(60);
+      wsprintfA(created,"%s\\New Folder",directory); Check(RemoveDirectoryA(created),"cancelling naming preserves the created folder until explicit cleanup"); }
     SendMessageA(browser, WM_COMMAND, ID_REFRESH, 0); PumpFor(60);
 }

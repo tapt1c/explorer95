@@ -19,6 +19,7 @@
 #include "localization.h"
 
 #define DESKTOP_REFRESH_MESSAGE (WM_APP + 35)
+#define CREATED_RENAME_TIMER 0xe95b
 
 struct NativeView {
     IShellBrowser browser;
@@ -47,6 +48,8 @@ struct NativeView {
     BOOL desktopImagesDirty;
     int desktopIconSize;
     BOOL sharedDesktopImages;
+    char createdName[MAX_PATH];
+    int renameAttempts;
 };
 
 static EnvironmentHost host;
@@ -751,6 +754,31 @@ static LRESULT CALLBACK Subclass(HWND window, UINT message, WPARAM wp, LPARAM lp
     BeginDesktopCall(view);
     { BOOL handled=NativeViewMenuMessage(view,message,wp,lp);
       EndDesktopCall(view); if(handled) return 0; }
+    if(window==view->window && message==WM_TIMER && wp==CREATED_RENAME_TIMER) {
+        if(view->createdName[0] && view->renameAttempts-- && !view->operationDepth && !DesktopBusy(view)) {
+            WCHAR name[MAX_PATH]; LPITEMIDLIST relative=NULL; ULONG eaten; HWND edit=NULL;
+            if(MultiByteToWideChar(CP_ACP,0,view->createdName,-1,name,MAX_PATH) &&
+               SUCCEEDED(IShellFolder_ParseDisplayName(view->folder,view->parent,NULL,name,&eaten,&relative,NULL))) {
+                SetFocus(view->list); BeginDesktopCall(view);
+                IShellView_SelectItem(view->view,relative,SVSI_EDIT|SVSI_SELECT|SVSI_FOCUSED|SVSI_DESELECTOTHERS|SVSI_ENSUREVISIBLE);
+                edit=ListView_GetEditControl(view->list); EndDesktopCall(view);
+            }
+            if(relative) CoTaskMemFree(relative);
+            if(edit) view->renameAttempts=0;
+        }
+        if(!view->createdName[0] || view->renameAttempts<=0) {
+            view->createdName[0]=0; KillTimer(window,CREATED_RENAME_TIMER);
+        }
+        return 0;
+    }
+    if((window==view->list || window==view->window) && message==WM_CONTEXTMENU && ListView_GetSelectedCount(view->list)) {
+        POINT point={(short)LOWORD(lp),(short)HIWORD(lp)}; BOOL selected=(LONG)lp==-1;
+        if(selected) { RECT rect; int index=ListView_GetNextItem(view->list,-1,LVNI_SELECTED);
+            ListView_GetItemRect(view->list,index,&rect,LVIR_LABEL); point.x=rect.left+1; point.y=rect.top+1; ClientToScreen(view->list,&point); }
+        else { LVHITTESTINFO hit; ZeroMemory(&hit,sizeof(hit)); hit.pt=point; ScreenToClient(view->list,&hit.pt); selected=ListView_HitTest(view->list,&hit)>=0; }
+        if(selected && view->desktop) { EnvironmentShowDesktopMenu(point); return 0; }
+        if(selected && NativeViewSelectionMenu(view,point,view->parent)) return 0;
+    }
     /* Original Win95 views do not consistently delegate default folder verbs
      * through BrowseObject. Consume real activation before ShellExecute can
      * open Explorer.exe; navigation itself remains queued outside this view.
@@ -884,6 +912,51 @@ static LRESULT CALLBACK Subclass(HWND window, UINT message, WPARAM wp, LPARAM lp
     }
 }
 
+BOOL NativeViewSelectionMenu(NativeView *view,POINT point,HWND owner)
+{
+    IContextMenu *context=NULL; HMENU menu; UINT command; char verb[80]={0}; NativeSelection selection;
+    if(!view || view->context || view->operationDepth || !ListView_GetSelectedCount(view->list)) return FALSE;
+    if(FAILED(IShellView_GetItemObject(view->view,SVGIO_SELECTION,&IID_IContextMenu,(void **)&context)) || !context) {
+        if(context) IContextMenu_Release(context);
+        return FALSE;
+    }
+    menu=CreatePopupMenu();
+    if(!menu || FAILED(IContextMenu_QueryContextMenu(context,menu,0,1,0x6fff,CMF_NORMAL|CMF_CANRENAME))) {
+        if(menu) DestroyMenu(menu);
+        IContextMenu_Release(context); return FALSE;
+    }
+    if(NativeViewSelection(view,&selection) && selection.count==1 && (selection.capabilities&SFGAO_FOLDER))
+        ShellFolderMenuUnique(context,menu);
+    AddRef(&view->browser); ++view->operationDepth;
+    IContextMenu_QueryInterface(context,&IID_IContextMenu2,(void **)&view->context);
+    SetForegroundWindow(owner);
+    command=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_RIGHTBUTTON,point.x,point.y,0,owner,NULL);
+    PostMessageA(owner,WM_NULL,0,0);
+    if(command) IContextMenu_GetCommandString(context,command-1,GCS_VERBA,NULL,verb,sizeof(verb)-1);
+    if(view->context) { IContextMenu2_Release(view->context); view->context=NULL; }
+    DestroyMenu(menu); --view->operationDepth;
+    if(command && view->view && IsWindow(view->list)) {
+        if((!lstrcmpiA(verb,"open") || !lstrcmpiA(verb,"explore")) && OpenSelection(view)) {}
+        else if(!lstrcmpiA(verb,"rename") || !lstrcmpiA(verb,"delete") || !lstrcmpiA(verb,"copy") || !lstrcmpiA(verb,"cut"))
+            NativeViewInvoke(view,verb,FALSE);
+        else {
+            CMINVOKECOMMANDINFO invoke; ZeroMemory(&invoke,sizeof(invoke)); invoke.cbSize=sizeof(invoke);
+            invoke.hwnd=owner; invoke.lpVerb=MAKEINTRESOURCEA(command-1); invoke.nShow=SW_SHOWNORMAL;
+            BeginDesktopCall(view); ++view->operationDepth;
+            IContextMenu_InvokeCommand(context,&invoke);
+            --view->operationDepth; EndDesktopCall(view);
+        }
+    }
+    IContextMenu_Release(context); Release(&view->browser); return TRUE;
+}
+static void RenameCreated(NativeView *view,const char *path)
+{
+    const char *name=path,*p;
+    for(p=path;*p;++p) if(*p=='\\' || *p=='/') name=p+1;
+    if(!*name) return;
+    NativeViewRefresh(view); lstrcpynA(view->createdName,name,sizeof(view->createdName)); view->renameAttempts=20;
+    if(!SetTimer(view->window,CREATED_RENAME_TIMER,100,NULL)) view->createdName[0]=0;
+}
 static BOOL HasNewMenu(HMENU menu, IContextMenu *context)
 {
     int i, j; char text[128], clean[128];
@@ -906,7 +979,7 @@ void DesktopBackgroundMenu(NativeView *view, POINT point, HWND owner)
     IContextMenu *context = NULL;
     HMENU menu = CreatePopupMenu(), extra = CreatePopupMenu();
     HMENU arrange = EnvironmentDesktopLayoutMenu();
-    int command, newPosition = -1; BOOL shellAction=FALSE, clipboardAction=FALSE;
+    int command, newPosition = -1; BOOL shellAction=FALSE, clipboardAction=FALSE; char created[MAX_PATH]={0};
     if (!view || view->newMenu || view->context) { DestroyMenu(menu); DestroyMenu(extra); DestroyMenu(arrange); return; }
     if (SUCCEEDED(ShellBackgroundContext(view->view, view->folder, owner, &context))) {
         ShellCommandMenu(context,menu);
@@ -966,7 +1039,7 @@ void DesktopBackgroundMenu(NativeView *view, POINT point, HWND owner)
     if (command == 0x8004) EnvironmentLaunch(view->parent, "control.exe", "desk.cpl", NULL);
     EnvironmentDesktopLayoutCommand(command);
     if (command == 0x8009) EnvironmentToggleDesktopIcons();
-    if (ShellNewInvoke(view->newMenu, command, owner, NULL)) NativeViewRefresh(view);
+    if (ShellNewInvoke(view->newMenu, command, owner, created) && !created[0]) NativeViewRefresh(view);
     if (view->context) { IContextMenu2_Release(view->context); view->context = NULL; }
     if (context) IContextMenu_Release(context);
     if (newPosition >= 0) RemoveMenu(menu, newPosition, MF_BYPOSITION);
@@ -974,6 +1047,7 @@ void DesktopBackgroundMenu(NativeView *view, POINT point, HWND owner)
     DestroyMenu(menu);
     if(shellAction) { --view->operationDepth; EndDesktopCall(view); }
     if(clipboardAction) EndDesktopCall(view);
+    if(created[0]) RenameCreated(view,created);
 }
 
 NativeView *NativeViewCreateEx(HWND parent, LPCITEMIDLIST absolute, BOOL desktop, int mode, const RECT *initial)
@@ -1037,6 +1111,8 @@ NativeView *NativeViewCreate(HWND parent, LPCITEMIDLIST absolute, BOOL desktop)
 void NativeViewDestroy(NativeView *view)
 {
     if (!view) return;
+    if(view->window) KillTimer(view->window,CREATED_RENAME_TIMER);
+    view->createdName[0]=0;
     RenderTraceShutdown("view.exit.drop",S_OK,view->desktop);
     FileDropRevoke(view->fileDrop); view->fileDrop=NULL;
     RenderTraceShutdown("view.exit.icons",S_OK,view->desktop);
@@ -1349,6 +1425,13 @@ BOOL NativeViewInvoke(NativeView *view, const char *verb, BOOL background)
     IContextMenu *context; CMINVOKECOMMANDINFO action; HRESULT result; HMENU menu;
     BOOL clipboardFallback,clipboardCommand;
     if (!view || view->operationDepth) return FALSE;
+    if(!background && !lstrcmpiA(verb,"rename")) {
+        HWND edit;
+        if(view->recycleBin || ListView_GetSelectedCount(view->list)!=1) return FALSE;
+        BeginDesktopCall(view); SetFocus(view->list);
+        edit=ListView_EditLabel(view->list,ListView_GetNextItem(view->list,-1,LVNI_SELECTED));
+        EndDesktopCall(view); return edit!=NULL;
+    }
     if (view->recycleBin && !background && !lstrcmpiA(verb, "delete")) {
         if (!ListView_GetSelectedCount(view->list)) return FALSE;
         return SUCCEEDED(DeleteRecycleSelection(view));
