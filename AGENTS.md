@@ -112,6 +112,7 @@ Explorer95 — любительская нативная оболочка для
 | `tests/file_drag_data_cases.h` | Проверка внешнего CF_HDROP: ANSI/Unicode, снимок нескольких путей, границы, двойной NUL, отказ для wildcard/относительных путей; core/full. |
 | `tests/backlog_menu_cases.h`, `tests/file_drag_cases.h` | Плитки/группировка/Apply/Cancel, порядок Start и разделители; реальные OLE-переносы мышью между окнами и рабочим столом только со своими файлами. |
 | `tests/quick_launch_cases.h` | Реальное изменение размера Quick Launch, блокировка, Escape, переполнение и запуск скрытой команды; menu/full. |
+| `tests/taskbar_appearance_cases.h` | Размеры caption 18/25/40/18 в отдельных Wine-процессах, Show Desktop после трея, четыре стороны, несколько строк и Apply/Cancel/перезапуск; menu/full. |
 | `tests/desktop_delete_cases.h` | Системный Delete на рабочем столе, очистка через реальные File/toolbar/sidebar, отмена, восстановление и обновление Корзины только с собственным файлом; browser/full. |
 | `tests/native_view_cases.h` | Внутрипроцессный хост настоящего NativeView и canary над ListView: проверка повторного входа LVM_GETEDITCONTROL; core/full. |
 | `tests/shell_new_cases.h` | Регистрации ShellNew в отдельном HKCU-корне, реальные пустые файлы/данные/шаблоны, коллизии имён и запуск команды; core/browser/full. |
@@ -1599,8 +1600,22 @@ Rename со скрытым расширением, системные Properties
   проверяется в Win95 ВМ; не подменяйте исполнение Shell32 ради обхода Wine.
 - WM_SIZING панели задач корректирует переданный RECT сразу до целых строк,
   сохраняя закреплённую сторону и длину вдоль экрана. Высота строки соответствует
-  EnvBarThickness (28/40/44 для обычных/крупных/плиток). Не откладывайте привязку
+  EnvBarThickness / EnvBarRowHeight: минимумы 28/40/44 для обычных/крупных/плиток,
+  увеличенные при росте SM_CYSIZE. EnvBarButtonSize задаёт минимум hit area;
+  сами значки не растягиваются. Живая панель, WM_SIZING и preview используют
+  одинаковый расчёт, WM_SETTINGCHANGE обновляет раскладку и рабочую область.
+  Не откладывайте привязку
   до WM_EXITSIZEMOVE и не рассчитывайте плитки с шагом обычных кнопок.
+  Классические menu/full fixtures явно задают caption=18 только в disposable
+  Wine и восстанавливают прежние метрики при успехе/ошибке. Wine 10 кэширует
+  NONCLIENTMETRICS и work area по процессам: проверка разных размеров использует
+  отдельные запуски. Живое изменение оформления дополнительно проверяется в Win95;
+  не добавляйте обход Wine в production и не меняйте оформление настоящей Windows тестом.
+- ID_SHOWDESKTOP_EDGE — отдельная owner-draw кнопка после трея/часов (снизу
+  на вертикальной панели), использующая общий EnvShowDesktop. Она не принадлежит
+  Quick Launch: прежний ID_SHOWDESKTOP и Win+D сохраняются. ShowDesktopButton
+  включён по умолчанию, входит в общий draft/Apply/Cancel и preview. Резерв
+  кнопки находится вне трея; размеры значков и часов не меняются.
 
 - Quick Launch использует owner-draw кнопки: BS_FLAT не поддерживается исходной
   Win95. Общие EnvPaintQuickButton / EnvPaintQuickGrip рисуют и живую панель,

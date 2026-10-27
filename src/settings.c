@@ -105,6 +105,7 @@ static BOOL WriteOptions(const char *ini, const ShellOptions *o)
     SAVE("Taskbar", "Clock", clock); SAVE("Taskbar", "QuickLaunch", quick); SAVE("Taskbar", "LargeIcons", largeIcons);
     SAVE("Taskbar", "QuickLaunchSize", quickSize);
     SAVE("Taskbar", "SearchBox", searchBox);
+    SAVE("Taskbar", "ShowDesktopButton", showDesktopButton);
     SAVE("Taskbar", "GroupTasks", group); SAVE("Taskbar", "HideInactive", hideInactive); SAVE("Taskbar", "InactiveSeconds", traySeconds);
     SAVE("Start", "VisibleItems", startItems); SAVE("Start", "FolderMenus", startMenus); SAVE("Start", "LargeIcons", largeStartIcons);
     SAVE("Start", "RecentCount", recentCount); SAVE("Start", "Classic", classicStart); SAVE("Start", "HoverMenus", hoverMenus);
@@ -204,16 +205,21 @@ static void PreviewTaskbar(HDC dc, const RECT *bounds, BOOL sampleTasks)
     RECT part = *bounds; char label[32], clock[32];
     int startWidth, begin, end, i, count, taskWidth;
     BOOL quick = Checked(env.properties, ID_QUICK), large = Checked(env.properties, ID_LARGE);
-    int iconSize = large ? 32 : 16, slot = large ? 36 : 22;
+    int iconSize = large ? 32 : 16, slot = EnvBarButtonSize(large ? 36 : 22);
+    int tail = Checked(env.properties, ID_SHOWDESKTOP_EDGE) ? SHOW_DESKTOP_EXTENT : 0;
     int rows = (int)SendDlgItemMessageA(env.properties, ID_ROWS, CB_GETCURSEL, 0, 0) + 1;
     if (rows < 1) rows = 1;
-    int buttonHeight = EnvBarButtonHeight((Checked(env.properties,ID_TASKTILES) ? 44 : large ? 40 : 28) * rows, rows);
+    int buttonHeight = EnvBarButtonHeight(EnvBarRowHeight(large, Checked(env.properties,ID_TASKTILES)) * rows, rows);
     GetDlgItemTextA(env.properties, ID_STARTLABEL, label, sizeof(label));
     startWidth = EnvStartLabelWidth(label);
     FillRect(dc, bounds, (HBRUSH)(COLOR_BTNFACE + 1)); DrawEdge(dc, &part, EDGE_RAISED, BF_TOP);
     SetRect(&part, bounds->left + 2, bounds->top + 3, bounds->left + 2 + startWidth, bounds->top + 3 + buttonHeight);
     EnvPaintStartButton(dc, &part, label, FALSE, FALSE);
-    begin = bounds->left + startWidth + 10; end = bounds->right - 8;
+    begin = bounds->left + startWidth + 10; end = bounds->right - 8 - tail;
+    if (tail) {
+        SetRect(&part, bounds->right-tail, bounds->top+3, bounds->right, bounds->bottom-3);
+        EnvPaintDesktopButton(dc, &part, FALSE, FALSE, FALSE);
+    }
     if(Checked(env.properties,ID_SEARCHBAR)) {
         SetRect(&part,begin,bounds->top+4,begin+112,bounds->top+23);
         FillRect(dc,&part,(HBRUSH)(COLOR_WINDOW+1)); DrawEdge(dc,&part,EDGE_SUNKEN,BF_RECT);
@@ -237,7 +243,7 @@ static void PreviewTaskbar(HDC dc, const RECT *bounds, BOOL sampleTasks)
         begin += 3;
     }
     if (Checked(env.properties, ID_CLOCK)) {
-        SetRect(&part, bounds->right - 71, bounds->top + 3, bounds->right - 3, bounds->bottom - 3);
+        SetRect(&part, bounds->right - 71 - tail, bounds->top + 3, bounds->right - 3 - tail, bounds->bottom - 3);
         DrawEdge(dc, &part, BDR_SUNKENOUTER, BF_RECT);
         GetWindowTextA(env.clock, clock, sizeof(clock)); if (!clock[0]) lstrcpyA(clock, "12:34");
         SelectObject(dc, env.host.font); SetBkMode(dc, TRANSPARENT); SetTextColor(dc, GetSysColor(COLOR_BTNTEXT));
@@ -266,7 +272,7 @@ static void Preview(const DRAWITEMSTRUCT *item)
     FillRect(dc, &rect, (HBRUSH)(COLOR_BTNFACE + 1)); DrawEdge(dc, &rect, EDGE_SUNKEN, BF_RECT);
     SelectObject(dc, env.host.font); SetBkMode(dc, TRANSPARENT); SetTextColor(dc, GetSysColor(COLOR_BTNTEXT));
     if (item->CtlID == ID_PREVIEW_TASKBAR) {
-        int barHeight = Checked(env.properties,ID_TASKTILES) ? 44 : Checked(env.properties, ID_LARGE) ? 40 : 28;
+        int barHeight = EnvBarRowHeight(Checked(env.properties, ID_LARGE), Checked(env.properties,ID_TASKTILES));
         SetRect(&part, 2, (height - barHeight) / 2, width - 2, (height + barHeight) / 2);
         PreviewTaskbar(dc, &part, TRUE);
     } else if (item->CtlID == ID_PREVIEW_START) {
@@ -291,7 +297,7 @@ static void Preview(const DRAWITEMSTRUCT *item)
             HICON icon = EnvLargeSystemIcon(16);
             DrawIconEx(dc, 16, 6, icon, size, size, 0, NULL, DI_NORMAL); if (icon) DestroyIcon(icon);
         }
-        int barHeight = Checked(env.properties,ID_TASKTILES) ? 44 : Checked(env.properties, ID_LARGE) ? 40 : 28;
+        int barHeight = EnvBarRowHeight(Checked(env.properties, ID_LARGE), Checked(env.properties,ID_TASKTILES));
         SetRect(&part, 4, height - 4 - barHeight, width - 4, height - 4); PreviewTaskbar(dc, &part, FALSE);
     }
     PaintBufferEnd(&previewBuffer, item->hDC, &item->rcItem);
@@ -346,6 +352,7 @@ static BOOL Apply(HWND window)
     options.hideTaskLabels=Checked(window,ID_HIDETASKLABELS);
     options.group = Checked(window, ID_GROUP); options.hideInactive = Checked(window, ID_INACTIVE);
     options.searchBox=Checked(window,ID_SEARCHBAR);
+    options.showDesktopButton=Checked(window,ID_SHOWDESKTOP_EDGE);
     options.showWelcome=Checked(window,ID_WELCOME);
     options.desktopIcons = Checked(window, ID_DESKTOPICONS); options.autoArrange = Checked(window, ID_AUTOARRANGE);
     options.desktopIconSize = SendDlgItemMessageA(window, ID_DESKTOPSIZE, CB_GETCURSEL, 0, 0) == 1 ? 48 : 32;
@@ -383,9 +390,10 @@ static LRESULT CALLBACK PropertiesProc(HWND window, UINT message, WPARAM wp, LPA
         Checkbox(window, SETTINGS_TASKBAR, "Hide task labels (icons only)", ID_HIDETASKLABELS, env.options.hideTaskLabels, 32, 258, 226);
         Checkbox(window, SETTINGS_TASKBAR, "Show Quick Launch", ID_QUICK, env.options.quick, 266, 124, 222);
         Checkbox(window, SETTINGS_TASKBAR, "Large Quick Launch icons", ID_LARGE, env.options.largeIcons, 266, 152, 222);
-        Control(window, SETTINGS_TASKBAR, "BUTTON", "Open Quick Launch folder", WS_TABSTOP, ID_QUICKFOLDER, 266, 188, 218, 26);
-        Control(window, SETTINGS_TASKBAR, "BUTTON", "Customize notification area...", WS_TABSTOP, ID_CUSTOMTRAY, 266, 224, 218, 26);
-        Checkbox(window, SETTINGS_TASKBAR, "Show search and run box", ID_SEARCHBAR, env.options.searchBox, 266, 258, 222);
+        Control(window, SETTINGS_TASKBAR, "BUTTON", "Open Quick Launch folder", WS_TABSTOP, ID_QUICKFOLDER, 266, 178, 218, 26);
+        Control(window, SETTINGS_TASKBAR, "BUTTON", "Customize notification area...", WS_TABSTOP, ID_CUSTOMTRAY, 266, 210, 218, 26);
+        Checkbox(window, SETTINGS_TASKBAR, "Show search and run box", ID_SEARCHBAR, env.options.searchBox, 266, 238, 222);
+        Checkbox(window, SETTINGS_TASKBAR, "Show desktop button", ID_SHOWDESKTOP_EDGE, env.options.showDesktopButton, 266, 260, 222);
         Control(window, SETTINGS_TASKBAR, "STATIC", "Dock:", 0, 0, 32, 290, 40, 20);
         control = Control(window, SETTINGS_TASKBAR, "COMBOBOX", "", WS_TABSTOP | CBS_DROPDOWNLIST, ID_EDGE, 76, 286, 104, 130);
         for (i = 0; i < 4; ++i) { SendMessageA(control, CB_ADDSTRING, 0, (LPARAM)edges[i]); } SendMessageA(control, CB_SETCURSEL, env.options.edge, 0);

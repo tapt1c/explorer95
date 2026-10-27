@@ -387,15 +387,15 @@ typedef struct PinLayout {
 } PinLayout;
 static void MeasurePins(FolderPanel *panel,int cross,BOOL vertical,PinLayout *layout)
 {
-    int i,ordinal=0,slot=env.options.taskTiles ? 38 : 22;
+    int i,ordinal=0,slot=EnvBarButtonSize(env.options.taskTiles ? 38 : 22);
     ZeroMemory(layout,sizeof(*layout));
     /* Use the selected task rows even when every launcher is idle, so opening
      * the first window does not change the launchers' row grid or spacing. */
     layout->captions=!env.options.taskTiles && !env.options.hideTaskLabels;
     if(layout->captions) {
         layout->rows=vertical || panel->singleRow ? 1 : env.options.rows;
-        layout->cell=vertical ? 26 : (cross+2)/layout->rows;
-        if(layout->cell<22) layout->cell=22;
+        layout->cell=vertical ? EnvBarButtonSize(26) : (cross+2)/layout->rows;
+        if(layout->cell<EnvBarButtonSize(22)) layout->cell=EnvBarButtonSize(22);
     } else {
         layout->cell=slot; layout->rows=cross/slot;
         if(layout->rows<1) layout->rows=1;
@@ -440,14 +440,14 @@ static void LayoutPins(FolderPanel *panel)
     along=panel->overflow ? 16 : 0; last=panel->scroll;
     for(column=panel->scroll;column<layout.columns;++column) {
         int remaining=limit-(along-(panel->overflow ? 16 : 0));
-        if(remaining<(env.options.taskTiles ? 38 : 22)) break;
+        if(remaining<(EnvBarButtonSize(env.options.taskTiles ? 38 : 22))) break;
         width=layout.width[column]; if(width>remaining) width=remaining;
         layout.width[column]=width; along+=width; last=column+1;
     }
     panel->lastColumn=last;
     along=panel->overflow ? 16 : 0; column=panel->scroll;
     for(i=0;i<panel->count;++i) {
-        PanelItem *item=&panel->items[i]; int itemColumn,row,other,size=env.options.taskTiles ? 38 : 22;
+        PanelItem *item=&panel->items[i]; int itemColumn,row,other,size=EnvBarButtonSize(env.options.taskTiles ? 38 : 22);
         SetRectEmpty(&item->rect); if(!item->valid) continue;
         itemColumn=ordinal/layout.rows; row=ordinal++%layout.rows;
         if(itemColumn<panel->scroll || itemColumn>=last) continue;
@@ -502,7 +502,7 @@ static void LayoutContents(FolderPanel *panel)
     if(panel->pins) { LayoutPins(panel); return; }
     GetClientRect(panel->window,&rect); axis=panel->vertical ? rect.bottom : rect.right;
     cross=panel->vertical ? rect.right : rect.bottom; icon=panel->pins ? (env.options.taskTiles ? 32 : 16) : (panel->config.large ? 32 : 16);
-    slot=panel->pins ? (env.options.taskTiles ? 38 : 22) : icon+6;
+    slot=panel->pins ? (EnvBarButtonSize(env.options.taskTiles ? 38 : 22)) : EnvBarButtonSize(icon+6);
     width=slot;
     dc=GetDC(panel->window); old=SelectObject(dc,env.host.font);
     for(i=0;i<panel->count;++i) if(panel->items[i].valid) {
@@ -590,7 +590,7 @@ int TaskbarFoldersLayout(int begin,int end,int cross,BOOL vertical)
 }
 int TaskbarPinsLayout(int begin,int end,int cross,BOOL vertical)
 {
-    int size,available,minimum=32+(env.options.taskTiles ? 38 : 22);
+    int size,available,minimum=32+(EnvBarButtonSize(env.options.taskTiles ? 38 : 22));
     if(!panels) return begin;
     panels[0].singleRow=FALSE;
     EnvShowControl(taskGrip,!env.options.locked);

@@ -19,7 +19,7 @@ typedef struct TaskGroup { HWND windows[TASK_LIMIT], button; int count,pin; DWOR
 typedef struct QuickItem { char path[MAX_PATH]; HICON icon; HWND button; } QuickItem;
 static TaskGroup tasks[TASK_LIMIT];
 static HWND taskWindows[TASK_LIMIT], savedWindows[TASK_LIMIT], lastActive, bridge, quickTip, desktopButton, sessionWindow;
-static HWND quickGrip, quickMore, quickHot;
+static HWND quickGrip, quickMore, quickHot, desktopEdgeButton;
 static QuickItem quick[24];
 static HICON desktopIcon, explorerIcon, explorerLargeIcon;
 static int quickShown, quickExtent;
@@ -162,6 +162,7 @@ static BOOL SettingsPath(void)
     env.options.topmost = !!Option("AlwaysOnTop", TRUE); env.options.clock = !!Option("Clock", TRUE);
     env.options.quick = !!Option("QuickLaunch", FALSE); env.options.largeIcons = !!Option("LargeIcons", FALSE);
     env.options.searchBox = !!Option("SearchBox", TRUE);
+    env.options.showDesktopButton = !!Option("ShowDesktopButton", TRUE);
     env.options.quickSize = Clamp(Option("QuickLaunchSize", 0), 0, 4096);
     env.options.group = !!Option("GroupTasks", FALSE); env.options.hideInactive = !!Option("HideInactive", FALSE);
     env.options.classicStart = !!GetPrivateProfileIntA("Start", "Classic", FALSE, env.ini);
@@ -521,7 +522,7 @@ static LRESULT CALLBACK QuickGripProc(HWND window, UINT message, WPARAM wp, LPAR
  * the screen temporarily must not destroy the user's wider layout. */
 static int LayoutQuick(int begin, int end, int crossSize, BOOL vertical)
 {
-    int slot = env.options.largeIcons ? 36 : 22, cross = (crossSize - 6) / slot;
+    int slot = EnvBarButtonSize(env.options.largeIcons ? 36 : 22), cross = (crossSize - 6) / slot;
     int total = quickCount + 1, capacity, content, available, i; BOOL overflow, changed = FALSE;
     if (cross < 1) cross = 1;
     available = end - begin - (vertical ? 52 : 80);
@@ -559,7 +560,7 @@ static int LayoutQuick(int begin, int end, int crossSize, BOOL vertical)
     return begin + (env.options.quick && quickExtent >= 28 ? quickExtent + 3 : 0);
 }
 int EnvQuickBandSize(void)
-{ return env.options.quickSize ? env.options.quickSize : (quickCount+1)*(env.options.largeIcons ? 36 : 22)+12; }
+{ return env.options.quickSize ? env.options.quickSize : (quickCount+1)*EnvBarButtonSize(env.options.largeIcons ? 36 : 22)+12; }
 BOOL EnvQuickBandRect(RECT *rect) { *rect=quickBandRect; return env.options.quick && !IsRectEmpty(rect); }
 void EnvQuickBandLayout(int begin,int end,int cross,BOOL vertical,int origin)
 { quickOrigin=origin; LayoutQuick(begin,end+(vertical ? 52 : 80),cross,vertical); quickOrigin=0; }
@@ -663,7 +664,7 @@ static void AddQuickFile(const char *source)
 void EnvLayoutBar(void)
 {
     RECT rect; int width, height;
-    int i, begin, end, trayWidth, rows;
+    int i, begin, end, trayWidth, rows, tail = env.options.showDesktopButton ? SHOW_DESKTOP_EXTENT : 0;
     BOOL changed = FALSE;
     BOOL vertical = env.options.edge == ABE_LEFT || env.options.edge == ABE_RIGHT;
     if (!env.bar || !env.tray) return;
@@ -671,38 +672,51 @@ void EnvLayoutBar(void)
     for(i=0;i<taskCount;++i) if(tasks[i].pin>=0) EnvShowControl(tasks[i].button,FALSE);
     GetClientRect(env.bar, &rect); width = rect.right; height = rect.bottom;
     if (width < 10 || height < 10) return;
+    changed |= EnvShowControl(desktopEdgeButton, env.options.showDesktopButton);
     if (vertical) {
-        changed |= EnvMoveControl(env.startButton, 3, 3, width - 6, 26);
-        end = height - 36;
-        begin = TaskbarSearchLayout(34,end,width,TRUE);
+        int startHeight = EnvBarButtonSize(26);
+        changed |= EnvMoveControl(env.startButton, 3, 3, width - 6, startHeight);
+        end = height - 36 - tail;
+        begin = TaskbarSearchLayout(startHeight+8,end,width,TRUE);
         if(!TaskbarBandsLayout(begin,end,width,TRUE)) {
             begin = LayoutQuick(begin, end, width, TRUE);
             end=TaskbarFoldersLayout(begin,end,width,TRUE);
             begin=TaskbarPinsLayout(begin,end,width,TRUE);
         }
-        changed |= EnvMoveControl(env.tray, 2, height - 30, width - 4, 28); TrayLayout(width - 6, 26);
+        changed |= EnvMoveControl(env.tray, 2, height - 30 - tail, width - 4, 28); TrayLayout(width - 6, 26);
+        if (tail) changed |= EnvMoveControl(desktopEdgeButton, 2, height-tail, width-4, tail);
     } else {
         rows = env.options.rows;
         changed |= EnvMoveControl(env.startButton, 2, 3, EnvStartButtonWidth(), EnvBarButtonHeight(height, rows)); begin = EnvStartButtonWidth() + 10;
         trayWidth = TrayWidth(height - 8);
         if (trayWidth > width / 2) trayWidth = width / 2;
-        end = width - trayWidth - 8;
+        end = width - trayWidth - 8 - tail;
         begin = TaskbarSearchLayout(begin,end,height,FALSE);
         if(!TaskbarBandsLayout(begin,end,height,FALSE)) {
             begin = LayoutQuick(begin, end, height, FALSE);
             end=TaskbarFoldersLayout(begin,end,height,FALSE);
             begin=TaskbarPinsLayout(begin,end,height,FALSE);
         }
-        changed |= EnvMoveControl(env.tray, width - trayWidth - 3, 3, trayWidth, height - 6); TrayLayout(trayWidth - 2, height - 8);
+        changed |= EnvMoveControl(env.tray, width - trayWidth - 3 - tail, 3, trayWidth, height - 6); TrayLayout(trayWidth - 2, height - 8);
+        if (tail) changed |= EnvMoveControl(desktopEdgeButton, width-tail, 3, tail, height-6);
     }
     if (changed) InvalidateRect(env.bar, NULL, FALSE);
 }
 
 int EnvBarButtonHeight(int height, int rows) { return (height - 4) / rows - 2; }
+/* Caption buttons follow Appearance / Active title bar on Win95. Keep icon
+ * modes as minima; only their hit areas grow, never the icon artwork. */
+int EnvBarButtonSize(int minimum)
+{
+    int size = GetSystemMetrics(SM_CYSIZE) + 4;
+    return size > minimum ? size : minimum;
+}
+int EnvBarRowHeight(BOOL largeIcons, BOOL taskTiles)
+{ return EnvBarButtonSize(taskTiles ? 38 : largeIcons ? 34 : 22) + 6; }
 int EnvBarThickness(const ShellOptions *options)
 {
     if (options->edge == ABE_LEFT || options->edge == ABE_RIGHT) return 140 + (options->rows - 1) * 32;
-    return (options->taskTiles ? 44 : (options->largeIcons || TaskbarFoldersLargeIcons()) ? 40 : 28) * options->rows;
+    return EnvBarRowHeight(options->largeIcons || TaskbarFoldersLargeIcons(), options->taskTiles) * options->rows;
 }
 static void ResizeDesktop(void)
 {
@@ -916,7 +930,7 @@ void EnvCommand(int id)
         break;
     }
     case ID_PROPERTIES: PropertiesOpen(); break;
-    case ID_SHOWDESKTOP: EnvShowDesktop(); break;
+    case ID_SHOWDESKTOP: case ID_SHOWDESKTOP_EDGE: StartHide(); EnvShowDesktop(); break;
     case ID_QUICKFOLDER: env.host.openFolder(env.quickDir); break;
     case ID_LOCK:
         TaskbarPanelsCancelResize(); EndQuickResize(FALSE);
@@ -1101,7 +1115,7 @@ static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
         if (message == WM_DISPLAYCHANGE) { EndQuickResize(FALSE); TaskbarPanelsCancelResize(); }
         if (message == WM_DISPLAYCHANGE || wp != SPI_SETWORKAREA) StartRefresh();
         if (message == WM_DISPLAYCHANGE && env.primary) SetRect(&env.originalArea, 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
-        EnvPositionBar(); return 0;
+        EnvPositionBar(); EnvLayoutBar(); InvalidateRect(env.startButton, NULL, FALSE); return 0;
     case WM_APPBAR:
         if (wp == ABN_POSCHANGED) EnvPositionBar();
         return 0;
@@ -1176,7 +1190,7 @@ static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
     case WM_SIZING: {
         RECT *rect = (RECT *)lp;
         BOOL vertical = env.options.edge == ABE_LEFT || env.options.edge == ABE_RIGHT;
-        int unit=env.options.taskTiles ? 44 : (env.options.largeIcons || TaskbarFoldersLargeIcons()) ? 40 : 28, full;
+        int unit=EnvBarRowHeight(env.options.largeIcons || TaskbarFoldersLargeIcons(),env.options.taskTiles), full;
         env.options.rows = vertical ? Clamp((rect->right - rect->left - 140 + 16) / 32 + 1, 1, 3) :
             Clamp((rect->bottom - rect->top + unit/2) / unit, 1, 3);
         /* Snap the live sizing rectangle as well as the saved row count.
@@ -1244,6 +1258,7 @@ HWND EnvironmentCreate(const EnvironmentHost *callbacks)
     if (!env.desktop || !env.bar) return NULL;
     env.startButton = EnvControl(env.bar, "BUTTON", "Start", BS_OWNERDRAW, ID_START);
     desktopButton = QuickButton("Show / Restore Desktop", ID_SHOWDESKTOP);
+    desktopEdgeButton = QuickButton("Show / Restore Desktop", ID_SHOWDESKTOP_EDGE);
     quickMore = QuickButton(">>", ID_QUICKMORE);
     quickGrip = EnvControl(env.bar, "Explorer95.QuickGrip", "", 0, ID_QUICKGRIP);
     desktopIcon = EnvSystemIcon(35);
@@ -1252,6 +1267,7 @@ HWND EnvironmentCreate(const EnvironmentHost *callbacks)
     quickTip = CreateWindowExA(WS_EX_TOPMOST, TOOLTIPS_CLASSA, NULL, WS_POPUP | TTS_ALWAYSTIP,
         CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, env.bar, NULL, env.host.instance, NULL);
     QuickTip(desktopButton, "Show / Restore Desktop", FALSE);
+    QuickTip(desktopEdgeButton, "Show / Restore Desktop", FALSE);
     QuickTip(quickMore, "More Quick Launch programs", FALSE);
     QuickTip(quickGrip, "Drag along the bar to resize; drag across rows to move", FALSE);
     if (!TrayCreate() || !StartCreate()) return NULL;
@@ -1454,6 +1470,15 @@ void EnvPaintQuickGrip(HDC dc, const RECT *bounds, BOOL vertical, BOOL locked)
         if (!locked) { line.left += 3; line.right += 3; DrawEdge(dc, &line, EDGE_ETCHED, BF_LEFT); }
     }
 }
+void EnvPaintDesktopButton(HDC dc, const RECT *bounds, BOOL down, BOOL hot, BOOL focus)
+{
+    RECT rect = *bounds;
+    FillRect(dc, &rect, (HBRUSH)(INT_PTR)((hot ? COLOR_3DLIGHT : COLOR_BTNFACE) + 1));
+    DrawEdge(dc, &rect, down ? EDGE_SUNKEN : EDGE_RAISED, BF_RECT);
+    if (desktopIcon) DrawIconEx(dc, rect.left+(rect.right-rect.left-16)/2+(down ? 1 : 0),
+        rect.top+(rect.bottom-rect.top-16)/2+(down ? 1 : 0), desktopIcon, 16, 16, 0, NULL, DI_NORMAL);
+    if (focus) { InflateRect(&rect, -3, -3); DrawFocusRect(dc, &rect); }
+}
 BOOL EnvDrawBarButton(const DRAWITEMSTRUCT *item)
 {
     char label[160]; int index = (int)item->CtlID - ID_TASK;
@@ -1472,6 +1497,8 @@ BOOL EnvDrawBarButton(const DRAWITEMSTRUCT *item)
     if (item->CtlID == ID_START) {
         /* Keep Start latched while focus is inside its popup. */
         EnvPaintStartButton(item->hDC, &item->rcItem, env.options.startLabel, down || IsWindowVisible(env.start), focus);
+    } else if (item->CtlID == ID_SHOWDESKTOP_EDGE) {
+        EnvPaintDesktopButton(item->hDC, &item->rcItem, down, item->hwndItem == quickHot, focus);
     } else if (index >= 0 && index < taskCount) {
         if(env.options.taskTiles || env.options.hideTaskLabels) EnvPaintTaskTile(item->hDC,&item->rcItem,tasks[index].icon,tasks[index].count,down||tasks[index].active,focus);
         else EnvPaintTaskButton(item->hDC, &item->rcItem, label, tasks[index].icon, down || tasks[index].active, focus);

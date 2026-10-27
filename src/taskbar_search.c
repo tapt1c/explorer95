@@ -662,7 +662,7 @@ BOOL TaskbarSearchCreate(void)
 int TaskbarSearchLayout(int begin,int end,int cross,BOOL vertical)
 {
     int size=end-begin-70,height; BOOL changed; HDC dc; HGDIOBJ old; TEXTMETRICA metrics;
-    int rowHeight=vertical ? 26 : EnvBarButtonHeight(cross,env.options.rows),hostHeight,top;
+    int rowHeight=vertical ? EnvBarButtonSize(26) : EnvBarButtonHeight(cross,env.options.rows),hostHeight,top;
     if(size>160) size=160;
     if(!env.options.searchBox || size<90) { EnvShowControl(search.host,FALSE); TaskbarSearchHide(); return begin; }
     EnvShowControl(search.host,TRUE);

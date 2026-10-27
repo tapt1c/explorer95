@@ -113,6 +113,14 @@ done:
     if (memory) DeleteDC(memory);
     if (screen) ReleaseDC(NULL, screen);
 }
+static NONCLIENTMETRICSA originalAppearance;
+static BOOL ownsAppearance;
+static BOOL RestoreTestAppearance(void)
+{
+    if(!ownsAppearance) return TRUE;
+    ownsAppearance=FALSE;
+    return SystemParametersInfoA(SPI_SETNONCLIENTMETRICS,sizeof(originalAppearance),&originalAppearance,SPIF_SENDCHANGE);
+}
 static void Check(BOOL okay, const char *description)
 {
     Log(okay ? "PASS: " : "FAIL: "); Log(description); Log("\r\n");
@@ -124,8 +132,19 @@ static void Check(BOOL okay, const char *description)
             if (bar) PostMessageA(bar, WM_CLOSE, 0, 0);
             if (WaitForSingleObject(process.hProcess, 3000) != WAIT_OBJECT_0) TerminateProcess(process.hProcess, 1);
         }
-        ExitProcess(1);
+        RestoreTestAppearance(); ExitProcess(1);
     }
+}
+static void ClassicTestAppearance(void)
+{
+    NONCLIENTMETRICSA classic;
+    /* Existing 28px geometry fixtures model Win95's 18px caption setting.
+     * Normalize only the disposable Wine display, never a native Windows PC. */
+    if(!GetProcAddress(GetModuleHandleA("ntdll.dll"),"wine_get_version")) return;
+    ZeroMemory(&originalAppearance,sizeof(originalAppearance)); originalAppearance.cbSize=sizeof(originalAppearance);
+    Check(SystemParametersInfoA(SPI_GETNONCLIENTMETRICS,sizeof(originalAppearance),&originalAppearance,0),"snapshot Wine appearance before classic geometry fixtures");
+    classic=originalAppearance; classic.iCaptionHeight=18; ownsAppearance=TRUE;
+    Check(SystemParametersInfoA(SPI_SETNONCLIENTMETRICS,sizeof(classic),&classic,SPIF_SENDCHANGE),"use explicit Win95 caption metrics for the classic taskbar fixtures");
 }
 
 #include "desktop_icons_cases.h"
@@ -1151,6 +1170,7 @@ static void PumpFor(DWORD duration)
 #include "taskbar_bands_cases.h"
 #include "task_menu_cases.h"
 #include "quick_launch_cases.h"
+#include "taskbar_appearance_cases.h"
 #include "backlog_menu_cases.h"
 #include "shutdown_dos_cases.h"
 #include "session_logoff_cases.h"
@@ -1964,6 +1984,7 @@ void start(void)
     }
     SetCursorPos(GetSystemMetrics(SM_CXSCREEN) - 2, GetSystemMetrics(SM_CYSCREEN) - 2);
     Check(!FindWindowA("Explorer95.Taskbar", NULL), "test starts without an existing Explorer95 instance");
+    if(group==GROUP_MENU || group==GROUP_FULL) ClassicTestAppearance();
     SystemParametersInfoA(SPI_GETWORKAREA, 0, &originalWork, 0);
     GetTempPathA(MAX_PATH, temp);
     wsprintfA(fixture, "%sexplorer95 smoke %lu-%lu", temp, GetCurrentProcessId(), GetTickCount());
@@ -1989,6 +2010,7 @@ void start(void)
     if (group == GROUP_FULL || group == GROUP_CORE) { PaintTests(); ConfigTests(settingsDir); DesktopIconTests(settingsDir); LanguageTests(settingsDir); NativeRunTests(); FolderHandlerTests(module,settings); FolderSelectionTests(); DragDataTests(); NativeViewMessageTests(); TrayMirrorTests(); TrayMirrorCrossProcessTests(); }
     if(group==GROUP_FULL || group==GROUP_MENU || group==GROUP_CORE) { TaskbarQueryTests(settingsDir,module); TaskbarLinksTests(settingsDir,module); TaskMenuNativeTests(); }
     if (group == GROUP_CORE) goto cleanup;
+    if(group==GROUP_MENU || group==GROUP_FULL) TaskbarAppearanceMetricsTest(settingsDir,executable);
     if (group == GROUP_MENU) NativeDesktopIconSizeTests();
     if(group==GROUP_MENU || group==GROUP_FULL) WritePrivateProfileStringA("Desktop","IconSize","16",settings);
     if(group==GROUP_FULL || group==GROUP_MENU) TaskbarPanelsPrepare(settingsDir,settings,module);
@@ -2046,6 +2068,7 @@ void start(void)
     /* Finish the cold-start folder activation check before deliberately
      * moving foreground among independent Alt+Tab fixture processes. */
     if(group==GROUP_MENU || group==GROUP_FULL) TaskSwitchTests(bar);
+    if(group==GROUP_MENU || group==GROUP_FULL) TaskbarAppearanceTests(bar,settings);
     if(group==GROUP_FULL || group==GROUP_MENU) { TaskbarPanelsTests(bar,settingsDir,settings); TaskbarSearchTests(bar,settingsDir,settings,module); TaskbarBandsTests(bar,settings); SendMessageA(bar,WM_COMMAND,ID_QUICK,0); }
     if (group != GROUP_BROWSER) { QuickLaunchTests(bar, settings); TaskTileTests(bar,settings); TaskGroupProcessesTests(bar,settingsDir); TaskManagerMenuTests(bar); StartOrderTests(bar,FindWindowA("Explorer95.Start",NULL),settings); }
     if (group != GROUP_MENU) {
@@ -2191,6 +2214,7 @@ shutdown:
         Check(CreateProcessA(NULL,command,NULL,NULL,FALSE,0,NULL,NULL,&startup,&process),"restart the shell with an icon-only Start profile");
         bar = WaitFor("Explorer95.Taskbar",NULL); GetWindowRect(GetDlgItem(bar,100),&button);
         WelcomeDisabledTest();
+        Check(!IsWindowVisible(GetDlgItem(bar,ID_SHOWDESKTOP_EDGE)),"desktop edge-button preference survives a real shell restart");
         Check(bar && button.right - button.left == 26,"the real restarted shell retains the compact icon-only Start button");
         Check(GetPrivateProfileIntA("TaskbarToolbars","Count",0,settings)==2 &&
               GetPrivateProfileIntA("TaskbarToolbars","Size0",0,settings)==190 &&
@@ -2322,6 +2346,7 @@ cleanup:
     wsprintfA(path, "%s\\empty", fixture); RemoveDirectoryA(path);
     wsprintfA(path, "%s\\sub", fixture); RemoveDirectoryA(path);
     Check(RemoveDirectoryA(fixture), "temporary fixtures removed");
+    Check(RestoreTestAppearance(),"restore the original disposable Wine appearance");
     Log("Selected smoke group passed.\r\n");
     ExitProcess(0);
 }

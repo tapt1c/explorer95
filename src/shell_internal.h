@@ -47,6 +47,8 @@
 #define ID_QUICKMORE 613
 #define ID_TASKMANAGER 614
 #define ID_SEARCHBAR 615
+#define ID_SHOWDESKTOP_EDGE 616
+#define SHOW_DESKTOP_EXTENT 22
 #define ID_EDGE 620
 #define ID_ROWS 621
 #define ID_WIDTH 622
@@ -84,7 +86,7 @@
 
 typedef struct ShellOptions {
     int edge, rows, taskWidth, recentCount, quickSize;
-    BOOL locked, autoHide, topmost, clock, quick, largeIcons, largeStartIcons, group, hideInactive, taskTiles, hideTaskLabels, searchBox;
+    BOOL locked, autoHide, topmost, clock, quick, largeIcons, largeStartIcons, group, hideInactive, taskTiles, hideTaskLabels, searchBox, showDesktopButton;
     BOOL classicStart, hoverMenus, allowDrop, highlightNew, desktopIcons, autoArrange, classicShutdown, showWelcome;
     BOOL lockDesktopIcons, snapDesktopIcons;
     int desktopGridX, desktopGridY, desktopIconSize, language;
@@ -126,6 +128,8 @@ void EnvApplyOptions(void);
 void EnvPositionBar(void);
 int EnvBarThickness(const ShellOptions *options);
 int EnvBarButtonHeight(int height, int rows);
+int EnvBarButtonSize(int minimum);
+int EnvBarRowHeight(BOOL largeIcons, BOOL taskTiles);
 void EnvLayoutBar(void);
 BOOL EnvMoveControl(HWND window, int x, int y, int width, int height);
 BOOL EnvShowControl(HWND window, BOOL visible);
@@ -163,6 +167,7 @@ void EnvPaintTaskButton(HDC dc, const RECT *bounds, const char *label, HICON ico
 void EnvPaintTaskTile(HDC dc, const RECT *bounds, HICON icon, int count, BOOL down, BOOL focus);
 void EnvPaintQuickButton(HDC dc, const RECT *bounds, HICON icon, int size, BOOL down, BOOL hot, BOOL focus);
 void EnvPaintQuickGrip(HDC dc, const RECT *bounds, BOOL vertical, BOOL locked);
+void EnvPaintDesktopButton(HDC dc, const RECT *bounds, BOOL down, BOOL hot, BOOL focus);
 
 BOOL TrayCreate(void);
 int TrayWidth(int height);
