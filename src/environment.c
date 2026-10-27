@@ -39,6 +39,10 @@ static PaintColors desktopColors;
 static BOOL changingDesktopColors;
 static MINIMIZEDMETRICS originalMinimized;
 static BOOL minimizedChanged;
+typedef BOOL (WINAPI *RegisterShellNotifications)(HWND,DWORD);
+static RegisterShellNotifications registerShellNotifications;
+static UINT shellNotificationMessage;
+static BOOL shellNotifications;
 static ShellStartup sessionStartup;
 static BOOL startupStarted;
 static BOOL startupLaunching;
@@ -1068,6 +1072,15 @@ static LRESULT CALLBACK SessionProc(HWND window,UINT message,WPARAM wp,LPARAM lp
 }
 static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
 {
+    if(shellNotifications && message==shellNotificationMessage) {
+        /* Win95 hides minimized top-level windows only when its native
+         * HSHELL_GETMINRECT request is handled. Shell32 owns the legacy
+         * RECT16 buffer; no cross-task message pointer is dereferenced here. */
+        if(wp==HSHELL_GETMINRECT && !env.closing) {
+            RenderTraceShell("shell.minimized.handled",S_OK,0,0); return TRUE;
+        }
+        return 0;
+    }
     LRESULT menuResult;
     if(TaskMenuMessage(window,message,wp,lp,&menuResult)) return menuResult;
     if(message==NATIVE_GETSHELLBROWSER) return env.closing ? 0 : (LRESULT)NativeViewShellBrowser(env.desktopView);
@@ -1299,24 +1312,26 @@ HWND EnvironmentCreate(const EnvironmentHost *callbacks)
         HMODULE user=GetModuleHandleA("user32.dll");
         GetShell getShell=(GetShell)(void *)GetProcAddress(user,"GetShellWindow");
         SetShell setShell=(SetShell)(void *)GetProcAddress(user,"SetShellWindow");
-        BOOL saved,applied=FALSE;
+        BOOL saved,applied=FALSE; DWORD applyError=ERROR_SUCCESS;
         ZeroMemory(&originalMinimized,sizeof(originalMinimized)); originalMinimized.cbSize=sizeof(originalMinimized);
         saved=SystemParametersInfoA(SPI_GETMINIMIZEDMETRICS,sizeof(originalMinimized),&originalMinimized,0);
-        RenderTraceShell("shell.minimized.read",saved ? S_OK : E_FAIL,GetLastError(),originalMinimized.iArrange);
+        RenderTraceShell("shell.minimized.read",saved ? S_OK : E_FAIL,saved ? ERROR_SUCCESS : GetLastError(),originalMinimized.iArrange);
         /* Original Win95 exports SetShellWindow. Claim only an empty shell
          * slot, never another desktop. Destroying our HWND releases the slot. */
         if(getShell && setShell && !getShell()) {
             BOOL registered=setShell(env.desktop);
-            RenderTraceShell("shell.register",registered ? S_OK : E_FAIL,GetLastError(),getShell()==env.desktop);
+            DWORD error=registered ? ERROR_SUCCESS : GetLastError();
+            RenderTraceShell("shell.register",registered ? S_OK : E_FAIL,error,getShell()==env.desktop);
         }
         if(saved) {
             MINIMIZEDMETRICS hidden=originalMinimized; hidden.iArrange|=ARW_HIDE;
             /* Reapply after registering the shell, even when the saved
              * metrics already contain the flag. */
             applied=SystemParametersInfoA(SPI_SETMINIMIZEDMETRICS,sizeof(hidden),&hidden,0);
+            if(!applied) applyError=GetLastError();
             minimizedChanged=applied && !(originalMinimized.iArrange&ARW_HIDE);
         }
-        RenderTraceShell("shell.minimized.apply",applied ? S_OK : E_FAIL,GetLastError(),GetSystemMetrics(SM_ARRANGE));
+        RenderTraceShell("shell.minimized.apply",applied ? S_OK : E_FAIL,applyError,GetSystemMetrics(SM_ARRANGE));
     }
     env.startButton = EnvControl(env.bar, "BUTTON", "Start", BS_OWNERDRAW, ID_START);
     desktopButton = QuickButton("Show / Restore Desktop", ID_SHOWDESKTOP);
@@ -1356,6 +1371,16 @@ HWND EnvironmentCreate(const EnvironmentHost *callbacks)
     hotkeyDesktop = RegisterHotKey(env.bar, 1, MOD_WIN, 'D'); hotkeyStart = RegisterHotKey(env.bar, 2, MOD_CONTROL, VK_ESCAPE);
     hotkeyLeftWin = RegisterHotKey(env.bar, 3, MOD_WIN, VK_LWIN);
     hotkeyRightWin = RegisterHotKey(env.bar, 4, MOD_WIN, VK_RWIN);
+    if(env.primary && (GetVersion()&0x80000000UL)) {
+        HMODULE shell=GetModuleHandleA("shell32.dll");
+        registerShellNotifications=(RegisterShellNotifications)(void *)GetProcAddress(shell,MAKEINTRESOURCEA(181));
+        shellNotificationMessage=RegisterWindowMessageA("SHELLHOOK");
+        /* Command 1 observes shell events without taking over the system's
+         * task-list role (command 3). The platform supplies its own hook. */
+        if(registerShellNotifications && shellNotificationMessage)
+            shellNotifications=registerShellNotifications(env.bar,1);
+        RenderTraceShell("shell.notifications.register",shellNotifications ? S_OK : E_FAIL,0,0);
+    }
     if (env.primary) SendNotifyMessageA(HWND_BROADCAST, RegisterWindowMessageA("TaskbarCreated"), 0, 0);
     if(env.options.showWelcome) WelcomeShow(env.host.instance,env.bar);
     return env.bar;
@@ -1380,6 +1405,9 @@ void EnvironmentShutdown(void)
     APPBARDATA data; int i;
     if (env.closing) return;
     env.closing = TRUE;
+    if(shellNotifications) {
+        registerShellNotifications(env.bar,0); shellNotifications=FALSE;
+    }
     if(startupStarted) ShellStartupClose(&sessionStartup);
     WelcomeClose();
     TaskSwitchDestroy();
