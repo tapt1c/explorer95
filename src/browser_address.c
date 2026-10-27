@@ -13,7 +13,7 @@ struct BrowserAddress {
     WNDPROC original;
     HICON images[10], currentIcon;
     AddressRow *rows[ADDRESS_LIMIT];
-    int count, current;
+    int count, current, dropHeight;
     BOOL rebuilding, pending, dropdown;
     BrowserPlace destination;
     char dropText[MAX_PATH];
@@ -167,6 +167,33 @@ BOOL BrowserAddressCreate(Browser *browser)
     SendMessageA(browser->address, CB_SETITEMHEIGHT, 0, BrowserAddressHeight(browser) + 4);
     SendMessageA(browser->address, CB_SETITEMHEIGHT, (WPARAM)-1, BrowserAddressHeight(browser));
     return address->icon != NULL;
+}
+void BrowserAddressMove(Browser *browser,int x,int y,int width,int height)
+{
+    BrowserAddress *address=browser->location; RECT old; POINT origin; char text[MAX_PATH],after[MAX_PATH]; BOOL rebuilding; DWORD selection;
+    if(!address) return;
+    GetWindowRect(browser->address,&old); origin.x=old.left; origin.y=old.top;
+    ScreenToClient(browser->window,&origin);
+    /* USER reports the closed field height, not the requested dropdown height.
+     * Comparing the former with 220 caused WM_SIZE on every navigation. */
+    if(origin.x==x && origin.y==y && old.right-old.left==width && address->dropHeight==height) return;
+    SendMessageA(address->edit,WM_GETTEXT,MAX_PATH,(LPARAM)text);
+    selection=(DWORD)SendMessageA(address->edit,EM_GETSEL,0,0);
+    rebuilding=address->rebuilding; address->rebuilding=TRUE;
+    TraceAddress(browser,"address.move.before",0);
+    if(SetWindowPos(browser->address,NULL,x,y,width,height,SWP_NOZORDER|SWP_NOACTIVATE|SWP_NOCOPYBITS))
+        address->dropHeight=height;
+    TraceAddress(browser,"address.move.native",0);
+    /* Original Win95 restores an old EDIT value during ComboBox WM_SIZE.
+     * Preserve the actual edit, including an unsubmitted command, rather than
+     * forcing the current folder over whatever the user was typing. */
+    SendMessageA(address->edit,WM_GETTEXT,MAX_PATH,(LPARAM)after);
+    if(lstrcmpA(after,text)) UiSetLiteralWindowTextA(browser->address,text);
+    if((DWORD)SendMessageA(address->edit,EM_GETSEL,0,0)!=selection)
+        SendMessageA(address->edit,EM_SETSEL,LOWORD(selection),HIWORD(selection));
+    address->rebuilding=rebuilding;
+    if(!SendMessageA(browser->address,CB_GETDROPPEDSTATE,0,0)) address->dropdown=FALSE;
+    TraceAddress(browser,"address.move.after",0);
 }
 void BrowserAddressLayout(Browser *browser)
 {

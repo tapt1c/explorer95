@@ -305,7 +305,7 @@ void BrowserLayout(Browser *browser)
     EnvShowControl(browser->go, browser->options.address);
     if (browser->options.address) {
         int fieldHeight,goWidth=UiLanguage() ? 64 : 47;
-        EnvMoveControl(browser->address,56,top+2,width>goWidth+73 ? width-goWidth-65 : 8,220);
+        BrowserAddressMove(browser,56,top+2,width>goWidth+73 ? width-goWidth-65 : 8,220);
         /* CB_SETITEMHEIGHT is the edit's content height, not the bordered
          * ComboBox height. Let USER measure its native frame, then align Go. */
         GetWindowRect(browser->address, &tool); fieldHeight = tool.bottom - tool.top;

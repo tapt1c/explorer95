@@ -131,6 +131,7 @@ void BrowserViewsPopup(Browser *browser);
 BOOL BrowserIsWindow(HWND window);
 void BrowserRefresh(Browser *browser);
 BOOL BrowserAddressCreate(Browser *browser);
+void BrowserAddressMove(Browser *browser,int x,int y,int width,int height);
 void BrowserAddressUpdate(Browser *browser);
 void BrowserAddressLayout(Browser *browser);
 UINT BrowserAddressHeight(Browser *browser);

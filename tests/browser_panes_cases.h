@@ -323,6 +323,21 @@ static void BrowserAddressLocationSyncTests(HWND browser,const char *fixture)
     Navigate(browser,fixture); PumpFor(60);
     SendMessageA(address,WM_GETTEXT,MAX_PATH,(LPARAM)text);
     Check(!lstrcmpiA(text,fixture),"a newer Go command supersedes an older queued dropdown destination");
+    { RECT original; BOOL maximized=IsZoomed(browser);
+      if(maximized) ShowWindow(browser,SW_RESTORE);
+      GetWindowRect(browser,&original); SendMessageA(address,WM_SETTEXT,0,(LPARAM)"unfinished address command");
+      SendMessageA(address,WM_GETTEXT,MAX_PATH,(LPARAM)text);
+      Check(!lstrcmpA(text,"unfinished address command"),"enter an unsubmitted command through the actual native address edit");
+      SendMessageA(address,CB_SETEDITSEL,0,MAKELPARAM(6,13));
+      MoveWindow(browser,original.left,original.top,original.right-original.left+24,original.bottom-original.top,TRUE); PumpFor(50);
+      SendMessageA(address,WM_GETTEXT,MAX_PATH,(LPARAM)text);
+      Check(!lstrcmpA(text,"unfinished address command"),"resizing the native address field preserves an unsubmitted command rather than replacing it with the folder");
+      Check(SendMessageA(address,CB_GETEDITSEL,0,0)==MAKELONG(6,13),"address resizing preserves the selection within the typed command");
+      MoveWindow(browser,original.left,original.top,original.right-original.left,original.bottom-original.top,TRUE);
+      if(maximized) ShowWindow(browser,SW_MAXIMIZE);
+      PumpFor(40); SendMessageA(address,WM_GETTEXT,MAX_PATH,(LPARAM)text);
+      Check(!lstrcmpA(text,"unfinished address command"),"restoring and maximizing preserve the same typed address");
+      Navigate(browser,fixture); }
 }
 static void BrowserAddressTests(HWND browser, const char *fixture)
 {
