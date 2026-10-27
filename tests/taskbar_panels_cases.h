@@ -469,6 +469,10 @@ static void __attribute__((noinline)) TaskbarPanelsTests(HWND bar,const char *di
     SendMessageA(bar,WM_COMMAND,ID_LOCK,0); PanelDrag(toolbar,-30,TRUE);
     Check(PanelWidth(toolbar)==160,"Escape cancels resizing a custom folder toolbar");
     PanelDrag(toolbar,-30,FALSE); GetWindowRect(bar,&after);
+    if(PanelWidth(toolbar)!=190 || GetPrivateProfileIntA("TaskbarToolbars","Size0",0,settings)!=190 || !EqualRect(&before,&after)) {
+        char note[180]; wsprintfA(note,"Folder resize: actual=%d saved=%u same-bar=%d\r\n",PanelWidth(toolbar),
+            GetPrivateProfileIntA("TaskbarToolbars","Size0",0,settings),EqualRect(&before,&after)); Log(note);
+    }
     Check(PanelWidth(toolbar)==190 && GetPrivateProfileIntA("TaskbarToolbars","Size0",0,settings)==190 && EqualRect(&before,&after),"folder toolbar resizing persists its own width without moving the taskbar");
     SendMessageA(bar,WM_COMMAND,ID_LOCK,0);
     PanelIconSize(toolbar,TRUE); GetWindowRect(bar,&after);

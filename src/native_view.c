@@ -48,7 +48,7 @@ struct NativeView {
     BOOL desktopImagesDirty;
     int desktopIconSize;
     BOOL sharedDesktopImages;
-    char createdName[MAX_PATH];
+    char createdPath[MAX_PATH];
     int renameAttempts;
 };
 
@@ -743,6 +743,21 @@ static void DeleteDesktopSelection(NativeView *view)
     if (paths) HeapFree(GetProcessHeap(), 0, paths);
 }
 
+static LPITEMIDLIST CreatedObject(NativeView *view)
+{
+    IEnumIDList *items=NULL; LPITEMIDLIST relative=NULL; int count=0;
+    /* Personal and common Desktop can contain identical display names.
+     * Edit only the PIDL whose filesystem path matches the created object. */
+    if(FAILED(IShellFolder_EnumObjects(view->folder,view->parent,SHCONTF_FOLDERS|SHCONTF_NONFOLDERS,&items)) || !items) return NULL;
+    while(count++<512 && IEnumIDList_Next(items,1,&relative,NULL)==S_OK) {
+        LPITEMIDLIST absolute=Combine(view->absolute,relative); char path[MAX_PATH];
+        BOOL match=absolute && SHGetPathFromIDListA(absolute,path) && !lstrcmpiA(path,view->createdPath);
+        if(absolute) HeapFree(GetProcessHeap(),0,absolute);
+        if(match) break;
+        CoTaskMemFree(relative); relative=NULL;
+    }
+    IEnumIDList_Release(items); return relative;
+}
 static LRESULT CALLBACK Subclass(HWND window, UINT message, WPARAM wp, LPARAM lp)
 {
     NativeView *view = (NativeView *)GetPropA(window, property);
@@ -754,11 +769,14 @@ static LRESULT CALLBACK Subclass(HWND window, UINT message, WPARAM wp, LPARAM lp
     BeginDesktopCall(view);
     { BOOL handled=NativeViewMenuMessage(view,message,wp,lp);
       EndDesktopCall(view); if(handled) return 0; }
+    if(window==view->list && message==WM_KEYDOWN && wp==VK_ESCAPE && view->createdPath[0]) {
+        view->createdPath[0]=0; KillTimer(view->window,CREATED_RENAME_TIMER);
+    }
     if(window==view->window && message==WM_TIMER && wp==CREATED_RENAME_TIMER) {
-        if(view->createdName[0] && view->renameAttempts-- && !view->operationDepth && !DesktopBusy(view)) {
-            WCHAR name[MAX_PATH]; LPITEMIDLIST relative=NULL; ULONG eaten; HWND edit=NULL;
-            if(MultiByteToWideChar(CP_ACP,0,view->createdName,-1,name,MAX_PATH) &&
-               SUCCEEDED(IShellFolder_ParseDisplayName(view->folder,view->parent,NULL,name,&eaten,&relative,NULL))) {
+        if(ListView_GetEditControl(view->list)) view->renameAttempts=0;
+        if(view->createdPath[0] && view->renameAttempts>0 && !view->operationDepth && !DesktopBusy(view)) {
+            LPITEMIDLIST relative=CreatedObject(view); HWND edit=NULL; --view->renameAttempts;
+            if(relative) {
                 SetFocus(view->list); BeginDesktopCall(view);
                 IShellView_SelectItem(view->view,relative,SVSI_EDIT|SVSI_SELECT|SVSI_FOCUSED|SVSI_DESELECTOTHERS|SVSI_ENSUREVISIBLE);
                 edit=ListView_GetEditControl(view->list); EndDesktopCall(view);
@@ -766,8 +784,8 @@ static LRESULT CALLBACK Subclass(HWND window, UINT message, WPARAM wp, LPARAM lp
             if(relative) CoTaskMemFree(relative);
             if(edit) view->renameAttempts=0;
         }
-        if(!view->createdName[0] || view->renameAttempts<=0) {
-            view->createdName[0]=0; KillTimer(window,CREATED_RENAME_TIMER);
+        if(!view->createdPath[0] || view->renameAttempts<=0) {
+            view->createdPath[0]=0; KillTimer(window,CREATED_RENAME_TIMER);
         }
         return 0;
     }
@@ -951,11 +969,9 @@ BOOL NativeViewSelectionMenu(NativeView *view,POINT point,HWND owner)
 }
 static void RenameCreated(NativeView *view,const char *path)
 {
-    const char *name=path,*p;
-    for(p=path;*p;++p) if(*p=='\\' || *p=='/') name=p+1;
-    if(!*name) return;
-    NativeViewRefresh(view); lstrcpynA(view->createdName,name,sizeof(view->createdName)); view->renameAttempts=20;
-    if(!SetTimer(view->window,CREATED_RENAME_TIMER,100,NULL)) view->createdName[0]=0;
+    if(!path[0]) return;
+    NativeViewRefresh(view); lstrcpynA(view->createdPath,path,sizeof(view->createdPath)); view->renameAttempts=20;
+    if(!SetTimer(view->window,CREATED_RENAME_TIMER,100,NULL)) view->createdPath[0]=0;
 }
 static BOOL HasNewMenu(HMENU menu, IContextMenu *context)
 {
@@ -1112,7 +1128,7 @@ void NativeViewDestroy(NativeView *view)
 {
     if (!view) return;
     if(view->window) KillTimer(view->window,CREATED_RENAME_TIMER);
-    view->createdName[0]=0;
+    view->createdPath[0]=0;
     RenderTraceShutdown("view.exit.drop",S_OK,view->desktop);
     FileDropRevoke(view->fileDrop); view->fileDrop=NULL;
     RenderTraceShutdown("view.exit.icons",S_OK,view->desktop);

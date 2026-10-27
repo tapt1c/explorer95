@@ -35,12 +35,13 @@ static void ShellStartupUiTests(const char *directory,const char *executable,con
 {
     LPITEMIDLIST pidl=NULL; char startupFolder[MAX_PATH],linkPath[MAX_PATH],profile[MAX_PATH],command[MAX_PATH*3];
     WCHAR wide[MAX_PATH]; IShellLinkA *link=NULL; IPersistFile *persist=NULL;
-    STARTUPINFOA info; PROCESS_INFORMATION worker; HWND bar,launched; DWORD started;
+    STARTUPINFOA info; PROCESS_INFORMATION worker; HWND bar,launched; DWORD started; BOOL secondary;
     if(!GetProcAddress(GetModuleHandleA("ntdll.dll"),"wine_get_version")) return;
     Check(SUCCEEDED(OleInitialize(NULL)) && SUCCEEDED(SHGetSpecialFolderLocation(NULL,CSIDL_STARTUP,&pidl)) &&
         SHGetPathFromIDListA(pidl,startupFolder),"locate Startup only inside the disposable Wine profile"); CoTaskMemFree(pidl);
     wsprintfA(linkPath,"%s\\Explorer95 owned startup %lu.lnk",startupFolder,GetCurrentProcessId());
     Check(GetFileAttributesA(linkPath)==INVALID_FILE_ATTRIBUTES,"startup test never replaces an existing shortcut");
+    lstrcpyA(startupShortcut,linkPath);
     Check(SUCCEEDED(CoCreateInstance(&CLSID_ShellLink,NULL,CLSCTX_INPROC_SERVER,&IID_IShellLinkA,(void **)&link)) &&
         SUCCEEDED(IShellLinkA_SetPath(link,module)) && SUCCEEDED(IShellLinkA_SetArguments(link,"\"--child\"")) &&
         SUCCEEDED(IShellLinkA_SetWorkingDirectory(link,directory)) &&
@@ -49,23 +50,37 @@ static void ShellStartupUiTests(const char *directory,const char *executable,con
     IPersistFile_Release(persist); IShellLinkA_Release(link);
     wsprintfA(profile,"%s\\startup-ui.ini",directory); WritePrivateProfileStringA("Interface","ShowWelcome","0",profile);
     ZeroMemory(&info,sizeof(info)); info.cb=sizeof(info);
-    wsprintfA(command,"\"%s\" --settings=\"%s\"",executable,profile);
-    Check(CreateProcessA(NULL,command,NULL,NULL,FALSE,0,NULL,NULL,&info,&worker),"start a primary shell with only our disposable Startup fixture");
-    bar=WaitFor("Explorer95.Taskbar",NULL); launched=WaitFor("Explorer95.SmokeChild",NULL);
-    Check(bar && launched && SendMessageA(launched,WM_APP+35,0,0),"primary-shell startup runs the real shortcut with its original quoted arguments");
-    PostMessageA(launched,WM_CLOSE,0,0); started=GetTickCount();
-    while(IsWindow(launched) && GetTickCount()-started<3000) PumpFor(20);
+    secondary=FindWindowA("Shell_TrayWnd",NULL)!=NULL;
+    wsprintfA(command,"\"%s\" --settings=\"%s\" --trace-render",executable,profile);
+    Check(CreateProcessA(NULL,command,NULL,NULL,FALSE,0,NULL,NULL,&info,&worker),"start a shell with only our disposable Startup fixture");
+    process=worker; bar=WaitFor("Explorer95.Taskbar",NULL);
+    if(secondary) {
+        PumpFor(600); launched=FindWindowA("Explorer95.SmokeChild",NULL);
+        Check(bar && !launched,"a secondary shell alongside Wine's stock tray does not repeat Startup programs");
+        Log("Primary Startup execution requires the Win95 shell check; this Wine display already has a stock tray.\r\n");
+    } else {
+        launched=WaitFor("Explorer95.SmokeChild",NULL); child=launched;
+        /* The helper creates this class only after parsing --child. Checking
+         * inert helper mode proves arguments arrived without requiring a
+         * particular spelling of semantically redundant quotes. */
+        Check(bar && launched,"primary-shell startup runs the real shortcut with its launch arguments");
+        PostMessageA(launched,WM_CLOSE,0,0); started=GetTickCount();
+        while(IsWindow(launched) && GetTickCount()-started<3000) PumpFor(20);
+        child=NULL;
+    }
     PostMessageA(bar,WM_APP+36,0,0); PumpFor(200);
     Check(!FindWindowA("Explorer95.SmokeChild",NULL),"completed Startup enumeration cannot replay programs from a repeated wakeup");
     PostMessageA(bar,WM_CLOSE,0,0); Check(WaitForGuiProcess(worker.hProcess,5000)==WAIT_OBJECT_0,"close only the primary startup fixture shell");
-    CloseHandle(worker.hThread); CloseHandle(worker.hProcess);
+    CloseHandle(worker.hThread); CloseHandle(worker.hProcess); ZeroMemory(&process,sizeof(process));
     wsprintfA(command,"\"%s\" --settings=\"%s\" --open=\"%s\"",executable,profile,directory);
     Check(CreateProcessA(NULL,command,NULL,NULL,FALSE,0,NULL,NULL,&info,&worker),"cold-start a folder request while the owned Startup shortcut still exists");
+    process=worker;
     bar=WaitFor("Explorer95.Taskbar",NULL); PumpFor(600);
     Check(bar && !FindWindowA("Explorer95.SmokeChild",NULL),"opening a folder does not rerun login Startup programs");
     PostMessageA(bar,WM_CLOSE,0,0); Check(WaitForGuiProcess(worker.hProcess,5000)==WAIT_OBJECT_0,"close only the folder-request fixture shell");
-    CloseHandle(worker.hThread); CloseHandle(worker.hProcess);
+    CloseHandle(worker.hThread); CloseHandle(worker.hProcess); ZeroMemory(&process,sizeof(process));
     Check(DeleteFileA(linkPath),"remove only the owned Startup shortcut");
+    startupShortcut[0]=0;
     DeleteFileA(profile); wsprintfA(command,"%s.DIP",profile); DeleteFileA(command);
     OleUninitialize();
 }

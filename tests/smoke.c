@@ -18,6 +18,7 @@
 static PROCESS_INFORMATION process;
 static HWND child;
 static char programsShortcut[MAX_PATH];
+static char startupShortcut[MAX_PATH];
 static void PumpFor(DWORD duration);
 static HWND WaitFor(const char *kind,const char *title);
 static void NativeSelectItem(HWND list, int index);
@@ -133,6 +134,7 @@ static void Check(BOOL okay, const char *description)
             if (bar) PostMessageA(bar, WM_CLOSE, 0, 0);
             if (WaitForSingleObject(process.hProcess, 3000) != WAIT_OBJECT_0) TerminateProcess(process.hProcess, 1);
         }
+        if(startupShortcut[0]) DeleteFileA(startupShortcut);
         RestoreTestAppearance(); ExitProcess(1);
     }
 }

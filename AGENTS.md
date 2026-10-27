@@ -63,6 +63,7 @@ Explorer95 — любительская нативная оболочка для
 | `src/browser_history.c` | До 32 сохраняемых посещений на профиль; отключение и очистка отдельно от Back/Forward окна. |
 | `src/environment.h` | Интерфейс `EnvironmentHost`, публичные функции окружения и файловый backend установки shell. |
 | `src/environment.c` | Общее состояние, панель задач, группировка окон, Quick Launch, часы, appbar, горячие клавиши и выполнение команд. |
+| `src/shell_startup.c/.h`, `tests/shell_startup_cases.h` | Потоковое чтение личной/общей Startup без запуска в перечислителе; primary-shell очередь, настоящий тестовый ярлык и отсутствие повторного запуска при folder request. |
 | `src/shell_features.c`, `src/shell_features.h` | Доступность сетевой команды и Log Off по метрике установленной сети, профилям/провайдеру входа и ограничениям Explorer; без обращения к сети. |
 | `src/taskbar_panels.c/.h`, `tests/taskbar_panels_cases.h` | Папки-панели, их меню/resize/overflow, отдельная папка Taskbar Pins, уведомления и привязка к запущенным задачам. |
 | `src/taskbar_search.c/.h`, `tests/taskbar_search_cases.h` | Нативная строка рядом с «Пуском», компактные результаты, порционный поиск и исполнение через EnvironmentLaunch. |
@@ -1476,6 +1477,22 @@ explorer95.exe --settings="C:\EX95TEST\Explorer95.ini"
   Выделение в чужом ListView задавайте через NativeSelectItem с памятью процесса
   приложения, затем проверяйте selected count. Прямой ListView_SetItemState
   передаёт указатель на локальный стек: LVM_* не маршалит его между процессами.
+- New в файловом окне передаёт точный created path в общий выбор/редактор имени.
+  Для registered Command/wizard пустой created path не означает созданный файл:
+  его собственный мастер сохраняет управление. Rename из контекстного меню
+  выполняйте после снятия browser->busy и освобождения popup, иначе общий guard
+  BrowserFilesCommand поглотит действие. Native Rename использует оригинальный
+  ListView label editor, чтобы Shell32 выполнила SetNameOf своего объекта.
+  Desktop fallback ShellNew использует ограниченный таймер ожидания и SVSI_EDIT
+  с relative PIDL, найденным по точному filesystem path созданного объекта,
+  без запроса IDataObject. Одинаковые подписи личного/общего Desktop не являются
+  идентичностью объекта. Escape и уже открытый редактор отменяют ожидание.
+- Selection menu NativeView сохраняет оригинальные command IDs и IContextMenu2;
+  Desktop использует владельца env.bar. ShellFolderMenuUnique удаляет только
+  повторные канонические open/explore одной папки, сохраняет остальные verbs
+  и default action. Не удаляйте пункты по переведённой подписи и не правьте
+  глобальный реестр ради локального дубликата. Открытие папки идёт через общий
+  OpenSelection, Rename — через native label editor после закрытия popup.
 - Уведомление FindFirstChangeNotification отслеживает только открытый каталог,
   без рекурсии; таймер проверяет handle с нулевым ожиданием. При отключённом
   носителе уведомление закрывается до F5, диалог не должен повторяться в цикле.
@@ -1508,6 +1525,20 @@ Rename со скрытым расширением, системные Properties
 осматривайте перенос полной панели при 640×480, дерево, Tiles и BMP-эскизы.
 
 ## Основная оболочка, системные команды и трей
+
+- EnvironmentStartSession вызывается после освобождения startup mutex только
+  для обычного запуска primary shell. Потоковый ShellStartup возвращает следующий
+  файл из личной/общей Startup, одинаковые каталоги не дублируются. По одному
+  ShellExecuteEx за сообщение WM_APP+36; reentrancy guard не допускает вложенный
+  запуск из modal/DDE pump. При закрытии закрывается Find handle. Не исполняйте
+  Startup из file request, secondary shell или Log Off client; не используйте
+  StartRecord для фонового автозапуска. UI-тест меняет только собственный ярлык
+  в disposable Wine, вне Wine этот сценарий пропускается.
+- Только primary shell добавляет ARW_HIDE через SPI_SETMINIMIZEDMETRICS,
+  сохраняя прежнюю структуру. При выходе убирается собственное изменение,
+  если iArrange не менялся извне; остальные текущие метрики сохраняются.
+  SPIF_UPDATEINIFILE не используется. Не маскируйте свёрнутые заголовки
+  принудительным скрытием прикладных HWND или глобальными хуками.
 
 - `[Taskbar] SearchBox` управляет отдельным `Explorer95.SearchBox` рядом с Start;
   общий draft/preview/Apply/Cancel и Toolbars menu используют один параметр.
@@ -1618,6 +1649,8 @@ Rename со скрытым расширением, системные Properties
   кнопки находится вне трея; размеры значков и часов не меняются.
   ID 616 уже принадлежит ID_SEARCHBOX из taskbar_search.h; у новой кнопки ID 617.
   Учитывайте ID из модульных заголовков, а не только shell_internal.h.
+  SHOW_DESKTOP_EXTENT задаёт ширину кнопки, SHOW_DESKTOP_GAP — отдельный отступ
+  2px от крайнего края; layout и preview резервируют их сумму вне трея.
 
 - Quick Launch использует owner-draw кнопки: BS_FLAT не поддерживается исходной
   Win95. Общие EnvPaintQuickButton / EnvPaintQuickGrip рисуют и живую панель,

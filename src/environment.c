@@ -51,6 +51,7 @@ static LRESULT CALLBACK TaskButtonProc(HWND window,UINT message,WPARAM wp,LPARAM
 void EnvironmentStartSession(void)
 {
     char user[MAX_PATH]={0},common[MAX_PATH]={0};
+    RenderTraceShell("startup.begin",S_OK,env.primary,startupStarted);
     if(!env.primary || startupStarted || env.closing) return;
     startupStarted=TRUE;
     if(!env.host.specialPath(CSIDL_STARTUP,user)) user[0]=0;
@@ -1136,7 +1137,7 @@ static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
     case WM_APP + 36: {
         char path[MAX_PATH]; SHELLEXECUTEINFOA launch;
         if(!startupStarted || startupLaunching || env.closing) return 0;
-        if(!ShellStartupNext(&sessionStartup,path)) { ShellStartupClose(&sessionStartup); return 0; }
+        if(!ShellStartupNext(&sessionStartup,path)) { RenderTraceShell("startup.done",S_OK,sessionStartup.directory,0); ShellStartupClose(&sessionStartup); return 0; }
         ZeroMemory(&launch,sizeof(launch)); launch.cbSize=sizeof(launch); launch.fMask=SEE_MASK_FLAG_NO_UI;
         launch.hwnd=window; launch.lpFile=path; launch.lpDirectory=sessionStartup.folders[sessionStartup.directory]; launch.nShow=SW_SHOWNORMAL;
         startupLaunching=TRUE; BOOL okay=ShellExecuteExA(&launch); startupLaunching=FALSE;
