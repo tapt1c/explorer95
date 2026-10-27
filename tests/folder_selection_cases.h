@@ -62,7 +62,7 @@ static HRESULT STDMETHODCALLTYPE SelectionIconObject(IShellFolder *self,HWND own
     (void)self;
     for(byte=0;byte<sizeof(IID);++byte) if(((const BYTE *)iid)[byte]!=((const BYTE *)&IID_IExtractIconA)[byte]) same=FALSE;
     Check(!owner && count==1 && children && children[0] && same && !reserved,
-        "Fonts routing requests only IExtractIconA for one selected Control Panel child");
+        "system-folder routing requests only IExtractIconA for one selected Control Panel child");
     ++selectionIconQueries; *out=selectionIconMissing ? NULL : &icon;
     return selectionIconMissing ? E_NOINTERFACE : S_OK;
 }
@@ -83,6 +83,18 @@ static void ControlPanelTargetTests(void)
         selectionIconQueries==1 && selectionIconReleases==1,
         "the real Win95 MAIN.CPL resource 400 identity resolves to canonical Fonts, without labels or transfer objects"); CoTaskMemFree(target);
     selectionIconIndex=-300;
+    target=FolderControlPanelTarget(controls,&folder,&child);
+    { LPITEMIDLIST printers=NULL; IShellFolder *desktop=NULL; HRESULT comparison=E_FAIL;
+      Check(SUCCEEDED(SHGetSpecialFolderLocation(NULL,CSIDL_PRINTERS,&printers)) && SUCCEEDED(SHGetDesktopFolder(&desktop)),
+          "obtain canonical Printers independently of its Control Panel applet");
+      if(target) comparison=IShellFolder_CompareIDs(desktop,0,target,printers);
+      /* Wine can back CSIDL_PRINTERS with a filesystem directory. Verify the
+       * canonical shell identity, without assuming its provider's path model. */
+      Check(target && SUCCEEDED(comparison) && !(short)HRESULT_CODE(comparison) &&
+          FolderObjectIsFolder(target,0),
+          "the real Win95 MAIN.CPL resource 300 identity preserves canonical Printers inside Explorer95");
+      CoTaskMemFree(target); CoTaskMemFree(printers); IShellFolder_Release(desktop); }
+    selectionIconIndex=-200;
     Check(!FolderControlPanelTarget(controls,&folder,&child),"other applets in the same CPL retain their native commands");
     selectionIconIndex=3;
     Check(!FolderControlPanelTarget(controls,&folder,&child),"a CPL applet ordinal is not mistaken for the Fonts resource ID");

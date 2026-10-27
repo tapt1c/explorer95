@@ -162,14 +162,14 @@ typedef struct FolderExtractIconVtbl {
 struct FolderExtractIcon { const FolderExtractIconVtbl *lpVtbl; };
 LPITEMIDLIST FolderControlPanelTarget(LPCITEMIDLIST parent,IShellFolder *folder,LPCITEMIDLIST child)
 {
-    LPITEMIDLIST controls=NULL,fonts=NULL; FolderExtractIcon *icon=NULL;
-    char location[MAX_PATH],system[MAX_PATH]; DWORD length; int index=0; UINT flags=0; HRESULT result; BOOL same;
+    LPITEMIDLIST controls=NULL,target=NULL; FolderExtractIcon *icon=NULL;
+    char location[MAX_PATH],system[MAX_PATH]; DWORD length; int index=0,special; UINT flags=0; HRESULT result; BOOL same;
     if(!parent || !folder || !child || FAILED(SHGetSpecialFolderLocation(NULL,CSIDL_CONTROLS,&controls))) return NULL;
     same=SamePidl(parent,controls); CoTaskMemFree(controls);
     if(!same) return NULL;
-    /* Win95 exposes Fonts as a CANLINK-only MAIN.CPL applet, not CSIDL_FONTS.
+    /* Win95 exposes Fonts/Printers as CANLINK-only MAIN.CPL applets.
      * Its public IExtractIcon location identifies the installed system
-     * resource (-400), without localized labels, private PIDLs or CPL code.
+     * resources (-400/-300), without localized labels, private PIDLs or CPL code.
      * Unknown/dynamic icon identities remain native commands. */
     length=GetSystemDirectoryA(system,MAX_PATH);
     if(!length || length+10>MAX_PATH) return NULL;
@@ -179,9 +179,12 @@ LPITEMIDLIST FolderControlPanelTarget(LPCITEMIDLIST parent,IShellFolder *folder,
     ZeroMemory(location,sizeof(location));
     result=icon->lpVtbl->GetIconLocation(icon,0,location,MAX_PATH,&index,&flags);
     icon->lpVtbl->Release(icon);
-    if(result!=S_OK || location[MAX_PATH-1] || (flags&GIL_NOTFILENAME) || index!=-400 || lstrcmpiA(location,system)) return NULL;
-    if(FAILED(SHGetSpecialFolderLocation(NULL,CSIDL_FONTS,&fonts))) return NULL;
-    return fonts;
+    if(result!=S_OK || location[MAX_PATH-1] || (flags&GIL_NOTFILENAME) || lstrcmpiA(location,system)) return NULL;
+    if(index==-400) special=CSIDL_FONTS;
+    else if(index==-300) special=CSIDL_PRINTERS;
+    else return NULL;
+    if(FAILED(SHGetSpecialFolderLocation(NULL,special,&target))) return NULL;
+    return target;
 }
 static LPITEMIDLIST SelectionPidl(IDataObject *data, BOOL foldersOnly, SFGAOF *attributes)
 {
