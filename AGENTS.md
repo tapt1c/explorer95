@@ -1616,6 +1616,8 @@ Rename со скрытым расширением, системные Properties
   Quick Launch: прежний ID_SHOWDESKTOP и Win+D сохраняются. ShowDesktopButton
   включён по умолчанию, входит в общий draft/Apply/Cancel и preview. Резерв
   кнопки находится вне трея; размеры значков и часов не меняются.
+  ID 616 уже принадлежит ID_SEARCHBOX из taskbar_search.h; у новой кнопки ID 617.
+  Учитывайте ID из модульных заголовков, а не только shell_internal.h.
 
 - Quick Launch использует owner-draw кнопки: BS_FLAT не поддерживается исходной
   Win95. Общие EnvPaintQuickButton / EnvPaintQuickGrip рисуют и живую панель,

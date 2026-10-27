@@ -44,7 +44,7 @@ static void TaskbarAppearanceMetricsTest(const char *directory,const char *execu
         tasks &= taskSize;
         anchored &= barRect.bottom==original.bottom && barRect.left==original.left && barRect.right==original.right;
         clockSize &= clock.right-clock.left==58 && clock.bottom-clock.top==20;
-        if(phase==2) { HWND properties=OpenSettings(bar); SaveScreen("build/taskbar-large-caption.bmp"); SendMessageA(properties,WM_COMMAND,IDCANCEL,0); }
+        if(phase==2) { HWND properties=OpenSettings(bar); PumpFor(150); SaveScreen("build/taskbar-large-caption.bmp"); SendMessageA(properties,WM_COMMAND,IDCANCEL,0); }
         PostMessageA(bar,WM_CLOSE,0,0);
         closed=WaitForGuiProcess(worker.hProcess,5000)==WAIT_OBJECT_0;
         CloseHandle(worker.hThread); CloseHandle(worker.hProcess);
@@ -84,6 +84,7 @@ static void TaskbarAppearanceTests(HWND bar,const char *settings)
     RECT trayBefore,trayAfter; HWND tray=FindWindowExA(bar,NULL,"TrayNotifyWnd",NULL);
     Check(tail && IsWindowVisible(tail) && !GetPrivateProfileIntA("Taskbar","QuickLaunch",1,settings),
         "new profiles show the desktop edge button independently of Quick Launch");
+    Check(tail!=GetDlgItem(bar,ID_SEARCHBOX),"desktop edge button and search field retain distinct control identities");
     if(locked) SendMessageA(bar,WM_COMMAND,ID_LOCK,0);
     TaskbarDesktopEdgeLayout(bar);
     if(locked) SendMessageA(bar,WM_COMMAND,ID_LOCK,0);
