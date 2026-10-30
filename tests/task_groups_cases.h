@@ -55,7 +55,8 @@ static void TaskGroupProcessesTests(HWND bar,const char *directory)
         SendDlgItemMessageA(properties,ID_TASKTILES,BM_SETCHECK,style ? BST_CHECKED : BST_UNCHECKED,0);
         SendMessageA(properties,WM_COMMAND,IDOK,0); group=TaskWaitCount(bar,2,TRUE);
         if(!style) for(i=0;i<2;++i) {
-            PostMessageA(group,BM_CLICK,0,0); Check(WaitFor("#32768",NULL)!=NULL,"a cross-process task group opens its real window chooser");
+            RevealTaskButton(bar,group); PanelClick(group,PanelWidth(group)/2);
+            Check(WaitFor("#32768",NULL)!=NULL,"a cross-process task group opens its real window chooser");
             BYTE key=i ? VK_END : VK_HOME;
             keybd_event(key,0,0,0); keybd_event(key,0,KEYEVENTF_KEYUP,0); PumpFor(60);
             keybd_event(VK_RETURN,0,0,0); keybd_event(VK_RETURN,0,KEYEVENTF_KEYUP,0);
