@@ -92,6 +92,24 @@ static void WaitPanelWidth(HWND panel,int expected,const char *message)
     }
     Check(PanelWidth(panel)==expected,message);
 }
+static void PanelPinHoverCheck(HWND pins)
+{
+    RECT host; POINT point; DWORD started; int edge;
+    GetWindowRect(pins,&host); point.x=host.left+11; point.y=(host.top+host.bottom)/2;
+    Check(WindowFromPoint(point)==pins,"the inactive pin is exposed before testing its hover frame");
+    /* Enter from outside: an unchanged pointer position need not generate
+     * WM_MOUSEMOVE. Wait for the real invalidation/paint, not a fixed delay. */
+    SetCursorPos(10,100); PumpFor(30); SetCursorPos(point.x,point.y); started=GetTickCount();
+    do {
+        HDC dc; int x; PumpFor(20); edge=0; dc=GetDC(pins);
+        for(x=3;x<19;++x) {
+            COLORREF color=GetPixel(dc,x,0);
+            if(color!=CLR_INVALID && color!=GetSysColor(COLOR_BTNFACE)) ++edge;
+        }
+        ReleaseDC(pins,dc);
+    } while(edge<10 && GetTickCount()-started<1500);
+    Check(edge>=10,"an inactive pin's hover frame stays aligned with the running task's top edge");
+}
 static void PanelClick(HWND panel,int x)
 {
     RECT rect; GetWindowRect(panel,&rect); SetCursorPos(rect.left+x,(rect.top+rect.bottom)/2); PumpFor(30);
@@ -405,17 +423,7 @@ static void __attribute__((noinline)) TaskbarPanelsTests(HWND bar,const char *di
                 "a position-only Quick Launch layout change moves ordinary tasks with the shared strip");
             SendMessageA(bar,WM_COMMAND,ID_QUICK,0);
         }
-        {
-            HDC dc; int x,edge=0; RECT host;
-            GetWindowRect(pins,&host); SetCursorPos(host.left+11,(host.top+host.bottom)/2); PumpFor(100);
-            dc=GetDC(pins);
-            for(x=3;x<19;++x) {
-                COLORREF color=GetPixel(dc,x,0);
-                if(color!=CLR_INVALID && color!=GetSysColor(COLOR_BTNFACE)) ++edge;
-            }
-            ReleaseDC(pins,dc);
-            Check(edge>=10,"an inactive pin's hover frame stays aligned with the running task's top edge");
-        }
+        PanelPinHoverCheck(pins);
         PanelNativeCommand(task,launched,SC_MINIMIZE); Check(IsIconic(launched),"right-click on an ordinary task opens its native Minimize command");
         PanelNativeCommand(task,launched,SC_RESTORE); Check(!IsIconic(launched),"the ordinary task's native menu restores its window");
         PanelNativeCommand(task,launched,SC_CLOSE); deadline=GetTickCount();
