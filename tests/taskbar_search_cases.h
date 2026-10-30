@@ -14,7 +14,11 @@ static HWND SearchStatus(const char *expected)
         if(popup && IsWindowVisible(popup) && !lstrcmpA(text,expected)) return popup;
         PumpFor(20);
     } while(GetTickCount()-started<4000);
-    Log("Search status: "); Log(text); Log("\r\n"); return NULL;
+    { char kind[80]="",note[400]; HWND foreground=GetForegroundWindow();
+      GetClassNameA(foreground,kind,sizeof(kind));
+      wsprintfA(note,"FAIL: search status expected=%s actual=%s visible=%d foreground=%s\r\n",
+          expected,text,popup && IsWindowVisible(popup),kind); Log(note); }
+    return NULL;
 }
 static BOOL SearchFieldPainted(HWND bar)
 {
@@ -107,10 +111,26 @@ static HWND SearchHistoryOpen(HWND bar)
     Check(popup!=NULL,"F4 still opens the compact history popup without a combo box");
     return popup;
 }
+static void SearchCancelledTimerTests(HWND bar,HWND popup)
+{
+    HWND host=GetDlgItem(bar,ID_SEARCHBOX),edit=GetDlgItem(host,2);
+    /* KillTimer cannot remove a WM_TIMER already in the queue. Deliver each
+     * cancelled operation after switching modes, without relying on timing. */
+    SendMessageA(host,WM_TIMER,2,0);
+    Check(SearchStatus("Search history")==popup,"a cancelled scanner tick cannot replace the open search history");
+    SendMessageA(host,WM_TIMER,1,0);
+    Check(SearchStatus("Search history")==popup,"a cancelled debounce tick cannot replace the open search history");
+    SendMessageA(edit,WM_KEYDOWN,VK_ESCAPE,0);
+    SendMessageA(host,WM_TIMER,1,0); SendMessageA(host,WM_TIMER,2,0);
+    Check(!IsWindowVisible(popup),"cancelled search timers cannot reopen a dismissed popup");
+    SendMessageA(edit,WM_KEYDOWN,VK_F4,0);
+    Check(SearchStatus("Search history")==popup,"history remains available after cancelled timer delivery");
+}
 static void __attribute__((noinline)) SearchHistoryTests(HWND bar,const char *settings)
 {
     HWND popup,list,launched; char expected[514],text[512],recent[MAX_PATH],after[MAX_PATH]; int i,n; RECT frame,area;
     popup=SearchHistoryOpen(bar);
+    SearchCancelledTimerTests(bar,popup);
     { HWND edit=GetDlgItem(GetDlgItem(bar,ID_SEARCHBOX),2);
       SendMessageA(edit,WM_KEYDOWN,VK_ESCAPE,0); PanelClick(GetDlgItem(edit,1),3);
       Check(SearchStatus("Search history")==popup,"clicking the icon inside the search field also opens history");

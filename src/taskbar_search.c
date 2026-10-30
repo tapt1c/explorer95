@@ -558,8 +558,10 @@ static LRESULT CALLBACK SearchProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
         }
         return 0;
     case WM_TIMER:
-        if(wp==1) { KillTimer(window,1); BeginSearch(); }
-        else if(wp==2) SearchBatch();
+        /* KillTimer does not remove ticks already queued before Escape or
+         * ShowHistory. Only the still-active operation may change the popup. */
+        if(wp==1 && search.pending) { KillTimer(window,1); BeginSearch(); }
+        else if(wp==2 && search.scanning) SearchBatch();
         return 0;
     case WM_ACTIVATE:
         if(window==search.popup && LOWORD(wp)==WA_INACTIVE && (HWND)lp!=env.bar) DismissSearch();
