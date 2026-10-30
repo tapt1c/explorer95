@@ -376,11 +376,23 @@ static void LanguageRestartTests(const char *directory,const char *executable)
     {
         HWND browser=WaitFor(BROWSER_CLASS,NULL); Check(browser!=NULL,"the Russian shell opens its own filesystem browser"); PumpFor(400);
         Check(LanguageWideEqual(GetDlgItem(browser,ID_GO),L"\u041f\u0435\u0440\u0435\u0445\u043e\u0434"),"the Explorer address bar uses Russian commands");
-        { HWND address=GetDlgItem(browser,ID_ADDRESS); char typed[64];
+        { HWND address=GetDlgItem(browser,ID_ADDRESS); char typed[64]; DWORD started=GetTickCount(),settled=0;
+          /* The preceding search left the taskbar active. Activate the real
+           * browser before opening its native dropdown, as a user would. */
+          SetForegroundWindow(browser); PostMessageA(browser,WM_SYSKEYDOWN,'D',0);
+          do {
+              PumpFor(20);
+              if(GetForegroundWindow()!=browser) settled=0;
+              else if(!settled) settled=GetTickCount();
+          } while((!settled || GetTickCount()-settled<200) && GetTickCount()-started<3000);
+          Check(settled && GetTickCount()-settled>=200,"the Russian browser owns settled foreground before opening its address dropdown");
           SetWindowTextA(address,"Search"); SendMessageA(address,CB_SHOWDROPDOWN,TRUE,0);
-          SendMessageA(address,CB_SETCURSEL,0,0); PostMessageA(address,WM_KEYDOWN,VK_ESCAPE,0); PumpFor(80);
-          SendMessageA(address,WM_GETTEXT,sizeof(typed),(LPARAM)typed);
-          Check(!lstrcmpA(typed,"Search"),"cancelling the Russian address dropdown preserves literal input equal to an English UI label");
+          Check(SendMessageA(address,CB_GETDROPPEDSTATE,0,0),"the Russian address dropdown is open before its cancellation");
+          SendMessageA(address,CB_SETCURSEL,0,0); PostMessageA(address,WM_KEYDOWN,VK_ESCAPE,0); started=GetTickCount();
+          do { PumpFor(20); SendMessageA(address,WM_GETTEXT,sizeof(typed),(LPARAM)typed); }
+          while((SendMessageA(address,CB_GETDROPPEDSTATE,0,0) || lstrcmpA(typed,"Search")) && GetTickCount()-started<3000);
+          if(lstrcmpA(typed,"Search")) { Log("FAIL: Russian address cancel actual="); Log(typed); Log("\r\n"); }
+          Check(!SendMessageA(address,CB_GETDROPPEDSTATE,0,0) && !lstrcmpA(typed,"Search"),"cancelling the Russian address dropdown preserves literal input equal to an English UI label");
           Navigate(browser,folder); }
         BrowserToolbarGeometry(browser,process.hProcess,16);
         HWND list=GetDlgItem(browser,ID_FILES); int index=NativeItemIndex(list,"Copy");
