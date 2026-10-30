@@ -83,9 +83,15 @@ static HWND SearchHistoryOpen(HWND bar)
         "search uses a native edit without a drop-down arrow or hidden combo list");
     SendMessageA(edit,WM_KEYDOWN,VK_ESCAPE,0); GetWindowRect(edit,&field); PanelClick(edit,field.right-field.left-8);
     Check(SearchStatus("Search history")!=NULL,"the former arrow area is editable and opens history like the rest of the field");
-    SendMessageA(edit,WM_KEYDOWN,VK_ESCAPE,0); GetClientRect(edit,&field);
+    GetClientRect(edit,&field);
     /* Native EDIT receives WM_LBUTTONDBLCLK instead of a second WM_LBUTTONDOWN.
-     * Keep this deterministic even when CI's real clicks straddle that limit. */
+     * Complete the first click with its caret on visible text, then close the
+     * popup before delivering the second click. A bare double-click message
+     * does not initialize native EDIT's word-selection state. */
+    SendMessageA(edit,EM_SETSEL,0,0); SendMessageA(edit,EM_SCROLLCARET,0,0);
+    SendMessageA(edit,WM_LBUTTONDOWN,MK_LBUTTON,MAKELPARAM(30,field.bottom/2));
+    SendMessageA(edit,WM_LBUTTONUP,0,MAKELPARAM(30,field.bottom/2));
+    SendMessageA(edit,WM_KEYDOWN,VK_ESCAPE,0);
     SendMessageA(edit,WM_LBUTTONDBLCLK,MK_LBUTTON,MAKELPARAM(30,field.bottom/2));
     SendMessageA(edit,WM_LBUTTONUP,0,MAKELPARAM(30,field.bottom/2));
     Check(SearchStatus("Search history")!=NULL,"double-clicking the search field also opens history");
