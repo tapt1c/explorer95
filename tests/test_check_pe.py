@@ -142,6 +142,28 @@ class LoaderGateTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "must be a DLL"):
             self.run_gate(image(), dll=True)
 
+    def test_private_decoder_dll_needs_no_hook_section(self):
+        data = image()
+        struct.pack_into("<H", data, 0x96, 0x2002)
+        self.run_gate(data, dll=True, shared=False)
+        with self.assertRaisesRegex(ValueError, "shared between processes"):
+            self.run_gate(hook_image(), dll=True, shared=False)
+
+    def test_decoder_payload_is_checked(self):
+        decoder = image("kernel32.dll", "ReadFile")
+        struct.pack_into("<H", decoder, 0x96, 0x2002)
+        data = embedded_image(decoder, include_switch=False)
+        struct.pack_into("<I", data, 1024 + 40, 208)
+        self.run_gate(data, require_archive=True)
+        with self.assertRaisesRegex(ValueError, "missing embedded archive decoder"):
+            self.run_gate(embedded_image(hook_image()), require_archive=True)
+        bad = image("kernel32.dll", "GetTickCount64")
+        struct.pack_into("<H", bad, 0x96, 0x2002)
+        data = embedded_image(bad, include_switch=False)
+        struct.pack_into("<I", data, 1024 + 40, 208)
+        with self.assertRaisesRegex(ValueError, "GetTickCount64"):
+            self.run_gate(data, require_archive=True)
+
     def test_dll_shared_handles_are_required(self):
         data = hook_image()
         struct.pack_into("<I", data, 0x19c, 0xc0000040)

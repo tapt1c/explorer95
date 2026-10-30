@@ -1937,6 +1937,7 @@ static void EnvironmentTests(HWND bar, HWND browser, HWND childWindow, HWND menu
 #include "folder_options_cases.h"
 #include "localization_cases.h"
 #include "shell_run_cases.h"
+#include "archive_cases.h"
 
 void start(void)
 {
@@ -2012,6 +2013,7 @@ void start(void)
     Check(CreateDirectoryA(settingsDir, NULL), "create isolated settings directory");
     wsprintfA(settings, "%s\\settings.ini", settingsDir);
     if(group==GROUP_LANGUAGE) { ShutdownDosTests(settingsDir); LanguageTests(settingsDir); LanguageRestartTests(settingsDir,executable); goto cleanup; }
+    if(group==GROUP_FULL || group==GROUP_CORE || group==GROUP_BROWSER) ArchiveTests(settingsDir);
     if (group == GROUP_FULL || group == GROUP_CORE || group == GROUP_BROWSER) ShellNewTests(settingsDir, module);
     if (group == GROUP_FULL || group == GROUP_CORE || group == GROUP_BROWSER) FileDropRegistrationTests();
     if (group == GROUP_FULL || group == GROUP_CORE || group == GROUP_MENU) { ShutdownDosTests(settingsDir); SessionLogoffTests(settingsDir); }
@@ -2027,6 +2029,7 @@ void start(void)
     if(group==GROUP_FULL || group==GROUP_MENU || group==GROUP_CORE) { TaskbarQueryTests(settingsDir,module); TaskbarLinksTests(settingsDir,module); TaskMenuNativeTests(); }
     ShellStartupTests(settingsDir);
     if (group == GROUP_CORE) goto cleanup;
+    if(group==GROUP_FULL || group==GROUP_BROWSER) { ArchiveUiTests(settingsDir,executable,"en"); ArchiveUiTests(settingsDir,executable,"ru"); }
     if(group==GROUP_MENU || group==GROUP_FULL) ShellStartupUiTests(settingsDir,executable,module);
     if(group==GROUP_MENU || group==GROUP_FULL) TaskbarAppearanceMetricsTest(settingsDir,executable);
     if (group == GROUP_MENU) NativeDesktopIconSizeTests();

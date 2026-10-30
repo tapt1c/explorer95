@@ -19,6 +19,8 @@ ALLOWED = {
     "advapi32.dll": {"GetUserNameA", "RegOpenKeyExA", "RegQueryValueExA", "RegCloseKey",
                      "RegCreateKeyExA", "RegSetValueExA", "RegDeleteValueA", "RegDeleteKeyA",
                      "RegEnumKeyExA", "RegEnumValueA", "RegQueryInfoKeyA", "RegFlushKey"},
+    # SetFilePointer/SetFileTime and DOS/local FILETIME conversion predate Win95;
+    # archive streaming and timestamp preservation need no NT-only file API.
     # CreateMappedBitmap is the original Win95 palette mapper, predating IE.
     "comctl32.dll": {"CreateMappedBitmap", "InitCommonControls", "ImageList_Create", "ImageList_Destroy",
                       "ImageList_AddMasked", "ImageList_GetImageCount", "ImageList_GetIconSize", "ImageList_ReplaceIcon", "ImageList_Remove",
@@ -37,6 +39,7 @@ ALLOWED = {
     # CreateProcessA is stock Win95: a separate GUI caller requests Log Off so
     # Windows includes the shell itself in its session-end notifications.
     "kernel32.dll": set("""
+        SetFilePointer SetFileTime DosDateTimeToFileTime LocalFileTimeToFileTime
         FindResourceA LoadResource SizeofResource LockResource GetCurrentProcess ReadProcessMemory GetACP Module32First
         GetDiskFreeSpaceA GetVolumeInformationA WideCharToMultiByte WritePrivateProfileSectionA
         CreateMutexA ReleaseMutex CreateToolhelp32Snapshot Process32First Process32Next GetSystemTimeAsFileTime GetTempFileNameA GetTempPathA MoveFileA
@@ -64,6 +67,7 @@ ALLOWED = {
     # GetMenuItemInfoA is stock Win95; callers use its original cbSize.
     # GetSubMenu / ModifyMenuA are base Win95 menu APIs for native edit commands.
     "user32.dll": set("""
+        CharNextA
         CreateIconIndirect
         SetWindowsHookExA CallNextHookEx UnhookWindowsHookEx
         CharUpperBuffA SetScrollInfo GetScrollInfo IsRectEmpty SetRectEmpty OffsetRect
@@ -91,11 +95,12 @@ ALLOWED = {
 }
 
 
-def check(path, dll=False, require_hook=False, require_native=False):
-    check_data(Path(path).read_bytes(), dll=dll, require_hook=require_hook, require_native=require_native)
+def check(path, dll=False, require_hook=False, require_native=False, shared=True, require_archive=False):
+    check_data(Path(path).read_bytes(), dll=dll, require_hook=require_hook, require_native=require_native,
+               shared=shared, require_archive=require_archive)
 
 
-def check_data(data, dll=False, require_hook=False, require_native=False):
+def check_data(data, dll=False, require_hook=False, require_native=False, shared=True, require_archive=False):
 
     def unpack(fmt, offset):
         return struct.unpack_from("<" + fmt, data, offset)
@@ -122,15 +127,17 @@ def check_data(data, dll=False, require_hook=False, require_native=False):
     require(subsystem == 2, "target must use the Windows GUI subsystem")
     require(not dll_flags & (0x40 | 0x100 | 0x4000), "unexpected modern loader flags")
     sections = []
-    shared = False
+    has_shared = False
     for i in range(section_count):
         base = optional + optional_size + 40 * i
         virtual_size, rva, raw_size, raw_offset = unpack("IIII", base + 8)
         sections.append((rva, max(virtual_size, raw_size), raw_offset))
         if data[base:base + 8].rstrip(b"\0") == b".shared":
-            shared = unpack("I", base + 36)[0] & 0xd0000000 == 0xd0000000
-    if dll:
-        require(shared, "hook DLL must have a readable, writable shared handle section")
+            has_shared = unpack("I", base + 36)[0] & 0xd0000000 == 0xd0000000
+    if dll and shared:
+        require(has_shared, "hook DLL must have a readable, writable shared handle section")
+    if dll and not shared:
+        require(not has_shared, "decoder heap must not be shared between processes")
 
     def offset(rva):
         for start, size, raw in sections:
@@ -166,7 +173,7 @@ def check_data(data, dll=False, require_hook=False, require_native=False):
             thunk += 4
         descriptor += 20
     require(libraries and functions, "no imports were checked")
-    if require_hook:
+    if require_hook or require_archive:
         resource_rva, resource_size = unpack("II", optional + 112)
         require(resource_rva and resource_size, "missing embedded tray hook")
         root = offset(resource_rva)
@@ -184,7 +191,10 @@ def check_data(data, dll=False, require_hook=False, require_native=False):
 
         kind = resource_entry(0, 10)
         require(kind & 0x80000000, "invalid RCDATA directory")
-        for identifier, description in ((201, "tray hook"), (205, "task switch hook")):
+        payloads = [(201, "tray hook", True), (205, "task switch hook", True)] if require_hook else []
+        if require_archive:
+            payloads.append((208, "archive decoder", False))
+        for identifier, description, needs_shared in payloads:
             hook = resource_entry(kind & 0x7fffffff, identifier, description)
             require(hook & 0x80000000, f"invalid {description} resource directory")
             leaf = resource_entry(hook & 0x7fffffff, description=description)
@@ -192,7 +202,7 @@ def check_data(data, dll=False, require_hook=False, require_native=False):
             payload_rva, size = unpack("II", root + leaf)
             start = offset(payload_rva)
             require(size and start + size <= len(data), f"truncated embedded {description}")
-            check_data(data[start:start + size], dll=True)
+            check_data(data[start:start + size], dll=True, shared=needs_shared)
         if require_native:
             from check_vxd import check_data as check_native
             native = resource_entry(kind & 0x7fffffff, 206, "native task switch driver")
@@ -208,7 +218,9 @@ def check_data(data, dll=False, require_hook=False, require_native=False):
 
 if __name__ == "__main__":
     try:
-        dll = len(sys.argv) == 3 and sys.argv[2] == "--dll"
-        check(sys.argv[1], dll=dll, require_hook=not dll, require_native=not dll)
+        library = len(sys.argv) == 3 and sys.argv[2] == "--library"
+        dll = library or (len(sys.argv) == 3 and sys.argv[2] == "--dll")
+        check(sys.argv[1], dll=dll, shared=not library, require_hook=not dll,
+              require_native=not dll, require_archive=not dll)
     except (IndexError, ValueError, struct.error) as error:
         sys.exit(f"FAIL: {error}")

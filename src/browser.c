@@ -3,6 +3,8 @@
 #include "render_trace.h"
 #include "toolbar_compat.h"
 #include "taskbar_query.h"
+#include "browser_archive.h"
+#include "archive.h"
 #define EX95_LOCALIZE_UI
 #include "localization.h"
 
@@ -992,7 +994,12 @@ static HWND Open(const char *path, LPCITEMIDLIST pidl)
     ShowWindow(window, SW_SHOWNORMAL); UpdateWindow(window);
     RedrawWindow(window, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW); return window;
 }
-HWND BrowserOpen(const char *path) { return Open(path, NULL); }
+HWND BrowserOpen(const char *path)
+{
+    DWORD attributes=GetFileAttributesA(path);
+    if(ArchivePath(path) && attributes!=INVALID_FILE_ATTRIBUTES && !(attributes&FILE_ATTRIBUTE_DIRECTORY)) return BrowserArchiveOpen(path);
+    return Open(path,NULL);
+}
 HWND BrowserOpenNamespace(LPCITEMIDLIST absolute) { return Open(NULL, absolute); }
 static LPITEMIDLIST ParseFolder(const char *target)
 {
@@ -1051,7 +1058,7 @@ static BOOL CALLBACK RefreshRecycleBin(HWND window, LPARAM unused)
     return TRUE;
 }
 void BrowserRecycleBinsChanged(void) { EnumWindows(RefreshRecycleBin, 0); }
-void BrowserShutdown(void) { EnumWindows(CloseBrowser, 0); if (browserSymbols) { DeleteObject(browserSymbols); browserSymbols = NULL; } }
+void BrowserShutdown(void) { BrowserArchiveShutdown(); EnumWindows(CloseBrowser, 0); if (browserSymbols) { DeleteObject(browserSymbols); browserSymbols = NULL; } }
 
 BOOL BrowserRegister(HINSTANCE instance, HFONT font)
 {
@@ -1067,10 +1074,11 @@ BOOL BrowserRegister(HINSTANCE instance, HFONT font)
     cls.hIcon = LoadIconA(instance, "EXPLORER95"); cls.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1); cls.lpfnWndProc = BrowserProc;
     cls.lpszClassName = BROWSER_CLASS; if (!RegisterClassA(&cls)) return FALSE;
     cls.lpszClassName = BROWSER_NAMESPACE_CLASS; if (!RegisterClassA(&cls)) return FALSE;
-    return BrowserOptionsRegister() && BrowserSidebarRegister() && BrowserSearchRegister() && BrowserControlPanelRegister();
+    return BrowserArchiveRegister() && BrowserOptionsRegister() && BrowserSidebarRegister() && BrowserSearchRegister() && BrowserControlPanelRegister();
 }
 BOOL BrowserTranslate(MSG *message)
 {
+    if(BrowserArchiveTranslate(message)) return TRUE;
     HWND root = message->hwnd; Browser *browser; BOOL address;
     while (root && (GetWindowLongA(root, GWL_STYLE) & WS_CHILD)) root = GetParent(root);
     { char kind[64]; GetClassNameA(root, kind, sizeof(kind));

@@ -12,6 +12,8 @@
 #include "shell_sounds.h"
 #include "welcome.h"
 #include "shell_startup.h"
+#include "archive.h"
+#include "browser_archive.h"
 #define EX95_LOCALIZE_UI
 #include "localization.h"
 
@@ -64,7 +66,7 @@ void EnvironmentStartSession(void)
     ShellStartupInit(&sessionStartup,user,common);
     ShellRegistryStartupInit(&registryStartup,HKEY_LOCAL_MACHINE,HKEY_CURRENT_USER,
         "Software\\Microsoft\\Windows\\CurrentVersion",GetSystemMetrics(SM_CLEANBOOT)!=0);
-    if(!PostMessageA(env.bar,WM_APP+36,0,0)) ShellStartupClose(&sessionStartup);
+    if(!PostMessageA(env.bar,WM_APP+36,0,0)) { ShellStartupClose(&sessionStartup); ShellRegistryStartupClose(&registryStartup); }
 }
 static BOOL LaunchStartupCommand(const char *command,HANDLE *process,void *context)
 {
@@ -221,6 +223,10 @@ static BOOL SettingsPath(void)
 
 BOOL EnvironmentLaunch(HWND owner, const char *path, const char *arguments, const char *directory)
 {
+    if(ArchivePath(path) && (!arguments || !*arguments)) {
+        DWORD attributes=GetFileAttributesA(path);
+        if(attributes!=INVALID_FILE_ATTRIBUTES && !(attributes&FILE_ATTRIBUTE_DIRECTORY)) return BrowserArchiveOpen(path)!=NULL;
+    }
     TaskbarLink *shortcut=NULL; int length=lstrlenA(path); HINSTANCE result;
     /* Execute the original .lnk, but retain the program in history even if
      * its taskbar shortcut is subsequently unpinned or renamed. */

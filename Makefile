@@ -1,4 +1,5 @@
 # No CRT startup or runtime: stock Windows 95 does not provide MSVCRT.DLL.
+.DEFAULT_GOAL := all
 CC = i686-w64-mingw32-gcc
 CC64 = x86_64-w64-mingw32-gcc
 HOSTCC = cc
@@ -36,6 +37,22 @@ TEST_SOURCES += src/session_logoff.c
 TEST_SOURCES += src/shutdown_dos.c
 TEST_SOURCES += src/shell_commands.c
 TEST_SOURCES += src/shell_run.c
+SOURCES += src/archive.c src/browser_archive.c
+TEST_SOURCES += src/archive.c
+ARCHIVE_CODEC_SOURCES = src/archive_codec.c $(wildcard third_party/unarr/common/*.c third_party/unarr/rar/*.c third_party/unarr/zip/*.c third_party/unarr/lzmasdk/*.c)
+ARCHIVE_CODEC_OBJECTS = $(ARCHIVE_CODEC_SOURCES:%.c=build/codec32/%.o)
+ARCHIVE_CODEC_OBJECTS64 = $(ARCHIVE_CODEC_SOURCES:%.c=build/codec64/%.o)
+build/codec32/%.o: %.c build/obj32/.flags Makefile src/archive_codec_port.h
+	@mkdir -p $(@D)
+	$(CCACHE) $(CC) $(CPPFLAGS) $(CFLAGS) -DNDEBUG -Ithird_party/unarr -include src/archive_codec_port.h -MMD -MP -c $< -o $@
+build/codec64/%.o: %.c build/obj64/.flags Makefile src/archive_codec_port.h
+	@mkdir -p $(@D)
+	$(CCACHE) $(CC64) $(CPPFLAGS) $(CFLAGS_COMMON) -DNDEBUG -Ithird_party/unarr -include src/archive_codec_port.h -MMD -MP -c $< -o $@
+build/ex95archive.dll: $(ARCHIVE_CODEC_OBJECTS) Makefile
+	$(CC) $(CFLAGS) -shared -nostdlib $(filter %.o,$^) -Wl,--entry,_DllMain@12 -Wl,--kill-at -Wl,--subsystem,windows:4.0 -Wl,--major-os-version,4 -Wl,--minor-os-version,0 -Wl,--disable-dynamicbase -Wl,--disable-nxcompat -lkernel32 -lgcc -o $@
+build/ui64/ex95archive.dll: $(ARCHIVE_CODEC_OBJECTS64) Makefile
+	@mkdir -p $(@D)
+	$(CC64) $(CFLAGS_COMMON) -shared -nostdlib $(filter %.o,$^) -Wl,--entry,DllMain -Wl,--kill-at -lkernel32 -lgcc -o $@
 OBJECTS = $(SOURCES:%.c=build/obj32/%.o)
 OBJECTS64 = $(SOURCES:%.c=build/obj64/%.o)
 TEST_OBJECTS = $(TEST_SOURCES:%.c=build/obj32/%.o)
@@ -104,11 +121,11 @@ TOOLBAR_BITMAPS = build/toolbar98-small.bmp build/toolbar98-large.bmp
 $(TOOLBAR_BITMAPS) &: tools/build_toolbar_bitmaps.py $(TOOLBAR_SOURCES)
 	python3 tools/build_toolbar_bitmaps.py build
 
-build/resources.o: src/explorer95.rc resources/Bitmap143.bmp resources/welcome.bmp $(TOOLBAR_BITMAPS) resources/explorer95.ico resources/Explorer95UI.ttf resources/Explorer95UI95.ttf resources/LiberationSans-LICENSE.txt build/tray_hook.dll build/task_switch_hook.dll build/native/EX95TS01.VXD build/obj32/.flags Makefile
+build/resources.o: src/explorer95.rc resources/Bitmap143.bmp resources/welcome.bmp $(TOOLBAR_BITMAPS) resources/explorer95.ico resources/Explorer95UI.ttf resources/Explorer95UI95.ttf resources/LiberationSans-LICENSE.txt build/tray_hook.dll build/task_switch_hook.dll build/ex95archive.dll third_party/unarr/COPYING third_party/unarr/COPYING.GPLv3 build/native/EX95TS01.VXD build/obj32/.flags Makefile
 	@mkdir -p $(@D)
 	$(WINDRES) --preprocessor="$(CC)" --preprocessor-arg=-E --preprocessor-arg=-xc -I. -i $< -o $@
 
-build/ui64/resources.o: src/explorer95.rc resources/Bitmap143.bmp resources/welcome.bmp $(TOOLBAR_BITMAPS) resources/explorer95.ico resources/Explorer95UI.ttf resources/Explorer95UI95.ttf resources/LiberationSans-LICENSE.txt build/ui64/tray_hook.dll build/ui64/task_switch_hook.dll build/obj64/.flags Makefile
+build/ui64/resources.o: src/explorer95.rc resources/Bitmap143.bmp resources/welcome.bmp $(TOOLBAR_BITMAPS) resources/explorer95.ico resources/Explorer95UI.ttf resources/Explorer95UI95.ttf resources/LiberationSans-LICENSE.txt build/ui64/tray_hook.dll build/ui64/task_switch_hook.dll build/ui64/ex95archive.dll third_party/unarr/COPYING third_party/unarr/COPYING.GPLv3 build/obj64/.flags Makefile
 	@mkdir -p $(@D)
 	$(WINDRES64) --preprocessor="$(CC64)" --preprocessor-arg=-E --preprocessor-arg=-xc -I. -i $< -o $@
 
@@ -120,6 +137,7 @@ check: all
 	python3 -m unittest discover -s tests -p test_localization.py
 	python3 tests/check_pe.py build/tray_hook.dll --dll
 	python3 tests/check_pe.py build/task_switch_hook.dll --dll
+	python3 tests/check_pe.py build/ex95archive.dll --library
 	python3 tests/check_pe.py build/explorer95.exe
 
 check-build:
@@ -139,7 +157,10 @@ build/native-core-test: tests/task_switch_native_core.c src/task_switch_native_c
 native-check: build/native-core-test
 	./build/native-core-test
 
-build/smoke.exe: $(TEST_OBJECTS) build/resources.o Makefile
+build/archive-fixtures/complete.stamp: tests/make_archive_fixtures.py
+	python3 tests/make_archive_fixtures.py
+
+build/smoke.exe: $(TEST_OBJECTS) build/resources.o Makefile build/archive-fixtures/complete.stamp
 	$(CC) $(CFLAGS) $(filter %.o,$^) -nostdlib -Wl,--entry,_start $(TEST_LIBS) -o $@
 
 # Core exercises helpers only; it does not require the application to be built.
@@ -154,13 +175,13 @@ smoke: build/smoke.exe
 build/ui64/explorer95.exe: $(OBJECTS64) build/ui64/resources.o Makefile
 	$(CC64) $(CFLAGS_COMMON) $(filter %.o,$^) -nostdlib -mwindows -Wl,--entry,start $(LDLIBS) -o $@
 
-build/ui64/smoke.exe: $(TEST_OBJECTS64) build/ui64/resources.o Makefile
+build/ui64/smoke.exe: $(TEST_OBJECTS64) build/ui64/resources.o Makefile build/archive-fixtures/complete.stamp
 	$(CC64) $(CFLAGS_COMMON) $(filter %.o,$^) -nostdlib -Wl,--entry,start $(TEST_LIBS) -o $@
 
 ui64-smoke: build/ui64/smoke.exe
 	$(WINE) build/ui64/smoke.exe --group="$(TEST_GROUP)"
 
--include $(sort $(OBJECTS:.o=.d) $(OBJECTS64:.o=.d) $(TEST_OBJECTS:.o=.d) $(TEST_OBJECTS64:.o=.d) build/obj32/src/tray_hook.d build/obj64/src/tray_hook.d build/obj32/src/task_switch_hook.d build/obj64/src/task_switch_hook.d)
+-include $(sort $(OBJECTS:.o=.d) $(OBJECTS64:.o=.d) $(TEST_OBJECTS:.o=.d) $(TEST_OBJECTS64:.o=.d) $(ARCHIVE_CODEC_OBJECTS:.o=.d) $(ARCHIVE_CODEC_OBJECTS64:.o=.d) build/obj32/src/tray_hook.d build/obj64/src/tray_hook.d build/obj32/src/task_switch_hook.d build/obj64/src/task_switch_hook.d)
 
 clean:
 	rm -rf build

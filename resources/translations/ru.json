@@ -519,5 +519,19 @@
   "Second row": "Вторая строка",
   "Third row": "Третья строка",
   "Reset toolbar positions": "Сбросить расположение панелей",
-  "Drag along the bar to resize; drag across rows to move": "Вдоль панели — изменить размер; поперёк строк — переместить"
+  "Drag along the bar to resize; drag across rows to move": "Вдоль панели — изменить размер; поперёк строк — переместить",
+  "Extract selected...": "Извлечь выбранное...",
+  "Extract all...": "Извлечь всё...",
+  "Reading archive...": "Чтение архива...",
+  "Extracting...": "Распаковка...",
+  "Archive decoder license...": "Лицензия распаковщика...",
+  "Archive decoder license": "Лицензия распаковщика",
+  "Cannot read this archive.": "Не удалось прочитать архив.",
+  "Cannot extract this archive item.": "Не удалось извлечь элемент архива.",
+  "Cannot create the extraction folder.": "Не удалось создать папку для распаковки.",
+  "Extraction failed. Completed files were kept.": "Ошибка распаковки. Уже извлечённые файлы сохранены.",
+  "Extraction cancelled. Completed files were kept.": "Распаковка отменена. Уже извлечённые файлы сохранены.",
+  "Choose where to extract the archive. A new folder will be created.": "Выберите место для распаковки. Будет создана новая папка.",
+  "Cannot open this archive. RAR5, encrypted and multipart archives are not supported.": "Не удалось открыть архив. RAR5, зашифрованные и многотомные архивы не поддерживаются.",
+  "Extracted %lu object(s).": "Извлечено объектов: %lu."
 }

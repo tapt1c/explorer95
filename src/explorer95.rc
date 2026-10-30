@@ -6,12 +6,16 @@
 #ifdef _WIN64
 201 RCDATA "build/ui64/tray_hook.dll"
 205 RCDATA "build/ui64/task_switch_hook.dll"
+208 RCDATA "build/ui64/ex95archive.dll"
 #else
 201 RCDATA "build/tray_hook.dll"
 205 RCDATA "build/task_switch_hook.dll"
+208 RCDATA "build/ex95archive.dll"
 206 RCDATA "build/native/EX95TS01.VXD"
 #endif
 
 202 RCDATA "resources/Explorer95UI.ttf"
 203 RCDATA "resources/LiberationSans-LICENSE.txt"
 204 RCDATA "resources/Explorer95UI95.ttf"
+209 RCDATA "third_party/unarr/COPYING"
+210 RCDATA "third_party/unarr/COPYING.GPLv3"
