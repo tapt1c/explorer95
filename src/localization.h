@@ -10,6 +10,8 @@ int UiLanguage(void);
 void UiShutdown(void);
 const char *UiText(const char *english);
 HFONT UiFont(HFONT original);
+/* ANSI caption fallback, also usable after an explicit nonclient redraw. */
+void UiPaintCaption(HWND window,BOOL active);
 /* Pass translated catalogue text or literal native text, with stable lifetime. */
 void UiTooltipText(NMHDR *tip, const char *text, HFONT nativeFont);
 BOOL UiIsTranslated(const char *text);

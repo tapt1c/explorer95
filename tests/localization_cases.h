@@ -130,6 +130,23 @@ static void LanguageCaptionStyleTest(const WNDCLASSA *cls)
         }
         DestroyWindow(popup);
     }
+    {
+        HWND dialog=UiCreateWindowExA(WS_EX_DLGMODALFRAME|WS_EX_CONTEXTHELP,cls->lpszClassName,"Folder Options",
+            WS_POPUP|WS_CAPTION|WS_SYSMENU|WS_VISIBLE,40,40,320,120,NULL,NULL,cls->hInstance,NULL);
+        int border=GetSystemMetrics(SM_CXDLGFRAME),top=GetSystemMetrics(SM_CYDLGFRAME);
+        RECT marker={border+2,top,border+GetSystemMetrics(SM_CXSIZE),top+GetSystemMetrics(SM_CYCAPTION)-1};
+        HDC dc; HBRUSH brush=CreateSolidBrush(RGB(17,213,91)); int x,y,leftovers=0;
+        Check(dialog!=NULL,"create a translated iconless Folder Options caption with a native Help button");
+        UiSetWindowTextA(dialog,"Folder Options");
+        dc=GetWindowDC(dialog); FillRect(dc,&marker,brush); ReleaseDC(dialog,dc);
+        UiPaintCaption(dialog,TRUE);
+        dc=GetWindowDC(dialog);
+        for(y=marker.top;y<marker.bottom;++y) for(x=marker.left;x<marker.right;++x)
+            if(GetPixel(dc,x,y)==RGB(17,213,91)) ++leftovers;
+        ReleaseDC(dialog,dc); DeleteObject(brush);
+        Check(!leftovers,"the ANSI caption fallback clears the old title prefix instead of reserving a nonexistent icon");
+        DestroyWindow(dialog);
+    }
 }
 static HWND aboutTestOwner,aboutTestCredit;
 static WCHAR aboutTestExpected[160];

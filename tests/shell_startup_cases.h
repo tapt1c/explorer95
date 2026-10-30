@@ -4,9 +4,89 @@ static void StartupFile(const char *path,DWORD attributes)
     HANDLE file=CreateFileA(path,GENERIC_WRITE,0,NULL,CREATE_NEW,attributes,NULL);
     Check(file!=INVALID_HANDLE_VALUE,"create only our isolated startup entry"); CloseHandle(file);
 }
+typedef struct StartupRegistryFixture { HKEY machine,user; int calls,once,runs; HANDLE deferred,changed; } StartupRegistryFixture;
+static void StartupRegistryValue(HKEY root,const char *key,const char *name,DWORD type,const char *text,DWORD bytes)
+{
+    HKEY opened;
+    Check(RegCreateKeyExA(root,key,0,NULL,0,KEY_ALL_ACCESS,NULL,&opened,NULL)==ERROR_SUCCESS &&
+        RegSetValueExA(opened,name,0,type,(const BYTE *)text,bytes)==ERROR_SUCCESS,"write only private startup registry values");
+    RegCloseKey(opened);
+}
+static BOOL StartupRegistryHas(HKEY root,const char *key,const char *name)
+{
+    HKEY opened; LONG error; DWORD bytes=0;
+    if(RegOpenKeyExA(root,key,0,KEY_QUERY_VALUE,&opened)) return FALSE;
+    error=RegQueryValueExA(opened,name,NULL,NULL,NULL,&bytes); RegCloseKey(opened); return error==ERROR_SUCCESS;
+}
+static BOOL StartupRegistryLaunch(const char *command,HANDLE *process,void *context)
+{
+    StartupRegistryFixture *fixture=context; ++fixture->calls; *process=NULL;
+    if(!lstrcmpA(command,"once-one") || !lstrcmpA(command,"once-two")) {
+        const char *name=!lstrcmpA(command,"once-one") ? "one" : "two";
+        Check(!StartupRegistryHas(fixture->machine,"Login\\RunOnce",name),"ordinary RunOnce is removed before the launch callback"); ++fixture->once;
+    } else if(!lstrcmpA(command,"wait") || !lstrcmpA(command,"changed")) {
+        BOOL changed=!lstrcmpA(command,"changed");
+        Check(StartupRegistryHas(fixture->user,"Login\\RunOnce",changed ? "!changed" : "!wait"),"bang-prefixed RunOnce stays present until process completion");
+        *process=CreateEventA(NULL,TRUE,FALSE,NULL); Check(*process!=NULL,"use an inert waitable handle instead of executing a login command");
+        if(changed) fixture->changed=*process; else fixture->deferred=*process;
+    } else if(!lstrcmpA(command,"fail")) { SetLastError(ERROR_FILE_NOT_FOUND); return FALSE; }
+    else {
+        Check(!lstrcmpA(command,"\"C:\\fixture app.exe\" /exact") || !lstrcmpA(command,"expanded /argument") || !lstrcmpA(command,"safe"),
+            "registry commands preserve quotes, spaces and arguments while REG_EXPAND_SZ expands variables"); ++fixture->runs;
+    }
+    return TRUE;
+}
+static void ShellStartupRegistryTests(void)
+{
+    HKEY root; char path[128]; ShellRegistryStartup startup; StartupRegistryFixture fixture; int i;
+    wsprintfA(path,"Software\\Explorer95 Startup Fixture %lu-%lu",GetCurrentProcessId(),GetTickCount());
+    ZeroMemory(&fixture,sizeof(fixture));
+    Check(RegCreateKeyExA(HKEY_CURRENT_USER,path,0,NULL,0,KEY_ALL_ACCESS,NULL,&root,NULL)==ERROR_SUCCESS &&
+        RegCreateKeyExA(root,"Machine",0,NULL,0,KEY_ALL_ACCESS,NULL,&fixture.machine,NULL)==ERROR_SUCCESS &&
+        RegCreateKeyExA(root,"User",0,NULL,0,KEY_ALL_ACCESS,NULL,&fixture.user,NULL)==ERROR_SUCCESS,"startup tests use private machine/user roots, never Windows Run keys");
+#define REG_VALUE(root,key,name,type,text) StartupRegistryValue(root,key,name,type,text,sizeof(text))
+    REG_VALUE(fixture.machine,"Login\\RunOnce","one",REG_SZ,"once-one");
+    REG_VALUE(fixture.machine,"Login\\RunOnce","two",REG_SZ,"once-two");
+    REG_VALUE(fixture.machine,"Login\\Run","same",REG_SZ,"\"C:\\fixture app.exe\" /exact");
+    REG_VALUE(fixture.user,"Login\\Run","same",REG_EXPAND_SZ,"%EX95_STARTUP_FIXTURE% /argument");
+    REG_VALUE(fixture.user,"Login\\RunOnce","!wait",REG_SZ,"wait");
+    REG_VALUE(fixture.user,"Login\\RunOnce","!changed",REG_SZ,"changed");
+    REG_VALUE(fixture.user,"Login\\RunOnce","!failure",REG_SZ,"fail");
+    REG_VALUE(fixture.user,"Login\\Run","binary",REG_BINARY,"never");
+    REG_VALUE(fixture.user,"Login\\Run","embedded",REG_SZ,"never\0extra");
+    REG_VALUE(fixture.user,"Login\\Run","empty",REG_SZ,"");
+    Check(SetEnvironmentVariableA("EX95_STARTUP_FIXTURE","expanded"),"set only the fixture's private process environment variable");
+    ShellRegistryStartupInit(&startup,fixture.machine,fixture.user,"Login",FALSE);
+    REG_VALUE(fixture.user,"Login\\Run","late",REG_SZ,"never");
+    while(ShellRegistryStartupStep(&startup,StartupRegistryLaunch,&fixture)) {}
+    Check(fixture.calls==7 && fixture.once==2 && fixture.runs==2,"snapshot streams all four Run/RunOnce keys without skipping adjacent deletions or replaying newly added values");
+    Check(!ShellRegistryStartupStep(&startup,StartupRegistryLaunch,&fixture) && ShellRegistryStartupPoll(&startup),"repeated queue wakeups do not replay commands and never block on running processes");
+    REG_VALUE(fixture.user,"Login\\RunOnce","!changed",REG_SZ,"replacement");
+    SetEvent(fixture.deferred); SetEvent(fixture.changed);
+    Check(!ShellRegistryStartupPoll(&startup) && !StartupRegistryHas(fixture.user,"Login\\RunOnce","!wait") &&
+        StartupRegistryHas(fixture.user,"Login\\RunOnce","!changed") && StartupRegistryHas(fixture.user,"Login\\RunOnce","!failure"),
+        "completed deferred RunOnce is removed, but replacements and failed launches survive");
+    Check(StartupRegistryHas(fixture.machine,"Login\\Run","same") && StartupRegistryHas(fixture.user,"Login\\Run","same"),"regular Run values are never removed");
+    ShellRegistryStartupClose(&startup);
+    REG_VALUE(fixture.machine,"Login\\RunOnce","*safe",REG_SZ,"safe"); fixture.calls=fixture.runs=0;
+    ShellRegistryStartupInit(&startup,fixture.machine,fixture.user,"Login",TRUE);
+    while(ShellRegistryStartupStep(&startup,StartupRegistryLaunch,&fixture)) {}
+    Check(fixture.calls==1 && fixture.runs==1,"safe mode runs only explicitly star-prefixed entries"); ShellRegistryStartupClose(&startup);
+    ShellRegistryStartupInit(&startup,fixture.machine,fixture.user,"Login",FALSE); ShellRegistryStartupClose(&startup);
+    Check(!ShellRegistryStartupStep(&startup,StartupRegistryLaunch,&fixture),"closing the startup queue cancels every unlaunched command");
+    SetEnvironmentVariableA("EX95_STARTUP_FIXTURE",NULL);
+    for(i=0;i<2;++i) {
+        HKEY owned=i ? fixture.user : fixture.machine;
+        Check(RegDeleteKeyA(owned,"Login\\Run")==ERROR_SUCCESS && RegDeleteKeyA(owned,"Login\\RunOnce")==ERROR_SUCCESS && RegDeleteKeyA(owned,"Login")==ERROR_SUCCESS,"remove only fixture startup keys"); RegCloseKey(owned);
+    }
+    Check(RegDeleteKeyA(root,"Machine")==ERROR_SUCCESS && RegDeleteKeyA(root,"User")==ERROR_SUCCESS,"remove private startup roots");
+    RegCloseKey(root); Check(RegDeleteKeyA(HKEY_CURRENT_USER,path)==ERROR_SUCCESS,"remove the owned startup registry fixture");
+#undef REG_VALUE
+}
 static void ShellStartupTests(const char *directory)
 {
     ShellStartup startup; char user[MAX_PATH],common[MAX_PATH],path[MAX_PATH],same[MAX_PATH]; int count;
+    ShellStartupRegistryTests();
     wsprintfA(user,"%s\\startup user",directory); wsprintfA(common,"%s\\startup common",directory);
     Check(CreateDirectoryA(user,NULL) && CreateDirectoryA(common,NULL),"create isolated user and common Startup folders");
     wsprintfA(path,"%s\\program.lnk",user); StartupFile(path,FILE_ATTRIBUTE_NORMAL);

@@ -254,21 +254,30 @@ static void RememberTitle(HWND window,const char *text)
         if(copy) { lstrcpyA(copy,text); if(!SetPropA(window,titleProperty,copy)) HeapFree(GetProcessHeap(),0,copy); }
     }
 }
-static void Caption(HWND window,BOOL active)
+void UiPaintCaption(HWND window,BOOL active)
 {
     const char *text=(const char *)GetPropA(window,titleProperty); HDC dc; RECT frame,rect; NONCLIENTMETRICSA metrics; HFONT font,old; LONG style;
     if(!text || !IsWindowVisible(window) || !HasCaption(window)) return;
     style=GetWindowLongA(window,GWL_STYLE); GetWindowRect(window,&frame);
-    int border=GetSystemMetrics(style&WS_THICKFRAME ? SM_CXFRAME : SM_CXDLGFRAME),buttons=1;
+    LONG extended=GetWindowLongA(window,GWL_EXSTYLE);
+    BOOL small=!!(extended&WS_EX_TOOLWINDOW);
+    int button=GetSystemMetrics(small ? SM_CXSMSIZE : SM_CXSIZE);
+    int border=GetSystemMetrics(style&WS_THICKFRAME ? SM_CXFRAME : SM_CXDLGFRAME),buttons=!!(style&WS_SYSMENU);
     if(style&(WS_MINIMIZEBOX|WS_MAXIMIZEBOX)) buttons+=2;
-    rect.left=border+GetSystemMetrics(SM_CXSIZE)+2; rect.right=frame.right-frame.left-border-buttons*GetSystemMetrics(SM_CXSIZE);
-    rect.top=GetSystemMetrics(style&WS_THICKFRAME ? SM_CYFRAME : SM_CYDLGFRAME); rect.bottom=rect.top+GetSystemMetrics(SM_CYCAPTION)-1;
+    else if((extended&WS_EX_CONTEXTHELP) && (style&WS_SYSMENU)) ++buttons;
+    /* Modal frames and tool windows have no caption icon. Starting after an
+     * imaginary icon leaves the native title's first letters underneath. */
+    rect.left=border+2;
+    if((style&WS_SYSMENU) && !(extended&WS_EX_DLGMODALFRAME) && !small) rect.left+=GetSystemMetrics(SM_CXSIZE);
+    rect.right=frame.right-frame.left-border-buttons*button;
+    rect.top=GetSystemMetrics(style&WS_THICKFRAME ? SM_CYFRAME : SM_CYDLGFRAME);
+    rect.bottom=rect.top+GetSystemMetrics(small ? SM_CYSMCAPTION : SM_CYCAPTION)-1;
     if(rect.right<=rect.left) return;
     dc=GetWindowDC(window); if(!dc) return;
     ZeroMemory(&metrics,sizeof(metrics)); metrics.cbSize=sizeof(metrics);
     font=(HFONT)GetStockObject(DEFAULT_GUI_FONT); HFONT temporary=NULL;
     if(SystemParametersInfoA(SPI_GETNONCLIENTMETRICS,sizeof(metrics),&metrics,0)) {
-        HFONT base=CreateFontIndirectA(&metrics.lfCaptionFont);
+        HFONT base=CreateFontIndirectA(small ? &metrics.lfSmCaptionFont : &metrics.lfCaptionFont);
         font=UiFont(base); if(base && font!=base) DeleteObject(base); else temporary=base;
     } else font=UiFont(font);
     FillRect(dc,&rect,(HBRUSH)(INT_PTR)(active ? COLOR_ACTIVECAPTION+1 : COLOR_INACTIVECAPTION+1));
@@ -366,8 +375,8 @@ static LRESULT CALLBACK Proxy(HWND window,UINT message,WPARAM wp,LPARAM lp)
     if(message==WM_NCDESTROY) ClearTitle(window);
     if(message==WM_DESTROY) { HMENU menu=GetMenu(window); for(i=0;i<64;++i) if(menuBars[i]==menu) menuBars[i]=NULL; }
     result=CallWindowProcA(original,window,message,wp,lp);
-    if(language && legacy && (message==WM_NCPAINT || message==WM_NCACTIVATE || message==WM_SETTEXT))
-        Caption(window,message==WM_NCACTIVATE ? !!wp : GetForegroundWindow()==window);
+    if(language && legacy && !nativeCyrillic && (message==WM_NCPAINT || message==WM_NCACTIVATE || message==WM_SETTEXT))
+        UiPaintCaption(window,message==WM_NCACTIVATE ? !!wp : GetForegroundWindow()==window);
     return result;
 }
 ATOM WINAPI UiRegisterClassA(const WNDCLASSA *cls)
@@ -400,7 +409,7 @@ BOOL WINAPI UiSetWindowTextA(HWND window,LPCSTR text)
         WCHAR *wide=Wide(value); result=wide ? setWide(window,wide) : SetWindowTextA(window,value); if(wide) HeapFree(GetProcessHeap(),0,wide);
     } else result=SetWindowTextA(window,value);
     if(Localized(value)) ControlFont(window);
-    if(language) Caption(window,GetForegroundWindow()==window);
+    if(language && legacy && !nativeCyrillic) UiPaintCaption(window,GetForegroundWindow()==window);
     return result;
 }
 int WINAPI UiGetWindowTextA(HWND window,LPSTR buffer,int count)

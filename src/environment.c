@@ -44,6 +44,7 @@ static RegisterShellNotifications registerShellNotifications;
 static UINT shellNotificationMessage;
 static BOOL shellNotifications;
 static ShellStartup sessionStartup;
+static ShellRegistryStartup registryStartup;
 static BOOL startupStarted;
 static BOOL startupLaunching;
 /* Internal wakeups carry no pointer: only validated WM_COPYDATA payloads enter
@@ -61,7 +62,17 @@ void EnvironmentStartSession(void)
     if(!env.host.specialPath(CSIDL_STARTUP,user)) user[0]=0;
     if(!env.host.specialPath(CSIDL_COMMON_STARTUP,common)) common[0]=0;
     ShellStartupInit(&sessionStartup,user,common);
+    ShellRegistryStartupInit(&registryStartup,HKEY_LOCAL_MACHINE,HKEY_CURRENT_USER,
+        "Software\\Microsoft\\Windows\\CurrentVersion",GetSystemMetrics(SM_CLEANBOOT)!=0);
     if(!PostMessageA(env.bar,WM_APP+36,0,0)) ShellStartupClose(&sessionStartup);
+}
+static BOOL LaunchStartupCommand(const char *command,HANDLE *process,void *context)
+{
+    STARTUPINFOA info; PROCESS_INFORMATION child; char copy[SHELL_STARTUP_COMMAND],directory[MAX_PATH];
+    (void)context; lstrcpyA(copy,command); ZeroMemory(&info,sizeof(info)); info.cb=sizeof(info);
+    if(!GetWindowsDirectoryA(directory,sizeof(directory))) directory[0]=0;
+    if(!CreateProcessA(NULL,copy,NULL,NULL,FALSE,0,NULL,directory[0] ? directory : NULL,&info,&child)) return FALSE;
+    CloseHandle(child.hThread); *process=child.hProcess; return TRUE;
 }
 
 BOOL EnvRefreshStartItems(void)
@@ -1156,6 +1167,14 @@ static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
     case WM_APP + 36: {
         char path[MAX_PATH]; SHELLEXECUTEINFOA launch;
         if(!startupStarted || startupLaunching || env.closing) return 0;
+        startupLaunching=TRUE;
+        BOOL registry=ShellRegistryStartupStep(&registryStartup,LaunchStartupCommand,NULL);
+        startupLaunching=FALSE;
+        if(registry) {
+            RenderTraceShell("startup.registry",registryStartup.error ? E_FAIL : S_OK,registryStartup.error,0);
+            if(!PostMessageA(window,WM_APP+36,0,0)) ShellRegistryStartupClose(&registryStartup);
+            return 0;
+        }
         if(!ShellStartupNext(&sessionStartup,path)) { RenderTraceShell("startup.done",S_OK,sessionStartup.directory,0); ShellStartupClose(&sessionStartup); return 0; }
         ZeroMemory(&launch,sizeof(launch)); launch.cbSize=sizeof(launch); launch.fMask=SEE_MASK_FLAG_NO_UI;
         launch.hwnd=window; launch.lpFile=path; launch.lpDirectory=sessionStartup.folders[sessionStartup.directory]; launch.nShow=SW_SHOWNORMAL;
@@ -1173,6 +1192,7 @@ static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
         if (wp == ABN_POSCHANGED) EnvPositionBar();
         return 0;
     case WM_TIMER: {
+        if(wp==1 && startupStarted) ShellRegistryStartupPoll(&registryStartup);
         SYSTEMTIME now; char text[32];
         if (wp == 3) {
             POINT point; GetCursorPos(&point);
@@ -1411,7 +1431,7 @@ void EnvironmentShutdown(void)
     if(shellNotifications) {
         registerShellNotifications(env.bar,0); shellNotifications=FALSE;
     }
-    if(startupStarted) ShellStartupClose(&sessionStartup);
+    if(startupStarted) { ShellStartupClose(&sessionStartup); ShellRegistryStartupClose(&registryStartup); }
     WelcomeClose();
     TaskSwitchDestroy();
     RenderTraceShutdown("exit.begin",S_OK,0);
