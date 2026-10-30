@@ -96,7 +96,10 @@ static HWND SearchHistoryOpen(HWND bar)
     SendMessageA(edit,WM_LBUTTONUP,0,MAKELPARAM(30,field.bottom/2));
     Check(SearchStatus("Search history")!=NULL,"double-clicking the search field also opens history");
     { DWORD selection=(DWORD)SendMessageA(edit,EM_GETSEL,0,0);
-      Check(HIWORD(selection)>LOWORD(selection),"opening history preserves native double-click word selection"); }
+      if(SendMessageA(edit,WM_GETTEXTLENGTH,0,0))
+          Check(HIWORD(selection)>LOWORD(selection),"opening history preserves native double-click word selection");
+      else
+          Check(!selection,"double-clicking an empty search field opens history without selecting nonexistent text"); }
     SendMessageA(edit,WM_KEYDOWN,VK_F4,0);
     Check(!IsWindowVisible(FindWindowA("Explorer95.TaskbarSearchResults",NULL)),"F4 dismisses click-open history");
     SendMessageA(edit,WM_KEYDOWN,VK_F4,0);
