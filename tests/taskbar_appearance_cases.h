@@ -1,4 +1,27 @@
 /* Uses only disposable Wine display metrics and our own windows/profile. */
+static void TaskbarRowHeightCheck(HWND bar,int rows)
+{
+    RECT start; int id,visible=0,cell; BOOL aligned=TRUE;
+    GetWindowRect(GetDlgItem(bar,ID_START),&start); cell=start.bottom-start.top+2;
+    /* Opening Properties can regroup/reorder tasks, and a task may occupy
+     * either selected row. Read the live buttons instead of retaining ID 200. */
+    for(id=ID_TASK;id<ID_TASK+TASK_LIMIT;++id) {
+        HWND current=GetDlgItem(bar,id);
+        if(current && IsWindowVisible(current)) {
+            RECT task; int offset; BOOL fits; GetWindowRect(current,&task); ++visible;
+            offset=task.top-start.top;
+            fits=task.bottom-task.top==start.bottom-start.top &&
+                offset>=0 && offset<rows*cell && offset%cell==0;
+            if(!fits) {
+                char note[180]; wsprintfA(note,"FAIL: task row id=%d rows=%d start=%ld,%ld task=%ld,%ld\r\n",
+                    id,rows,start.top,start.bottom,task.top,task.bottom); Log(note);
+            }
+            aligned &= fits;
+        }
+    }
+    Check(visible>0 && aligned,
+        "Start and live task rows share button height and row grid with small/large Quick Launch and one/two rows");
+}
 /* Wine 10 caches NONCLIENTMETRICS per process. Restart fixtures between sizes;
  * actual live Appearance changes are additionally checked in the Win95 VM. */
 static void TaskbarAppearanceMetricsTest(const char *directory,const char *executable)

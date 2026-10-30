@@ -1167,6 +1167,13 @@ static void PumpFor(DWORD duration)
         Sleep(10);
     } while (GetTickCount() - started < duration);
 }
+/* Keep motion and held buttons in the same injected stream. X11 cursor warps
+ * can report physical button-up state to Wine during an otherwise valid drag. */
+static void MoveTestPointer(LONG x,LONG y)
+{
+    mouse_event(MOUSEEVENTF_MOVE|MOUSEEVENTF_ABSOLUTE,
+        x*65535/(GetSystemMetrics(SM_CXSCREEN)-1),y*65535/(GetSystemMetrics(SM_CYSCREEN)-1),0,0);
+}
 #include "taskbar_panels_cases.h"
 #include "taskbar_query_cases.h"
 #include "taskbar_search_cases.h"
@@ -1778,7 +1785,7 @@ static void EnvironmentTests(HWND bar, HWND browser, HWND childWindow, HWND menu
     packet.signature = 0x34753423; copy.cbData = 8;
     Check(!SendMessageA(bar, WM_COPYDATA, (WPARAM)childWindow, (LPARAM)&copy), "tray rejects truncated notification data");
     {
-        HWND second, task; RECT firstRect, secondRect, startRect, taskRect, clockRect;
+        HWND second, task; RECT firstRect, secondRect, startRect, clockRect;
         int large, rows;
         copy.cbData = offsetof(Packet, icon) + packet.icon.cbSize;
         packet.operation = NIM_ADD; packet.icon.uID = 96;
@@ -1798,9 +1805,7 @@ static void EnvironmentTests(HWND bar, HWND browser, HWND childWindow, HWND menu
             SendDlgItemMessageA(properties, 621, CB_SETCURSEL, rows - 1, 0);
             SendMessageA(properties, WM_COMMAND, MAKELONG(621, CBN_SELCHANGE), 0);
             SendMessageA(properties, WM_COMMAND, 0x3021, 0); PumpFor(80);
-            GetWindowRect(GetDlgItem(bar, 100), &startRect); GetWindowRect(task, &taskRect);
-            Check(startRect.top == taskRect.top && startRect.bottom == taskRect.bottom,
-                "Start and first task row share height with small/large Quick Launch and one/two rows");
+            TaskbarRowHeightCheck(bar,rows);
             GetWindowRect(notification, &firstRect); GetWindowRect(second, &secondRect);
             Check(firstRect.right - firstRect.left == 20 && firstRect.bottom - firstRect.top == 20 &&
                 secondRect.right - secondRect.left == 20 && secondRect.bottom - secondRect.top == 20,

@@ -224,8 +224,9 @@ static void PanelContextChoice(HWND panel,int downs)
 }
 static void PanelDrag(HWND panel,int delta,BOOL cancel)
 {
-    RECT rect; GetWindowRect(panel,&rect); SetCursorPos(rect.left+4,(rect.top+rect.bottom)/2); PumpFor(40);
-    mouse_event(MOUSEEVENTF_LEFTDOWN,0,0,0,0); PumpFor(30); SetCursorPos(rect.left+4+delta,(rect.top+rect.bottom)/2); PumpFor(70);
+    RECT rect; GetWindowRect(panel,&rect); MoveTestPointer(rect.left+4,(rect.top+rect.bottom)/2); PumpFor(40);
+    mouse_event(MOUSEEVENTF_LEFTDOWN,0,0,0,0); PumpFor(30); MoveTestPointer(rect.left+4+delta,(rect.top+rect.bottom)/2); PumpFor(70);
+    Check((GetAsyncKeyState(VK_LBUTTON)&0x8000)!=0,"the folder resize keeps its injected mouse button held through movement");
     if(cancel) { keybd_event(VK_ESCAPE,0,0,0); keybd_event(VK_ESCAPE,0,KEYEVENTF_KEYUP,0); PumpFor(70); }
     mouse_event(MOUSEEVENTF_LEFTUP,0,0,0,0); PumpFor(100);
 }
@@ -478,7 +479,7 @@ static void __attribute__((noinline)) TaskbarPanelsTests(HWND bar,const char *di
     Check(PanelWidth(toolbar)==160,"Escape cancels resizing a custom folder toolbar");
     PanelDrag(toolbar,-30,FALSE); GetWindowRect(bar,&after);
     if(PanelWidth(toolbar)!=190 || GetPrivateProfileIntA("TaskbarToolbars","Size0",0,settings)!=190 || !EqualRect(&before,&after)) {
-        char note[180]; wsprintfA(note,"Folder resize: actual=%d saved=%u same-bar=%d\r\n",PanelWidth(toolbar),
+        char note[180]; wsprintfA(note,"FAIL: folder resize actual=%d saved=%u same-bar=%d\r\n",PanelWidth(toolbar),
             GetPrivateProfileIntA("TaskbarToolbars","Size0",0,settings),EqualRect(&before,&after)); Log(note);
     }
     Check(PanelWidth(toolbar)==190 && GetPrivateProfileIntA("TaskbarToolbars","Size0",0,settings)==190 && EqualRect(&before,&after),"folder toolbar resizing persists its own width without moving the taskbar");

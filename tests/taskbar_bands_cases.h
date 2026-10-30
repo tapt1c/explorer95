@@ -1,8 +1,8 @@
 static void BandDragTo(HWND grip,POINT destination,BOOL cancel)
 {
-    RECT rect; GetWindowRect(grip,&rect); SetCursorPos(rect.left+4,(rect.top+rect.bottom)/2); PumpFor(60);
+    RECT rect; GetWindowRect(grip,&rect); MoveTestPointer(rect.left+4,(rect.top+rect.bottom)/2); PumpFor(60);
     mouse_event(MOUSEEVENTF_LEFTDOWN,0,0,0,0); PumpFor(40);
-    SetCursorPos(destination.x,destination.y); PumpFor(120);
+    MoveTestPointer(destination.x,destination.y); PumpFor(120);
     Check(SearchFieldPainted(GetParent(grip)),"the search edit stays fully painted while a toolbar grip is held in its new row");
     if(cancel) { keybd_event(VK_ESCAPE,0,0,0); keybd_event(VK_ESCAPE,0,KEYEVENTF_KEYUP,0); PumpFor(80); }
     mouse_event(MOUSEEVENTF_LEFTUP,0,0,0,0); PumpFor(120);
@@ -28,9 +28,9 @@ static void DockFromBand(HWND bar,UINT edge)
     Check(WindowFromPoint(point)==strip,"dock dragging starts on empty space owned by the task band");
     target.x=edge==ABE_LEFT ? 1 : edge==ABE_RIGHT ? GetSystemMetrics(SM_CXSCREEN)-2 : GetSystemMetrics(SM_CXSCREEN)/2;
     target.y=edge==ABE_TOP ? 1 : edge==ABE_BOTTOM ? GetSystemMetrics(SM_CYSCREEN)-2 : GetSystemMetrics(SM_CYSCREEN)/2;
-    SetCursorPos(point.x,point.y); PumpFor(40);
+    MoveTestPointer(point.x,point.y); PumpFor(40);
     mouse_event(MOUSEEVENTF_LEFTDOWN,0,0,0,0); PumpFor(50);
-    SetCursorPos(target.x,target.y); PumpFor(120);
+    MoveTestPointer(target.x,target.y); PumpFor(120);
     mouse_event(MOUSEEVENTF_LEFTUP,0,0,0,0); PumpFor(120);
 }
 static void DockBandTests(HWND bar,const char *settings)
