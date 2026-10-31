@@ -1,6 +1,10 @@
 # Следующие задачи Explorer95
 
-## В работе: автозапуск реестра, архивы и заголовки
+## В работе: публикация v0.9.0-alpha.92
+
+Код, сборка x86/PE, native/layout, check_incremental и полный UI Wine 10 прошли
+на 3d171ea: https://github.com/tapt1c/explorer95/actions/runs/41205306543
+Остались release workflow и проверка скачанных EXE/ZIP/SHA256SUMS.
 
 Run/RunOnce HKLM/HKCU подключены только к primary session. Снимок исключает
 смещение индексов при удалении; ! сохраняет запись до завершения процесса,
