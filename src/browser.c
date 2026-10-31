@@ -924,9 +924,9 @@ static LRESULT CALLBACK BrowserProc(HWND window, UINT message, WPARAM wp, LPARAM
             }
             if (header->code == TTN_NEEDTEXTA || header->code == TTN_NEEDTEXTW) {
                 int i;
-                static const int ids[] = {ID_BACK, ID_FORWARD, ID_UP, ID_SEARCH, ID_FOLDERS, ID_REFRESH, ID_VIEWS, ID_HISTORY};
-                static const char *names[] = {"Back (right-click for history)", "Forward (right-click for history)", "Up", "Search", "Folders", "Refresh", "Views", "History (Ctrl+H)"};
-                for (i = 0; i < 8; ++i) if ((int)header->idFrom == ids[i]) UiTooltipText(header,UiText(names[i]),browserFont);
+                static const int ids[] = {ID_BACK, ID_FORWARD, ID_UP, ID_SEARCH, ID_FOLDERS, ID_REFRESH, ID_VIEWS, ID_HISTORY, ID_ARCHIVE_ALL, ID_ARCHIVE_CANCEL};
+                static const char *names[] = {"Back (right-click for history)", "Forward (right-click for history)", "Up", "Search", "Folders", "Refresh", "Views", "History (Ctrl+H)", "Extract all...", "Cancel extraction"};
+                for (i = 0; i < (int)(sizeof(ids)/sizeof(ids[0])); ++i) if ((int)header->idFrom == ids[i]) UiTooltipText(header,UiText(names[i]),browserFont);
                 for (i = 0; i < BROWSER_EXTRA_TOOLS; ++i) if ((int)header->idFrom == extraCommands[i]) UiTooltipText(header,UiText(extraNames[i]),browserFont);
             }
             return BrowserFilesNotify(browser, header);

@@ -138,12 +138,13 @@ static void ArchiveUiTests(const char *directory,const char *executable,const ch
     Check(IsWindow(archive) && GetDlgItem(archive,ID_FILES)==files,"Enter on ZIP reuses the existing Explorer95 window and file list");
     if(!lstrcmpA(language,"ru")) {
         HWND sidebar=GetDlgItem(archive,ID_BROWSER_SIDEBAR),content=FindWindowExA(sidebar,NULL,"Explorer95.Sidebar",NULL);
-        MENUITEMINFOA item; ZeroMemory(&item,sizeof(item)); item.cbSize=sizeof(item); item.fMask=MIIM_TYPE;
-        Check(GetMenuItemInfoA(GetSubMenu(GetMenu(archive),0),ID_ARCHIVE_ALL,FALSE,&item) && (item.fType&MFT_OWNERDRAW) &&
-            LanguageWideEqual(GetDlgItem(content,6101),L"\u0418\u0437\u0432\u043b\u0435\u0447\u044c \u0432\u0441\u0451..."),"archive menu and task links use the shared Cyrillic rendering boundary");
+        Check(LanguageWideEqual(GetDlgItem(content,6101),L"\u0418\u0437\u0432\u043b\u0435\u0447\u044c \u0432\u0441\u0451..."),"archive task links display real Cyrillic through the shared localization boundary");
     }
     Check(SendMessageA(files,LVM_GETITEMCOUNT,0,0)==4 && GetDlgItem(archive,ID_TOOLBAR) && GetDlgItem(archive,ID_ADDRESS) && GetDlgItem(archive,ID_BROWSER_SIDEBAR),"archive uses normal toolbar, editable address, task sidebar and four readable rows");
-    Check((GetMenuState(GetMenu(archive),ID_RENAME,MF_BYCOMMAND)&MF_GRAYED)!=0,"read-only archive disables Rename in the normal menu");
+    PostMessageA(files,WM_KEYDOWN,VK_HOME,0); PumpFor(50);
+    Check(SendMessageA(files,LVM_GETSELECTEDCOUNT,0,0)>0,"select a real archive row before testing protected file commands");
+    SendMessageA(archive,WM_COMMAND,ID_RENAME,0);
+    Check(!SendMessageA(files,LVM_GETEDITCONTROL,0,0),"Rename cannot open a filesystem label editor for an archive member");
     SendMessageA(archive,WM_COMMAND,ID_DELETE,0); SendMessageA(archive,WM_COMMAND,ID_NEWFOLDER,0); SendMessageA(archive,WM_COMMAND,ID_PASTE,0);
     Check(SendMessageA(files,LVM_GETITEMCOUNT,0,0)==4 && GetFileAttributesA(path)!=INVALID_FILE_ATTRIBUTES,"filesystem mutation commands leave archive content and original file intact");
     SetForegroundWindow(archive); started=GetTickCount();

@@ -13,7 +13,7 @@
 #include "welcome.h"
 #include "shell_startup.h"
 #include "archive.h"
-#include "browser_archive.h"
+#include "browser.h"
 #define EX95_LOCALIZE_UI
 #include "localization.h"
 
@@ -225,7 +225,7 @@ BOOL EnvironmentLaunch(HWND owner, const char *path, const char *arguments, cons
 {
     if(ArchivePath(path) && (!arguments || !*arguments)) {
         DWORD attributes=GetFileAttributesA(path);
-        if(attributes!=INVALID_FILE_ATTRIBUTES && !(attributes&FILE_ATTRIBUTE_DIRECTORY)) return BrowserArchiveOpen(path)!=NULL;
+        if(attributes!=INVALID_FILE_ATTRIBUTES && !(attributes&FILE_ATTRIBUTE_DIRECTORY)) return BrowserOpen(path)!=NULL;
     }
     TaskbarLink *shortcut=NULL; int length=lstrlenA(path); HINSTANCE result;
     /* Execute the original .lnk, but retain the program in history even if

@@ -93,12 +93,13 @@ void BrowserTreeCreate(Browser *browser)
 void BrowserTreeSync(Browser *browser)
 {
     TreeNode *node, *best = NULL; int length = 0;
+    const char *path=browser->archive ? BrowserArchivePath(browser) : browser->path;
     if (!browser->tree) return;
     for (node = browser->nodes; node; node = node->next) {
         int size = lstrlenA(node->path); char prefix[MAX_PATH];
-        if (!size || !browser->path[0] || size < length) continue;
-        lstrcpynA(prefix, browser->path, size + 1);
-        if (!lstrcmpiA(prefix, node->path) && (!browser->path[size] || node->path[size - 1] == '\\' || browser->path[size] == '\\')) {
+        if (!size || !path[0] || size < length) continue;
+        lstrcpynA(prefix, path, size + 1);
+        if (!lstrcmpiA(prefix, node->path) && (!path[size] || node->path[size - 1] == '\\' || path[size] == '\\')) {
             best = node; length = size;
         }
     }

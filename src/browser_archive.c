@@ -7,7 +7,6 @@
 #include "localization.h"
 #define ARCHIVE_LICENSE_CLASS "Explorer95.ArchiveLicense"
 
-typedef struct ArchiveRow { FileEntry file; char path[MAX_PATH]; } ArchiveRow;
 struct BrowserArchive {
     Archive *model;
     ArchiveExtraction *operation;
@@ -26,6 +25,12 @@ static FileEntry *Row(Browser *browser,int index)
     LVITEMA item; ZeroMemory(&item,sizeof(item)); item.mask=LVIF_PARAM; item.iItem=index;
     return ListView_GetItem(browser->files,&item) ? (FileEntry *)item.lParam : NULL;
 }
+static BOOL MemberPath(Browser *browser,const FileEntry *entry,char *path)
+{
+    const char *prefix=browser->archive->prefix;
+    if(lstrlenA(prefix)+lstrlenA(entry->name)>=MAX_PATH) return FALSE;
+    lstrcpyA(path,prefix); lstrcatA(path,entry->name); return TRUE;
+}
 const char *BrowserArchivePath(Browser *browser) { return browser->archive ? browser->archive->path : ""; }
 void BrowserArchivePlace(Browser *browser,BrowserPlace *place)
 {
@@ -35,7 +40,8 @@ void BrowserArchivePlace(Browser *browser,BrowserPlace *place)
 void BrowserArchiveAddress(Browser *browser,char *text)
 {
     BrowserArchive *state=browser->archive;
-    wsprintfA(text,"%s\\%s",state->path,state->prefix);
+    wsprintfA(text,"%s%s%s",state->path,state->prefix[0] ? "\\" : "",state->prefix);
+    if(state->prefix[0]) text[lstrlenA(text)-1]=0;
 }
 BOOL BrowserArchiveReady(Browser *browser)
 {
@@ -78,18 +84,18 @@ static void ShowRows(Browser *browser)
     BrowserArchive *state=browser->archive; ArchiveEntry *entry; FileEntry *rows=NULL,**tail=&rows;
     if(state->scanning || state->model->error) return;
     for(entry=state->model->entries;entry;entry=entry->next) {
-        const char *rest=Within(entry->path,state->prefix),*end; char path[MAX_PATH]; ArchiveRow *row; FileEntry *scan;
+        const char *rest=Within(entry->path,state->prefix),*end; char name[MAX_PATH]; FileEntry *row,*scan;
         if(!rest || !*rest) continue;
         end=rest; while(*end && *end!='\\') end=CharNextA(end);
-        lstrcpynA(path,entry->path,(int)(end-entry->path)+1);
-        for(scan=rows;scan;scan=scan->next) if(!lstrcmpiA(((ArchiveRow *)scan)->path,path)) break;
+        lstrcpynA(name,rest,(int)(end-rest)+1);
+        for(scan=rows;scan;scan=scan->next) if(!lstrcmpiA(scan->name,name)) break;
         if(scan) continue;
         row=EnvAlloc(sizeof(*row)); if(!row) { BrowserFilesFree(rows); state->model->error=ERROR_NOT_ENOUGH_MEMORY; return; }
-        lstrcpyA(row->path,path); lstrcpyA(row->file.name,path+lstrlenA(state->prefix));
-        row->file.attributes=*end || (entry->data.flags&ARCHIVE_ENTRY_DIRECTORY) ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL;
-        if(!*end) row->file.modified=entry->data.modified;
-        row->file.sizeHigh=entry->data.sizeHigh; row->file.sizeLow=entry->data.sizeLow;
-        *tail=&row->file; tail=&row->file.next;
+        lstrcpyA(row->name,name);
+        row->attributes=*end || (entry->data.flags&ARCHIVE_ENTRY_DIRECTORY) ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL;
+        if(!*end) row->modified=entry->data.modified;
+        row->sizeHigh=entry->data.sizeHigh; row->sizeLow=entry->data.sizeLow;
+        *tail=row; tail=&row->next;
     }
     SendMessageA(browser->files,WM_SETREDRAW,FALSE,0);
     ListView_DeleteAllItems(browser->files); BrowserFilesFree(browser->entries); browser->entries=rows;
@@ -107,7 +113,9 @@ void BrowserArchiveShow(Browser *browser)
 void BrowserArchiveStatus(Browser *browser)
 {
     BrowserArchive *state=browser->archive;
-    EnableWindow(browser->files,BrowserArchiveReady(browser));
+    BOOL ready=BrowserArchiveReady(browser),wasEnabled=IsWindowEnabled(browser->files);
+    EnableWindow(browser->files,ready);
+    if(ready && !wasEnabled && GetForegroundWindow()==browser->window && (!GetFocus() || GetFocus()==browser->window)) SetFocus(browser->files);
     if(state->model->error) SetWindowTextA(browser->status,"Cannot read this archive.");
     else if(state->scanning) SetWindowTextA(browser->status,"Reading archive...");
     else if(state->extracting) SetWindowTextA(browser->status,"Extracting...");
@@ -129,13 +137,13 @@ static void Extract(Browser *browser,BOOL all)
     BrowserArchive *state=browser->archive;
     BROWSEINFOA browse; LPITEMIDLIST pidl; char chosen[MAX_PATH],name[MAX_PATH],destination[MAX_PATH]; ArchiveEntry *entry;
     int index=-1,attempt; HWND window=browser->window;
-    if(!BrowserArchiveReady(browser)) return;
+    if(!BrowserArchiveReady(browser) || (!all && !ListView_GetSelectedCount(browser->files))) return;
     for(entry=state->model->entries;entry;entry=entry->next) entry->selected=all;
     if(!all) while((index=ListView_GetNextItem(browser->files,index,LVNI_SELECTED))>=0) {
-        ArchiveRow *row=(ArchiveRow *)Row(browser,index); if(!row) continue;
+        FileEntry *row=Row(browser,index); char path[MAX_PATH]; if(!row || !MemberPath(browser,row,path)) continue;
         for(entry=state->model->entries;entry;entry=entry->next) {
-            const char *tail=Within(entry->path,row->path);
-            if(tail && (!*tail || ((row->file.attributes&FILE_ATTRIBUTE_DIRECTORY) && *tail=='\\'))) entry->selected=TRUE;
+            const char *tail=Within(entry->path,path);
+            if(tail && (!*tail || ((row->attributes&FILE_ATTRIBUTE_DIRECTORY) && *tail=='\\'))) entry->selected=TRUE;
         }
     }
     ZeroMemory(&browse,sizeof(browse)); browse.hwndOwner=window; browse.pszDisplayName=name;
@@ -191,7 +199,6 @@ void BrowserArchiveTick(Browser *browser)
         if(!state->model->error && !BrowserArchiveFolder(state,state->prefix)) state->model->error=ERROR_PATH_NOT_FOUND;
         if(!state->model->error) ShowRows(browser);
         BrowserSidebarLocationChanged(browser); BrowserUpdate(browser);
-        if(!state->model->error && GetForegroundWindow()==browser->window && (!GetFocus() || GetFocus()==browser->window)) SetFocus(browser->files);
         if(state->model->error) BrowserError(browser->window,"Cannot read this archive.",state->model->error);
         return;
     }
@@ -213,12 +220,12 @@ BOOL BrowserArchiveCommand(Browser *browser,int command)
 }
 void BrowserArchiveOpenItem(Browser *browser)
 {
-    ArchiveRow *row; BrowserPlace place;
+    FileEntry *row; BrowserPlace place; char path[MAX_PATH];
     if(!BrowserArchiveReady(browser)) return;
-    row=(ArchiveRow *)Row(browser,ListView_GetNextItem(browser->files,-1,LVNI_SELECTED)); if(!row) return;
-    if(row->file.attributes&FILE_ATTRIBUTE_DIRECTORY) {
-        if(lstrlenA(row->path)+1>=MAX_PATH) { BrowserError(browser->window,"The path is too long.",ERROR_FILENAME_EXCED_RANGE); return; }
-        BrowserArchivePlace(browser,&place); lstrcpyA(place.member,row->path); lstrcatA(place.member,"\\");
+    row=Row(browser,ListView_GetNextItem(browser->files,-1,LVNI_SELECTED)); if(!row || !MemberPath(browser,row,path)) return;
+    if(row->attributes&FILE_ATTRIBUTE_DIRECTORY) {
+        if(lstrlenA(path)+1>=MAX_PATH) { BrowserError(browser->window,"The path is too long.",ERROR_FILENAME_EXCED_RANGE); return; }
+        BrowserArchivePlace(browser,&place); lstrcpyA(place.member,path); lstrcatA(place.member,"\\");
         BrowserNavigatePlace(browser,&place,-1);
     } else Extract(browser,FALSE);
 }
@@ -266,7 +273,6 @@ BOOL BrowserArchiveRegister(void)
     cls.hIcon=LoadIconA(browserInstance,"EXPLORER95"); cls.hbrBackground=(HBRUSH)(COLOR_BTNFACE+1);
     cls.lpfnWndProc=LicenseProc; cls.lpszClassName=ARCHIVE_LICENSE_CLASS; return RegisterClassA(&cls)!=0;
 }
-HWND BrowserArchiveOpen(const char *path) { return BrowserOpen(path); }
 static BOOL CALLBACK CloseLicense(HWND window,LPARAM unused)
 {
     char kind[64]; DWORD process; (void)unused;

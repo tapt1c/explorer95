@@ -9,7 +9,6 @@ typedef struct BrowserArchive BrowserArchive;
 struct Browser;
 struct BrowserPlace;
 BOOL BrowserArchiveRegister(void);
-HWND BrowserArchiveOpen(const char *path);
 void BrowserArchiveShutdown(void);
 BrowserArchive *BrowserArchiveCreate(const char *path);
 void BrowserArchiveDestroy(BrowserArchive *state);
