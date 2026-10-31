@@ -246,8 +246,11 @@ static LRESULT CALLBACK ArchiveProc(HWND window,UINT message,WPARAM wp,LPARAM lp
     }
     case WM_CLOSE: DestroyWindow(window); return 0;
     case WM_DESTROY:
-        KillTimer(window,1); ArchiveExtractCancel(browser->operation); ArchiveClose(browser->archive); FreeRows(browser);
-        EnvFree(browser->operation); SetWindowLongPtrA(window,GWLP_USERDATA,0); EnvFree(browser); return 0;
+        /* Native selection/focus notifications may reenter while rows are
+         * removed. Detach the owner before releasing its model or controls. */
+        KillTimer(window,1); SetWindowLongPtrA(window,GWLP_USERDATA,0);
+        ArchiveExtractCancel(browser->operation); FreeRows(browser); ArchiveClose(browser->archive);
+        EnvFree(browser->operation); EnvFree(browser); return 0;
     }
     return DefWindowProcA(window,message,wp,lp);
 }
@@ -296,8 +299,8 @@ BOOL BrowserArchiveTranslate(MSG *message)
 static BOOL CALLBACK CloseArchive(HWND window,LPARAM unused)
 {
     char kind[64]; DWORD process; (void)unused;
-    GetWindowThreadProcessId(window,&process); GetClassNameA(window,kind,sizeof(kind));
-    if(process==GetCurrentProcessId() && (!lstrcmpA(kind,BROWSER_ARCHIVE_CLASS) || !lstrcmpA(kind,ARCHIVE_LICENSE_CLASS))) DestroyWindow(window);
+    if(!GetWindowThreadProcessId(window,&process) || process!=GetCurrentProcessId() || !GetClassNameA(window,kind,sizeof(kind))) return TRUE;
+    if(!lstrcmpA(kind,BROWSER_ARCHIVE_CLASS) || !lstrcmpA(kind,ARCHIVE_LICENSE_CLASS)) DestroyWindow(window);
     return TRUE;
 }
 void BrowserArchiveShutdown(void) { EnumWindows(CloseArchive,0); ArchiveDecoderShutdown(); }

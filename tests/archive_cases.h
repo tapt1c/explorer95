@@ -43,7 +43,8 @@ static void ArchiveTests(const char *directory)
 {
     const char *unsafe[]={"../outside.txt","/root.txt","C:/root.txt","a/../b","a//b","NUL.txt","dir/COM1.txt","CON .txt","file.txt:stream","a./file","a /file","a?b",".\\x","\\\\server\\share","\xc0\xaf" "escape","COM\xc2\xb9.txt"};
     const char *bad[]={"bad-path.zip","duplicates.zip","oversize.zip","too-many.zip"};
-    const char *rars[]={"lipsum_rar4_default.rar","lipsum_rar4_max.rar","lipsum_rar4_ppmd.rar","lipsum_rar4_delta.rar","silent_rar4_audio.rar"};
+    const char *compressed[]={"lipsum_rar4_default.rar","lipsum_rar4_max.rar","lipsum_rar4_ppmd.rar","lipsum_rar4_delta.rar","silent_rar4_audio.rar",
+        "lipsum_zip_deflate64.zip","lipsum_zip_lzma1.zip","lipsum_zip_ppmd.zip"};
     Archive *archive; ArchiveEntry *entry; ArchiveExtraction *operation=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,sizeof(*operation));
     char output[MAX_PATH],path[MAX_PATH],source[MAX_PATH]; int i;
     Check(operation!=NULL,"allocate a bounded archive extraction buffer");
@@ -64,16 +65,21 @@ static void ArchiveTests(const char *directory)
     archive->entries->selected=TRUE; wsprintfA(path,"%s\\%s",output,source);
     Check(ArchiveExtractBegin(operation,archive,output),"prepare the OEM filename extraction"); ArchiveDrain(operation);
     Check(!operation->error && ArchiveTextEquals(path,"OEM name"),"OEM archive names survive the strict ANSI round-trip and extraction"); DeleteFileA(path); ArchiveClose(archive);
-    for(i=0;i<5;++i) {
-        wsprintfA(source,"tests\\fixtures\\archives\\%s",rars[i]); archive=ArchiveOpen(source); Check(archive!=NULL,"open an unchanged upstream compressed RAR fixture");
+    for(i=0;i<(int)(sizeof(compressed)/sizeof(compressed[0]));++i) {
+        wsprintfA(source,"tests\\fixtures\\archives\\%s",compressed[i]); archive=ArchiveOpen(source); Check(archive!=NULL,"open an unchanged upstream compressed ZIP/RAR fixture");
         while(ArchiveScan(archive)) {}
-        Check(archive->ready && !archive->error && archive->count==1,"RAR LZSS, PPMd and filter fixtures enumerate without filesystem side effects");
+        Check(archive->ready && !archive->error && archive->count==1,"ZIP/RAR methods and filter fixtures enumerate without filesystem side effects");
         entry=archive->entries; entry->selected=TRUE; wsprintfA(path,"%s\\%s",output,entry->path);
-        Check(ArchiveExtractBegin(operation,archive,output),"prepare real RAR decompression"); ArchiveDrain(operation);
+        Check(ArchiveExtractBegin(operation,archive,output),"prepare real ZIP/RAR decompression"); ArchiveDrain(operation);
         lstrcpyA(source,i==4 ? "tests\\fixtures\\archives\\silent_quarter-second.wav" : "tests\\fixtures\\archives\\lorem_ipsum.txt");
-        Check(!operation->error && operation->count==1 && ArchiveSameFiles(path,source),"RAR LZSS, PPMd, delta and audio output equals the original source bytes");
+        Check(!operation->error && operation->count==1 && ArchiveSameFiles(path,source),"ZIP Deflate64/LZMA/PPMd and RAR LZSS/PPMd/delta/audio output equals the original source bytes");
         Check(DeleteFileA(path),"remove only the extracted RAR fixture"); ArchiveClose(archive);
     }
+    archive=ArchiveOpen("tests\\fixtures\\archives\\lipsum_zip_bzip2.zip"); Check(archive!=NULL,"open a real ZIP with an unavailable method");
+    while(ArchiveScan(archive)) {}
+    Check(archive->ready && !archive->error && (archive->entries->data.flags&ARCHIVE_ENTRY_UNSUPPORTED),"unavailable ZIP methods remain visible but explicitly unsupported");
+    archive->entries->selected=TRUE;
+    Check(!ArchiveExtractBegin(operation,archive,output) && operation->error==ERROR_NOT_SUPPORTED,"unsupported ZIP compression is rejected before creating output"); ArchiveClose(archive);
     archive=ArchiveFixture("solid-stored.rar"); Check(archive->ready && !archive->error && archive->count==3 && archive->solid,"multi-entry RAR preserves solid state and an empty directory");
     for(entry=archive->entries;entry;entry=entry->next) entry->selected=!lstrcmpA(entry->path,"last.txt");
     Check(ArchiveExtractBegin(operation,archive,output) && ArchiveExtractStep(operation) && operation->remaining>0 && operation->current && !operation->current->selected,"selecting a later solid member consumes preceding data incrementally without writing it");
@@ -126,6 +132,8 @@ static void ArchiveUiTests(const char *directory,const char *executable,const ch
     PostMessageA(GetDlgItem(archive,ID_ARCHIVE_ALL),BM_CLICK,0,0); dialog=WaitFor("#32770",NULL);
     Check(dialog!=NULL,"Extract All opens the native destination chooser"); SendMessageA(dialog,WM_COMMAND,IDCANCEL,0); PumpFor(100);
     Check(IsWindowEnabled(files) && IsWindowEnabled(GetDlgItem(archive,ID_ARCHIVE_ALL)),"cancelling the destination chooser preserves the archive view");
+    PostMessageA(files,WM_KEYDOWN,VK_HOME,0); PumpFor(50);
+    Check(SendMessageA(files,LVM_GETSELECTEDCOUNT,0,0)>0,"close the archive while native selection and focus notifications are active");
     PostMessageA(archive,WM_CLOSE,0,0); PostMessageA(bar,WM_CLOSE,0,0);
     Check(WaitForGuiProcess(worker.hProcess,5000)==WAIT_OBJECT_0,"closing the shell releases its archive windows and decoder");
     CloseHandle(worker.hThread); CloseHandle(worker.hProcess); ZeroMemory(&process,sizeof(process));

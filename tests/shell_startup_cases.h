@@ -68,10 +68,11 @@ static void ShellStartupRegistryTests(void)
         "completed deferred RunOnce is removed, but replacements and failed launches survive");
     Check(StartupRegistryHas(fixture.machine,"Login\\Run","same") && StartupRegistryHas(fixture.user,"Login\\Run","same"),"regular Run values are never removed");
     ShellRegistryStartupClose(&startup);
-    REG_VALUE(fixture.machine,"Login\\RunOnce","*safe",REG_SZ,"safe"); fixture.calls=fixture.runs=0;
+    REG_VALUE(fixture.machine,"Login\\RunOnce","*safe",REG_SZ,"safe");
+    REG_VALUE(fixture.user,"Login\\Run","*not-safe",REG_SZ,"never"); fixture.calls=fixture.runs=0;
     ShellRegistryStartupInit(&startup,fixture.machine,fixture.user,"Login",TRUE);
     while(ShellRegistryStartupStep(&startup,StartupRegistryLaunch,&fixture)) {}
-    Check(fixture.calls==1 && fixture.runs==1,"safe mode runs only explicitly star-prefixed entries"); ShellRegistryStartupClose(&startup);
+    Check(fixture.calls==1 && fixture.runs==1,"safe mode runs only starred RunOnce entries and always skips regular Run"); ShellRegistryStartupClose(&startup);
     ShellRegistryStartupInit(&startup,fixture.machine,fixture.user,"Login",FALSE); ShellRegistryStartupClose(&startup);
     Check(!ShellRegistryStartupStep(&startup,StartupRegistryLaunch,&fixture),"closing the startup queue cancels every unlaunched command");
     SetEnvironmentVariableA("EX95_STARTUP_FIXTURE",NULL);

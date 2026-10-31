@@ -89,7 +89,7 @@ void ShellRegistryStartupInit(ShellRegistryStartup *startup,HKEY machine,HKEY us
             }
             prefix=entry->name;
             while(*prefix=='!' || *prefix=='*') { if(*prefix=='!') entry->after=TRUE; else safe=TRUE; ++prefix; }
-            if(safeMode && !safe) { RegistryFree(entry); continue; }
+            if(safeMode && (!once || !safe)) { RegistryFree(entry); continue; }
             entry->root=root; entry->once=once; entry->type=type; entry->bytes=bytes;
             lstrcpyA(entry->key,path); *tail=entry; tail=&entry->next; ++total;
         }
