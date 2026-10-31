@@ -108,12 +108,23 @@ static void ArchiveTests(const char *directory)
     Check(RemoveDirectoryA(output),"remove only the now-empty archive output directory");
     HeapFree(GetProcessHeap(),0,operation); ArchiveDecoderShutdown();
 }
+static int ArchiveUiPins(const char *directory)
+{
+    char pattern[MAX_PATH]; WIN32_FIND_DATAA data; HANDLE find; int count=0;
+    wsprintfA(pattern,"%s\\Taskbar Pins\\*.lnk",directory); find=FindFirstFileA(pattern,&data);
+    if(find!=INVALID_HANDLE_VALUE) { do { if(!(data.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY)) ++count; } while(FindNextFileA(find,&data)); FindClose(find); }
+    return count;
+}
 static void ArchiveUiTests(const char *directory,const char *executable,const char *language)
 {
-    STARTUPINFOA info; PROCESS_INFORMATION worker; char folder[MAX_PATH],path[MAX_PATH],profile[MAX_PATH],command[MAX_PATH*4]; HWND bar,browser,archive,files,dialog; DWORD started;
-    wsprintfA(folder,"%s\\archive UI",directory); Check(CreateDirectoryA(folder,NULL),"create a separate archive UI fixture");
+    STARTUPINFOA info; PROCESS_INFORMATION worker; char data[MAX_PATH],folder[MAX_PATH],path[MAX_PATH],profile[MAX_PATH],command[MAX_PATH*4]; HWND bar,browser,archive,files,dialog; DWORD started;
+    int previousPins=ArchiveUiPins(directory);
+    /* The settings directory owns Quick Launch and Taskbar Pins. Another INI
+     * in the parent's directory is not an isolated profile. */
+    wsprintfA(data,"%s\\archive UI",directory); wsprintfA(folder,"%s\\files",data);
+    Check(CreateDirectoryA(data,NULL) && CreateDirectoryA(folder,NULL),"create separate archive profile and document directories");
     wsprintfA(path,"%s\\example.zip",folder); Check(CopyFileA("build\\archive-fixtures\\good.zip",path,TRUE),"copy only our archive into the UI fixture");
-    wsprintfA(profile,"%s\\archive-ui.ini",directory); WritePrivateProfileStringA("Interface","ShowWelcome","0",profile);
+    wsprintfA(profile,"%s\\settings.ini",data); WritePrivateProfileStringA("Interface","ShowWelcome","0",profile);
     WritePrivateProfileStringA("Interface","Language",language,profile);
     wsprintfA(command,"\"%s\" --settings=\"%s\" --open=\"%s\"",executable,profile,folder); ZeroMemory(&info,sizeof(info)); info.cb=sizeof(info);
     Check(CreateProcessA(NULL,command,NULL,NULL,FALSE,0,NULL,NULL,&info,&worker),"start an isolated archive browser shell"); process=worker;
@@ -125,7 +136,12 @@ static void ArchiveUiTests(const char *directory,const char *executable,const ch
     started=GetTickCount(); while(!IsWindowEnabled(GetDlgItem(archive,ID_ARCHIVE_ALL)) && GetTickCount()-started<5000) PumpFor(20);
     files=GetDlgItem(archive,ID_ARCHIVE_FILES);
     Check(SendMessageA(files,LVM_GETITEMCOUNT,0,0)==4 && (GetWindowLongA(GetDlgItem(archive,ID_ARCHIVE_ADDRESS),GWL_STYLE)&ES_READONLY),"archive root shows four readable rows and a read-only archive address");
-    PostMessageA(files,WM_KEYDOWN,VK_HOME,0); PostMessageA(files,WM_KEYDOWN,VK_DOWN,0); PostMessageA(files,WM_KEYDOWN,VK_RETURN,0); PumpFor(100);
+    SetForegroundWindow(archive); started=GetTickCount();
+    while(GetForegroundWindow()!=archive && GetTickCount()-started<3000) PumpFor(20);
+    Check(GetForegroundWindow()==archive,"activate the actual archive window before keyboard navigation");
+    PostMessageA(files,WM_KEYDOWN,VK_HOME,0); PostMessageA(files,WM_KEYDOWN,VK_DOWN,0); PostMessageA(files,WM_KEYDOWN,VK_RETURN,0);
+    started=GetTickCount();
+    while((SendMessageA(files,LVM_GETITEMCOUNT,0,0)!=1 || !IsWindowEnabled(GetDlgItem(archive,ID_ARCHIVE_UP))) && GetTickCount()-started<3000) PumpFor(20);
     Check(SendMessageA(files,LVM_GETITEMCOUNT,0,0)==1 && IsWindowEnabled(GetDlgItem(archive,ID_ARCHIVE_UP)),"keyboard navigation enters the archive's nested folder");
     SendMessageA(GetDlgItem(archive,ID_ARCHIVE_UP),BM_CLICK,0,0); PumpFor(80);
     Check(SendMessageA(files,LVM_GETITEMCOUNT,0,0)==4,"Up returns to the archive root without extracting files");
@@ -139,4 +155,7 @@ static void ArchiveUiTests(const char *directory,const char *executable,const ch
     CloseHandle(worker.hThread); CloseHandle(worker.hProcess); ZeroMemory(&process,sizeof(process));
     Check(DeleteFileA(path) && RemoveDirectoryA(folder),"remove only our archive UI fixtures");
     DeleteFileA(profile); wsprintfA(path,"%s.DIP",profile); DeleteFileA(path);
+    TaskbarPinsCleanup(data); wsprintfA(path,"%s\\Quick Launch",data);
+    Check(RemoveDirectoryA(path) && RemoveDirectoryA(data),"remove the archive shell's own data directories");
+    Check(ArchiveUiPins(directory)==previousPins,"archive UI runs never change the caller profile's pinned applications");
 }

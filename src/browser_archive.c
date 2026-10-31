@@ -73,6 +73,7 @@ static void ShowRows(ArchiveBrowser *browser)
     SendMessageA(browser->files,WM_SETREDRAW,TRUE,0); InvalidateRect(browser->files,NULL,TRUE);
     wsprintfA(address,"%s\\%s",browser->path,browser->prefix); UiSetLiteralWindowTextA(browser->address,address);
     wsprintfA(status,"%d object(s)",count); SetWindowTextA(browser->status,status); State(browser);
+    if(GetForegroundWindow()==browser->window && GetFocus()==browser->window) SetFocus(browser->files);
     if(browser->archive->error) SetWindowTextA(browser->status,"Cannot read this archive.");
 }
 static ArchiveRow *Row(ArchiveBrowser *browser,int index)
@@ -185,7 +186,8 @@ static LRESULT CALLBACK ArchiveProc(HWND window,UINT message,WPARAM wp,LPARAM lp
         browser->cancel=BrowserControl(window,"BUTTON","Cancel",WS_TABSTOP,ID_ARCHIVE_CANCEL);
         browser->address=CreateWindowExA(WS_EX_CLIENTEDGE,"EDIT","",WS_CHILD|WS_VISIBLE|WS_TABSTOP|ES_READONLY|ES_AUTOHSCROLL,0,0,0,0,window,(HMENU)ID_ARCHIVE_ADDRESS,browserInstance,NULL);
         SendMessageA(browser->address,WM_SETFONT,(WPARAM)browserFont,TRUE);
-        browser->files=CreateWindowExA(WS_EX_CLIENTEDGE,WC_LISTVIEWA,"",WS_CHILD|WS_VISIBLE|WS_TABSTOP|LVS_REPORT|LVS_SHOWSELALWAYS,0,0,0,0,window,(HMENU)ID_ARCHIVE_FILES,browserInstance,NULL);
+        /* Shell32 owns the shared system image list, as in Browser's file view. */
+        browser->files=CreateWindowExA(WS_EX_CLIENTEDGE,WC_LISTVIEWA,"",WS_CHILD|WS_VISIBLE|WS_TABSTOP|LVS_REPORT|LVS_SHOWSELALWAYS|LVS_SHAREIMAGELISTS,0,0,0,0,window,(HMENU)ID_ARCHIVE_FILES,browserInstance,NULL);
         SendMessageA(browser->files,WM_SETFONT,(WPARAM)browserFont,TRUE);
         ZeroMemory(&column,sizeof(column)); column.mask=LVCF_TEXT|LVCF_WIDTH; column.cx=310; column.pszText="Name";
         SendMessageA(browser->files,LVM_INSERTCOLUMNA,0,(LPARAM)&column); column.cx=110; column.pszText="Size"; SendMessageA(browser->files,LVM_INSERTCOLUMNA,1,(LPARAM)&column);
@@ -202,6 +204,9 @@ static LRESULT CALLBACK ArchiveProc(HWND window,UINT message,WPARAM wp,LPARAM lp
     }
     if(!browser) return DefWindowProcA(window,message,wp,lp);
     switch(message) {
+    case WM_SETFOCUS:
+        if(browser->archive && browser->archive->ready && IsWindowEnabled(browser->files)) SetFocus(browser->files);
+        return 0;
     case WM_SIZE: Layout(browser); return 0;
     case WM_GETMINMAXINFO: ((MINMAXINFO *)lp)->ptMinTrackSize.x=500; ((MINMAXINFO *)lp)->ptMinTrackSize.y=260; return 0;
     case WM_TIMER:

@@ -30,6 +30,17 @@ static void WaitTileButtons(HWND bar, int expected, BOOL square)
 {
     DWORD started=GetTickCount();
     while(TileFixtureButtons(bar,square)!=expected && GetTickCount()-started<4000) PumpFor(30);
+    if(TileFixtureButtons(bar,square)!=expected) {
+        char detail[240]; int i;
+        wsprintfA(detail,"FAIL: tiles: actual=%d expected=%d square=%d caption=%d\r\n",TileFixtureButtons(bar,square),expected,square,GetSystemMetrics(SM_CYCAPTION)); Log(detail);
+        for(i=ID_TASK;i<ID_TASK+TASK_LIMIT;++i) {
+            HWND button=GetDlgItem(bar,i); char title[160]; RECT rect;
+            if(button && GetWindowTextA(button,title,sizeof(title)) && title[0]=='T' && title[1]=='i' && title[2]=='l' && title[3]=='e') {
+                GetWindowRect(button,&rect);
+                wsprintfA(detail,"FAIL: tile visible=%d size=%ldx%ld: %s\r\n",IsWindowVisible(button),rect.right-rect.left,rect.bottom-rect.top,title); Log(detail);
+            }
+        }
+    }
     Check(TileFixtureButtons(bar,square)==expected,square ? "task tiles are square and grouping remains independent" : "classic task captions and ungrouped buttons are restored");
 }
 static void TaskTileTests(HWND bar, const char *settings)
