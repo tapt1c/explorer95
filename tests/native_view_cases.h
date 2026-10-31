@@ -257,10 +257,12 @@ static void NativeDesktopRefreshPaintTest(NativeView *view)
 }
 static void NativeDesktopPaintTests(HWND parent)
 {
-    RECT area={0,0,320,200},item; NativeView *view; HWND list; HDC dc; DWORD pixels; LPARAM empty;
+    RECT area={0,0,320,200},item; NativeView *view; HWND list; HDC dc; DWORD pixels; LPARAM empty; HFONT labelFont;
     view=NativeViewCreateEx(parent,NULL,TRUE,0,&area);
     Check(view && NativeViewList(view),"host a real desktop ListView for background input and paint regression");
     list=NativeViewList(view); ShowWindow(parent,SW_SHOW); UpdateWindow(parent);
+    labelFont=PixelTestFont((HFONT)SendMessageA(list,WM_GETFONT,0,0));
+    SendMessageA(list,WM_SETFONT,(WPARAM)labelFont,TRUE);
     RedrawWindow(list,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_UPDATENOW);
     Check(ListView_GetItemCount(list)>0 && ListView_GetItemRect(list,0,&item,LVIR_BOUNDS),"desktop paint fixture contains an actual icon and its native label");
     nativeDesktopOriginal=(WNDPROC)SetWindowLongPtrA(NativeViewWindow(view),GWLP_WNDPROC,(LONG_PTR)NativeDesktopObserver);
@@ -311,7 +313,7 @@ static void NativeDesktopPaintTests(HWND parent)
     NativeDesktopRefreshPaintTest(view);
     NativeDesktopItemDataTest(list);
     SetWindowLongPtrA(NativeViewWindow(view),GWLP_WNDPROC,(LONG_PTR)nativeDesktopOriginal);
-    NativeViewDestroy(view); ShowWindow(parent,SW_HIDE);
+    NativeViewDestroy(view); DeleteObject(labelFont); ShowWindow(parent,SW_HIDE);
 }
 
 static WNDPROC nativePaddedOriginal;

@@ -84,10 +84,11 @@ static void WaitPanelWidth(HWND panel,int expected,const char *message)
     DWORD started=GetTickCount();
     while(PanelWidth(panel)!=expected && GetTickCount()-started<1800) PumpFor(20);
     if(PanelWidth(panel)!=expected) {
-        char detail[300]; int i; wsprintfA(detail,"panel width: actual=%d expected=%d\r\n",PanelWidth(panel),expected); Log(detail);
+        char detail[300]; int i; wsprintfA(detail,"FAIL: panel width: actual=%d expected=%d\r\n",PanelWidth(panel),expected); Log(detail);
         for(i=0;i<TASK_LIMIT;++i) {
             char caption[160]; HWND task=GetDlgItem(GetParent(panel),ID_TASK+i);
-            if(IsWindow(task) && GetWindowTextA(task,caption,sizeof(caption))) { wsprintfA(detail,"task %d visible=%d: %s\r\n",i,IsWindowVisible(task),caption); Log(detail); }
+            if(IsWindow(task) && GetWindowTextA(task,caption,sizeof(caption))) { RECT button; GetWindowRect(task,&button);
+                wsprintfA(detail,"FAIL: task %d visible=%d width=%ld: %s\r\n",i,IsWindowVisible(task),button.right-button.left,caption); Log(detail); }
         }
     }
     Check(PanelWidth(panel)==expected,message);

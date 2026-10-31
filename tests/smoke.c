@@ -23,6 +23,7 @@ static void PumpFor(DWORD duration);
 static HWND WaitFor(const char *kind,const char *title);
 static void NativeSelectItem(HWND list, int index);
 static int NativeItemIndex(HWND list, const char *name);
+static HFONT PixelTestFont(HFONT source);
 typedef enum TestGroup { GROUP_FULL, GROUP_CORE, GROUP_MENU, GROUP_BROWSER, GROUP_LANGUAGE } TestGroup;
 
 void *memset(void *destination, int value, size_t count)
@@ -305,10 +306,18 @@ static void DesktopLabelShadowAlignment(HWND list,COLORREF backdrop)
     if(stray) { char note[128]; wsprintfA(note,"Long label: %dx%d native=%d shadow=%d stray=%d\r\n",width,height,native,shadows,stray); Log(note); SaveScreen("build/desktop-long-label-failure.bmp"); }
     Check(native>5 && shadows>5 && !stray,"long-name shadows follow only the actual native glyphs and ellipsis, without overlapping extra text");
 }
+static HFONT PixelTestFont(HFONT source)
+{
+    LOGFONTA metrics; ZeroMemory(&metrics,sizeof(metrics));
+    Check(GetObjectA(source ? source : GetStockObject(DEFAULT_GUI_FONT),sizeof(metrics),&metrics)!=0,"read the native font for an exact-pixel fixture");
+    metrics.lfQuality=NONANTIALIASED_QUALITY;
+    HFONT font=CreateFontIndirectA(&metrics);
+    Check(font!=NULL,"use a private non-antialiased font for exact Win95 label pixel checks"); return font;
+}
 static void DesktopLabelPaintTests(void)
 {
     HWND parent, list; LVITEMA item; RECT label, oldLabel; COLORREF backdrop = RGB(240,240,240);
-    LOGFONTA labelMetrics; HFONT labelFont;
+    HFONT labelFont;
     InitCommonControls(); shadowTestBrush = CreateSolidBrush(backdrop);
     parent = CreateWindowExA(0, "STATIC", "Desktop label paint", WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CLIPCHILDREN,
         10, 10, 340, 230, NULL, NULL, GetModuleHandleA(NULL), NULL);
@@ -317,10 +326,7 @@ static void DesktopLabelPaintTests(void)
     Check(parent && list && shadowTestBrush, "create a native ListView on a cloud-light background without touching the desktop");
     shadowListOriginal = (WNDPROC)SetWindowLongPtrA(list, GWLP_WNDPROC, (LONG_PTR)ShadowListProc);
     ListView_SetBkColor(list, CLR_NONE); ListView_SetTextBkColor(list, CLR_NONE); ListView_SetTextColor(list, RGB(255,255,255));
-    GetObjectA(GetStockObject(DEFAULT_GUI_FONT),sizeof(labelMetrics),&labelMetrics);
-    labelMetrics.lfQuality=NONANTIALIASED_QUALITY;
-    labelFont=CreateFontIndirectA(&labelMetrics);
-    Check(labelFont!=NULL,"use a private non-antialiased font for exact Win95 label pixel checks");
+    labelFont=PixelTestFont(NULL);
     SendMessageA(list, WM_SETFONT, (WPARAM)labelFont, FALSE);
     ZeroMemory(&item, sizeof(item)); item.mask = LVIF_TEXT; item.pszText = "Clouds & Desktop";
     Check(ListView_InsertItem(list, &item) == 0, "insert an isolated label fixture, including a literal ampersand");

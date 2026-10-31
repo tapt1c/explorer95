@@ -45,7 +45,9 @@ static LRESULT CALLBACK TaskMenuProbeProc(HWND window,UINT message,WPARAM wp,LPA
                 ++steps;
             }
             Check(i<GetMenuItemCount(menu),"the native custom application command is present in the snapshot");
-            taskMenuProbe.inspected=TRUE; KillTimer(window,1);
+            /* Keep the deadline alive until TrackPopupMenu returns. A dropped
+             * synthetic key must fail this test instead of hanging forever. */
+            taskMenuProbe.inspected=TRUE;
             keybd_event(VK_HOME,0,0,0); keybd_event(VK_HOME,0,KEYEVENTF_KEYUP,0);
             for(i=0;i<steps;++i) { keybd_event(VK_DOWN,0,0,0); keybd_event(VK_DOWN,0,KEYEVENTF_KEYUP,0); }
             keybd_event(VK_RETURN,0,0,0); keybd_event(VK_RETURN,0,KEYEVENTF_KEYUP,0);
