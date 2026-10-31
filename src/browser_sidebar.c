@@ -119,6 +119,31 @@ static void BuildTasks(Browser *browser)
     int i, oldCount = s->count; BOOL folder = FALSE, root = browser->path[0] && lstrlenA(browser->path) == 3 && browser->path[1] == ':';
     char details[640], key[MAX_PATH + 40];
     ZeroMemory(&selected, sizeof(selected)); details[0] = 0;
+    if(browser->archive) {
+        BrowserPlace place; BrowserArchivePlace(browser,&place); s->count=0;
+        Header(browser,0,"Archive Tasks");
+        if(BrowserArchiveExtracting(browser)) Link(browser,0,ID_ARCHIVE_CANCEL,7,"Cancel extraction");
+        else if(BrowserArchiveReady(browser)) {
+            Link(browser,0,ID_ARCHIVE_ALL,4,"Extract all...");
+            if(ListView_GetSelectedCount(browser->files)) Link(browser,0,ID_ARCHIVE_EXTRACT,5,"Extract selected...");
+        }
+        Header(browser,2,"Other Places"); Link(browser,2,ID_UP,4,"Parent Folder");
+        Link(browser,2,ID_COMPUTER,0,"My Computer"); Link(browser,2,ID_DOCUMENTS,4,"My Documents");
+        Header(browser,3,UiLanguage() ? UiText("Information") : "Details");
+        { const char *name=place.path,*scan;
+          for(scan=place.path;*scan;scan=CharNextA(scan)) if(*scan=='\\') name=scan+1;
+          i=ListView_GetNextItem(browser->files,-1,LVNI_SELECTED);
+          LVITEMA item; ZeroMemory(&item,sizeof(item)); item.iItem=i; item.mask=LVIF_PARAM;
+          if(i>=0 && ListView_GetItem(browser->files,&item) && item.lParam) {
+              FileEntry *file=(FileEntry *)item.lParam;
+              wsprintfA(details,"%s\r\n%s",file->name,file->type);
+          } else wsprintfA(details,"%s\r\n%s",name,UiText("Read-only archive"));
+        }
+        Row(browser,ROW_DETAILS,3,0,-1,details);
+        for(i=s->count;i<oldCount;++i) EnvShowControl(s->rows[i].window,FALSE);
+        return;
+    }
+
     if (browser->native) NativeViewSelection(browser->native, &selected);
     else {
         selected.count = ListView_GetSelectedCount(browser->files);

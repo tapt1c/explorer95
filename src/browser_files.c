@@ -3,6 +3,7 @@
 #include "render_trace.h"
 #include "file_operations.h"
 #include "shell_commands.h"
+#include "archive.h"
 #define EX95_LOCALIZE_UI
 #include "localization.h"
 #undef DrawTextA
@@ -67,7 +68,7 @@ static int Preview(Browser *browser, FileEntry *entry, int fallback)
 {
     HDC dc, memory; HBITMAP canvas, bitmap = NULL; HGDIOBJ old; RECT rect = {0,0,96,80};
     char path[MAX_PATH]; SHFILEINFOA info; int index = fallback;
-    if (!browser->previews || ImageList_GetImageCount(browser->previews) >= 128 || !EnvJoin(path, browser->path, entry->name)) return fallback;
+    if (browser->archive || !browser->previews || ImageList_GetImageCount(browser->previews) >= 128 || !EnvJoin(path, browser->path, entry->name)) return fallback;
     dc = GetDC(browser->files); memory = CreateCompatibleDC(dc); canvas = CreateCompatibleBitmap(dc, 96, 80);
     if (!memory || !canvas) { if (memory) DeleteDC(memory); if (canvas) DeleteObject(canvas); ReleaseDC(browser->files, dc); return fallback; }
     old = SelectObject(memory, canvas); FillRect(memory, &rect, (HBRUSH)(COLOR_WINDOW + 1));
@@ -154,8 +155,9 @@ void BrowserFilesShow(Browser *browser)
         LVITEMA item; SHFILEINFOA info; char path[MAX_PATH], label[MAX_PATH], size[48], date[80]; int index;
         FILETIME local; SYSTEMTIME time; BOOL folder = (entry->attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
         ZeroMemory(&item, sizeof(item)); ZeroMemory(&info, sizeof(info));
-        if (!EnvJoin(path, browser->path, entry->name)) continue;
-        SHGetFileInfoA(path, entry->attributes, &info, sizeof(info), SHGFI_SYSICONINDEX | SHGFI_TYPENAME | SHGFI_SMALLICON | (folder ? SHGFI_USEFILEATTRIBUTES : 0));
+        if(browser->archive) lstrcpyA(path,entry->name);
+        else if (!EnvJoin(path, browser->path, entry->name)) continue;
+        SHGetFileInfoA(path, entry->attributes, &info, sizeof(info), SHGFI_SYSICONINDEX | SHGFI_TYPENAME | SHGFI_SMALLICON | (folder || browser->archive ? SHGFI_USEFILEATTRIBUTES : 0));
         entry->image = info.iIcon; lstrcpynA(entry->type, info.szTypeName[0] ? info.szTypeName : folder ? "File folder" : "File", sizeof(entry->type));
         lstrcpyA(label, entry->name);
         if (!folder && !browser->options.extensions) {
@@ -169,7 +171,7 @@ void BrowserFilesShow(Browser *browser)
         index = ListView_InsertItem(browser->files, &item);
         ListView_SetItemText(browser->files, index, 1, entry->type); SizeText(entry, size);
         ListView_SetItemText(browser->files, index, 2, size); date[0] = 0;
-        if (FileTimeToLocalFileTime(&entry->modified, &local) && FileTimeToSystemTime(&local, &time))
+        if ((entry->modified.dwLowDateTime || entry->modified.dwHighDateTime) && FileTimeToLocalFileTime(&entry->modified, &local) && FileTimeToSystemTime(&local, &time))
             GetDateFormatA(LOCALE_USER_DEFAULT, DATE_SHORTDATE, &time, NULL, date, sizeof(date));
         ListView_SetItemText(browser->files, index, 3, date);
     }
@@ -179,12 +181,13 @@ void BrowserFilesShow(Browser *browser)
 }
 void BrowserFilesOpen(Browser *browser)
 {
+    if(browser->archive) { BrowserArchiveOpenItem(browser); return; }
     if (browser->concealed) return;
     int index = -1, count = ListView_GetSelectedCount(browser->files);
     while ((index = ListView_GetNextItem(browser->files, index, LVNI_SELECTED)) >= 0) {
         FileEntry *entry = Selected(browser, index); char path[MAX_PATH];
         if (!entry || !EnvJoin(path, browser->path, entry->name)) continue;
-        if (entry->attributes & FILE_ATTRIBUTE_DIRECTORY) {
+        if ((entry->attributes & FILE_ATTRIBUTE_DIRECTORY) || ArchivePath(path)) {
             if (count == 1) { BrowserNavigate(browser, path, NULL, -1); return; }
             BrowserOpen(path);
         } else EnvironmentLaunch(browser->window, path, NULL, browser->path);
@@ -193,7 +196,7 @@ void BrowserFilesOpen(Browser *browser)
 static char *SelectedPaths(Browser *browser)
 {
     int index = -1, count = ListView_GetSelectedCount(browser->files); char *paths, *next;
-    if (!count) return NULL;
+    if(browser->archive || !browser->path[0] || !count) return NULL;
     paths = EnvAlloc((SIZE_T)count * MAX_PATH + 1); if (!paths) return NULL; next = paths;
     while ((index = ListView_GetNextItem(browser->files, index, LVNI_SELECTED)) >= 0) {
         FileEntry *entry = Selected(browser, index);
@@ -389,6 +392,7 @@ static void DragFiles(Browser *browser, BOOL right)
 
 BOOL BrowserFilesInvokeVerb(Browser *browser, const char *verb, BOOL current, BOOL invoke)
 {
+    if(browser->archive) return FALSE;
     IContextMenu *context = NULL; HMENU menu; HRESULT result; BOOL found = FALSE; UINT id;
     if (current && browser->path[0]) {
         IShellFolder *desktop; LPITEMIDLIST pidl = NULL; WCHAR wide[MAX_PATH];
@@ -418,6 +422,7 @@ BOOL BrowserFilesInvokeVerb(Browser *browser, const char *verb, BOOL current, BO
 }
 void BrowserFilesTransfer(Browser *browser, BOOL move)
 {
+    if(browser->archive) return;
     BROWSEINFOA browse; LPITEMIDLIST folder; char name[MAX_PATH], destination[MAX_PATH], *paths;
     if (browser->concealed) return;
     paths = browser->native ? NativeViewSelectedPaths(browser->native) : SelectedPaths(browser);
@@ -453,6 +458,16 @@ static void RenameCreated(Browser *browser,const char *path)
 }
 void BrowserFilesContext(Browser *browser, LPARAM coordinates)
 {
+    if(browser->archive) {
+        HMENU menu=CreatePopupMenu(); POINT point; int command;
+        GetCursorPos(&point); if(coordinates!=(LPARAM)-1) { point.x=(short)LOWORD(coordinates); point.y=(short)HIWORD(coordinates); }
+        AppendMenuA(menu,MF_STRING|(BrowserArchiveReady(browser) && ListView_GetSelectedCount(browser->files) ? 0 : MF_GRAYED),ID_ARCHIVE_EXTRACT,"Extract selected...");
+        AppendMenuA(menu,MF_STRING|(BrowserArchiveReady(browser) ? 0 : MF_GRAYED),ID_ARCHIVE_ALL,"Extract all...");
+        command=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_RIGHTBUTTON,point.x,point.y,0,browser->window,NULL); DestroyMenu(menu);
+        if(command) BrowserArchiveCommand(browser,command);
+        return;
+    }
+
     POINT point; HMENU menu = CreatePopupMenu(); IContextMenu *context = NULL; UINT command;
     int newPosition = -1; BOOL background = FALSE,rename=FALSE; char created[MAX_PATH]={0};
     if (browser->busy || browser->newMenu) { DestroyMenu(menu); return; }
@@ -513,6 +528,7 @@ void BrowserFilesContext(Browser *browser, LPARAM coordinates)
 void BrowserFilesCommand(Browser *browser, int command)
 {
     char *paths;
+    if(browser->archive) { if(command==ID_SELECTALL && BrowserArchiveReady(browser)) ListView_SetItemState(browser->files,-1,LVIS_SELECTED,LVIS_SELECTED); return; }
     if (browser->concealed || browser->busy) return;
     if (browser->native) {
         if (browser->recycleBin && (command == ID_COPY || command == ID_CUT || command == ID_PASTE || command == ID_RENAME)) return;
@@ -549,6 +565,8 @@ void BrowserFilesCommand(Browser *browser, int command)
 BOOL BrowserFilesNotify(Browser *browser, NMHDR *header)
 {
     if (header->idFrom != ID_FILES) return FALSE;
+    if(browser->archive && (header->code==LVN_BEGINLABELEDITA || header->code==LVN_BEGINDRAG || header->code==LVN_BEGINRDRAG)) return TRUE;
+    if(browser->archive && header->code==LVN_ENDLABELEDITA) return FALSE;
     if(header->code==LVN_BEGINDRAG || header->code==LVN_BEGINRDRAG) { DragFiles(browser,header->code==LVN_BEGINRDRAG); return TRUE; }
     if (header->code == NM_DBLCLK) BrowserFilesOpen(browser);
     if (header->code == LVN_ITEMCHANGED) BrowserUpdate(browser);
@@ -588,7 +606,8 @@ void BrowserFilesDraw(Browser *browser, const DRAWITEMSTRUCT *draw)
     if (!entry) return;
     FillRect(draw->hDC, &text, (HBRUSH)(INT_PTR)((selected ? COLOR_HIGHLIGHT : COLOR_WINDOW) + 1));
     ZeroMemory(&info, sizeof(info));
-    if (EnvJoin(path, browser->path, entry->name)) SHGetFileInfoA(path, entry->attributes, &info, sizeof(info), SHGFI_ICON | SHGFI_LARGEICON | (entry->attributes & FILE_ATTRIBUTE_DIRECTORY ? SHGFI_USEFILEATTRIBUTES : 0));
+    if(browser->archive) lstrcpyA(path,entry->name);
+    if (browser->archive || EnvJoin(path, browser->path, entry->name)) SHGetFileInfoA(path, entry->attributes, &info, sizeof(info), SHGFI_ICON | SHGFI_LARGEICON | (browser->archive || (entry->attributes & FILE_ATTRIBUTE_DIRECTORY) ? SHGFI_USEFILEATTRIBUTES : 0));
     if (info.hIcon) { DrawIconEx(draw->hDC, text.left + 8, text.top + 10, info.hIcon, 32, 32, 0, NULL, DI_NORMAL); DestroyIcon(info.hIcon); }
     text.left += 50; text.top += 3; text.bottom = text.top + 17;
     old = SelectObject(draw->hDC, browserFont); SetBkMode(draw->hDC, TRANSPARENT);

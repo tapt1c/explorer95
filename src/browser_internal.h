@@ -4,6 +4,7 @@
 #include "browser.h"
 #include "shell_new.h"
 #include "file_drag.h"
+#include "browser_archive.h"
 
 #define BROWSER_HISTORY 32
 #define BROWSER_EXTRA_TOOLS 6
@@ -48,7 +49,7 @@ typedef struct FileEntry {
     int image, preview;
     char name[MAX_PATH], type[80];
 } FileEntry;
-typedef struct BrowserPlace { char path[MAX_PATH]; LPITEMIDLIST pidl; } BrowserPlace;
+typedef struct BrowserPlace { char path[MAX_PATH], member[MAX_PATH]; LPITEMIDLIST pidl; } BrowserPlace;
 enum BrowserPane { BROWSER_PANE_NONE, BROWSER_PANE_TASKS, BROWSER_PANE_FOLDERS, BROWSER_PANE_SEARCH, BROWSER_PANE_HISTORY };
 typedef struct BrowserVisit { char target[MAX_PATH], label[MAX_PATH]; } BrowserVisit;
 typedef struct BrowserSidebar BrowserSidebar;
@@ -78,6 +79,7 @@ typedef struct Browser {
     char path[MAX_PATH];
     LPITEMIDLIST pidl, pending;
     NativeView *native;
+    BrowserArchive *archive;
     BrowserSidebar *sidebar;
     BrowserSearch *search;
     BrowserAddress *location;
@@ -116,6 +118,7 @@ HWND BrowserControl(HWND window, const char *kind, const char *text, DWORD style
 LPITEMIDLIST BrowserClonePidl(LPCITEMIDLIST pidl);
 BOOL BrowserSamePidl(LPCITEMIDLIST a, LPCITEMIDLIST b);
 BOOL BrowserNavigate(Browser *browser, const char *path, LPCITEMIDLIST pidl, int historyIndex);
+BOOL BrowserNavigatePlace(Browser *browser,const BrowserPlace *place,int historyIndex);
 void BrowserLayout(Browser *browser);
 void BrowserUpdate(Browser *browser);
 void BrowserSaveOptions(const BrowserOptions *options);

@@ -81,13 +81,14 @@ BOOL BrowserWriteOptions(const char *ini,const BrowserOptions *options)
 void BrowserSaveOptions(const BrowserOptions *options) { BrowserWriteOptions(env.ini,options); }
 void BrowserUpdateTitle(Browser *browser)
 {
-    char title[MAX_PATH+32]; const char *name=browser->path,*scan;
-    if(!browser->path[0]) return;
-    if(!browser->options.fullPathTitle) for(scan=browser->path;*scan;++scan) if(*scan=='\\' && scan[1]) name=scan+1;
+    char title[MAX_PATH*2+32],location[MAX_PATH*2+2]; const char *name=browser->path,*scan;
+    if(browser->archive) { BrowserArchiveAddress(browser,location); name=location; }
+    else if(!browser->path[0]) return;
+    if(!browser->options.fullPathTitle) for(scan=name;*scan;scan=CharNextA(scan)) if(*scan=='\\' && scan[1]) name=scan+1;
     wsprintfA(title,"%s - Explorer95",name);
     UiSetLiteralWindowTextA(browser->window,title);
 }
-static BOOL CanUp(Browser *browser) { return browser->path[0] || (browser->pidl && browser->pidl->mkid.cb); }
+static BOOL CanUp(Browser *browser) { return browser->archive || browser->path[0] || (browser->pidl && browser->pidl->mkid.cb); }
 void BrowserUpdate(Browser *browser)
 {
     int i, selected;
@@ -102,6 +103,10 @@ void BrowserUpdate(Browser *browser)
     states[5] = IsClipboardFormatAvailable(CF_HDROP);
     states[8] = !browser->native || selected > 0;
     if (BrowserControlPanelVisible(browser)) states[5] = FALSE;
+    if(browser->archive) {
+        for(i=3;i<9;++i) states[i]=FALSE;
+        if(BrowserArchiveBusy(browser)) states[0]=states[1]=states[2]=FALSE;
+    }
     EnableMenuItem(menu, ID_SELECTALL, MF_BYCOMMAND | (BrowserControlPanelVisible(browser) ? MF_GRAYED : MF_ENABLED));
     if (browser->recycleBin) {
         states[3] = states[4] = states[5] = states[7] = FALSE;
@@ -144,6 +149,13 @@ void BrowserUpdate(Browser *browser)
         wsprintfA(status, selected ? "%d selected" : "%d object(s)", selected ? selected : count);
         GetWindowTextA(browser->status, previous, sizeof(previous)); if (lstrcmpA(status, previous)) SetWindowTextA(browser->status, status);
     }
+    if(browser->archive) BrowserArchiveStatus(browser);
+    { BOOL ready=BrowserArchiveReady(browser);
+      const int ids[]={ID_ARCHIVE_EXTRACT,ID_ARCHIVE_ALL,ID_ARCHIVE_CANCEL};
+      BOOL enabled[]={ready && selected>0,ready,BrowserArchiveExtracting(browser)};
+      for(i=0;i<3;++i) { EnableMenuItem(menu,ids[i],MF_BYCOMMAND|(enabled[i] ? MF_ENABLED : MF_GRAYED));
+          if(browser->toolbar) SendMessageA(browser->toolbar,TB_ENABLEBUTTON,ids[i],MAKELONG(enabled[i],0)); }
+    }
     BrowserSidebarUpdate(browser);
 }
 static void ToolbarButton(Browser *browser, int command, const char *label, int image, BYTE style)
@@ -154,7 +166,7 @@ static void ToolbarButton(Browser *browser, int command, const char *label, int 
     ZeroMemory(&button, sizeof(button)); button.iBitmap = image; button.idCommand = command;
     button.fsState = TBSTATE_ENABLED; button.fsStyle = style | ((style & TBSTYLE_SEP) ? 0 : TBSTYLE_AUTOSIZE);
     button.iString = browser->options.labels && (command == ID_BACK || command == ID_SEARCH || command == ID_FOLDERS || command == ID_HISTORY ||
-         command == ID_EMPTY_RECYCLE || (command >= ID_COPY && command <= ID_BROWSER_OPTIONS)) ? string : -1;
+         command == ID_EMPTY_RECYCLE || command == ID_ARCHIVE_ALL || command == ID_ARCHIVE_CANCEL || (command >= ID_COPY && command <= ID_BROWSER_OPTIONS)) ? string : -1;
     SendMessageA(browser->toolbar, TB_ADDBUTTONSA, 1, (LPARAM)&button);
 }
 static void CompactToolbar(Browser *browser, int size)
@@ -175,6 +187,8 @@ static void CompactToolbar(Browser *browser, int size)
             case ID_FOLDERS: label = "Folders"; break;
             case ID_HISTORY: label = "History"; break;
             case ID_EMPTY_RECYCLE: label = "Empty Recycle Bin"; break;
+            case ID_ARCHIVE_ALL: label = "Extract all..."; break;
+            case ID_ARCHIVE_CANCEL: label = "Cancel"; break;
             default: for (j = 0; j < BROWSER_EXTRA_TOOLS; ++j)
                 if (button.idCommand == extraCommands[j]) { label = extraNames[j]; break; }
             }
@@ -226,6 +240,11 @@ void BrowserBuildToolbar(Browser *browser)
     ToolbarButton(browser, ID_REFRESH, "", navigation >= 0 ? navigation + 5 : stock + STD_REDOW, TBSTYLE_BUTTON | TBSTYLE_AUTOSIZE);
     ToolbarButton(browser, 0, "", 8, TBSTYLE_SEP);
     ToolbarButton(browser, ID_VIEWS, "", navigation >= 0 ? navigation + 6 : views >= 0 ? views + VIEW_LARGEICONS : stock + STD_PRINTPRE, TBSTYLE_BUTTON | TBSTYLE_DROPDOWN);
+    if(browser->archive) {
+        ToolbarButton(browser,0,"",8,TBSTYLE_SEP);
+        ToolbarButton(browser,ID_ARCHIVE_ALL,"Extract all...",stock+STD_FILEOPEN,TBSTYLE_BUTTON);
+        ToolbarButton(browser,ID_ARCHIVE_CANCEL,"Cancel",stock+STD_DELETE,TBSTYLE_BUTTON);
+    }
     if (browser->recycleBin) ToolbarButton(browser, ID_EMPTY_RECYCLE, "Empty Recycle Bin", navigation >= 0 ? navigation + 11 : stock + STD_DELETE, TBSTYLE_BUTTON);
     if (browser->options.extraTools) ToolbarButton(browser, 0, "", 8, TBSTYLE_SEP);
     for (i = 0; i < BROWSER_EXTRA_TOOLS; ++i) if (browser->options.extraTools & (1U << i))
@@ -360,6 +379,20 @@ void BrowserLayout(Browser *browser)
     browser->layoutConcealed = browser->concealed; browser->layoutValid = TRUE; browser->layouting = FALSE;
     BrowserEndUpdate(browser);
 }
+static void ArchiveMenu(Browser *browser)
+{
+    HMENU file=GetSubMenu(GetMenu(browser->window),0);
+    if(!file) return;
+    if(browser->archive) {
+        InsertMenuA(file,0,MF_BYPOSITION|MF_SEPARATOR,0,NULL);
+        InsertMenuA(file,0,MF_BYPOSITION|MF_STRING,ID_ARCHIVE_CANCEL,"Cancel extraction");
+        InsertMenuA(file,0,MF_BYPOSITION|MF_STRING,ID_ARCHIVE_ALL,"Extract all...");
+        InsertMenuA(file,0,MF_BYPOSITION|MF_STRING,ID_ARCHIVE_EXTRACT,"Extract selected...");
+    } else {
+        DeleteMenu(file,ID_ARCHIVE_EXTRACT,MF_BYCOMMAND); DeleteMenu(file,ID_ARCHIVE_ALL,MF_BYCOMMAND);
+        DeleteMenu(file,ID_ARCHIVE_CANCEL,MF_BYCOMMAND); DeleteMenu(file,0,MF_BYPOSITION);
+    }
+}
 static BOOL NavigateNative(HWND window, LPCITEMIDLIST pidl)
 {
     Browser *browser = (Browser *)GetWindowLongPtrA(window, GWLP_USERDATA);
@@ -369,13 +402,14 @@ static BOOL NavigateNative(HWND window, LPCITEMIDLIST pidl)
     EnvFree(browser->pending); browser->pending = copy;
     return PostMessageA(window, WM_BROWSER_NAVIGATE, 0, 0);
 }
-BOOL BrowserNavigate(Browser *browser, const char *requested, LPCITEMIDLIST pidl, int historyIndex)
+static BOOL NavigateLocation(Browser *browser, const char *requested, LPCITEMIDLIST pidl, int historyIndex,const char *member)
 {
     char path[MAX_PATH], title[MAX_PATH + 32]; LPITEMIDLIST absolute = NULL, recorded = NULL; NativeView *native = NULL;
-    FileEntry *entries = NULL; HANDLE watch = NULL; int total = 0, i; BOOL same, wasBin = browser->recycleBin; DWORD length;
+    BrowserArchive *archive=NULL; BOOL wasArchive=browser->archive!=NULL;
+    FileEntry *entries = NULL; HANDLE watch = NULL; int total = 0, i; BOOL same=FALSE, wasBin = browser->recycleBin; DWORD length;
     HWND previousView = browser->native ? NativeViewWindow(browser->native) : browser->files;
     HWND focus = GetFocus(); BOOL restoreFocus = focus == previousView || (focus && IsChild(previousView, focus));
-    if (browser->closing) return FALSE;
+    if (browser->closing || BrowserArchiveBusy(browser)) return FALSE;
     path[0] = 0;
     if (pidl && pidl->mkid.cb) SHGetPathFromIDListA(pidl, path);
     if (requested) {
@@ -390,7 +424,12 @@ BOOL BrowserNavigate(Browser *browser, const char *requested, LPCITEMIDLIST pidl
             path[0]=0;
         }
     }
-    if (path[0]) {
+    if(path[0] && ArchivePath(path) && GetFileAttributesA(path)!=INVALID_FILE_ATTRIBUTES && !(GetFileAttributesA(path)&FILE_ATTRIBUTE_DIRECTORY)) {
+        archive=!lstrcmpiA(BrowserArchivePath(browser),path) ? browser->archive : BrowserArchiveCreate(path);
+        if(!archive) { BrowserError(browser->window,"Cannot open this archive. RAR5, encrypted and multipart archives are not supported.",GetLastError()); return FALSE; }
+        { BrowserPlace current; BrowserArchivePlace(browser,&current); same=archive==browser->archive && !lstrcmpiA(current.member,member); }
+        if(!BrowserArchiveFolder(archive,member)) { if(archive!=browser->archive) BrowserArchiveDestroy(archive); BrowserError(browser->window,"Cannot open this folder.",ERROR_PATH_NOT_FOUND); return FALSE; }
+    } else if (path[0]) {
         length = lstrlenA(path); if (length > 3 && path[length - 1] == '\\') path[length - 1] = 0;
         watch = FindFirstChangeNotificationA(path, FALSE, FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME | FILE_NOTIFY_CHANGE_SIZE | FILE_NOTIFY_CHANGE_LAST_WRITE);
         if (watch == INVALID_HANDLE_VALUE) watch = NULL;
@@ -407,7 +446,7 @@ BOOL BrowserNavigate(Browser *browser, const char *requested, LPCITEMIDLIST pidl
         if (!native) { EnvFree(absolute); BrowserError(browser->window, "Cannot open this system folder.", ERROR_NOT_SUPPORTED); return FALSE; }
         NativeViewSetNavigator(native, NavigateNative);
     } else return FALSE;
-    same = !lstrcmpiA(browser->path, path) && BrowserSamePidl(browser->pidl, absolute);
+    if(!archive) same = !browser->archive && !lstrcmpiA(browser->path, path) && BrowserSamePidl(browser->pidl, absolute);
     if (historyIndex < 0 && !same && absolute) {
         recorded = BrowserClonePidl(absolute);
         if (!recorded) { NativeViewDestroy(native); EnvFree(absolute); return FALSE; }
@@ -429,9 +468,15 @@ BOOL BrowserNavigate(Browser *browser, const char *requested, LPCITEMIDLIST pidl
         browser->historyIndex = browser->historyCount++;
         browser->history[browser->historyIndex].pidl = recorded;
         lstrcpyA(browser->history[browser->historyIndex].path, path);
+        lstrcpyA(browser->history[browser->historyIndex].member,archive ? member : "");
     }
     if (browser->native) NativeViewDestroy(browser->native);
     if (browser->watch) FindCloseChangeNotification(browser->watch);
+    KillTimer(browser->window,12);
+    if(browser->archive!=archive) BrowserArchiveDestroy(browser->archive);
+    browser->archive=archive;
+    if(wasArchive!=!!archive) ArchiveMenu(browser);
+    EnableWindow(browser->files,TRUE);
     browser->watch = watch;
     browser->native = native;
     browser->layoutValid = FALSE;
@@ -440,7 +485,7 @@ BOOL BrowserNavigate(Browser *browser, const char *requested, LPCITEMIDLIST pidl
     if (native) ShowWindow(browser->files, SW_HIDE);
     else SendMessageA(browser->files, WM_SETREDRAW, FALSE, 0);
     ListView_DeleteAllItems(browser->files); BrowserFilesFree(browser->entries); browser->entries = entries;
-    EnvFree(browser->pidl); browser->pidl = absolute; lstrcpyA(browser->path, path);
+    EnvFree(browser->pidl); browser->pidl = absolute; lstrcpyA(browser->path, archive ? "" : path);
     browser->recycleBin = browser->computerFolder = browser->controlFolder = browser->concealed = FALSE;
     if (absolute) {
         LPITEMIDLIST bin = NULL;
@@ -457,20 +502,28 @@ BOOL BrowserNavigate(Browser *browser, const char *requested, LPCITEMIDLIST pidl
         SHGetFileInfoA((LPCSTR)absolute, 0, &info, sizeof(info), SHGFI_PIDL | SHGFI_DISPLAYNAME);
         lstrcpynA(title, info.szDisplayName[0] ? info.szDisplayName : "Desktop", sizeof(title));
         SetWindowTextA(browser->status, "System folder");
-    } else BrowserFilesShow(browser);
-    if(browser->path[0]) BrowserUpdateTitle(browser); else SetWindowTextA(browser->window,title);
+    } else if(archive) BrowserArchiveShow(browser); else BrowserFilesShow(browser);
+    if(archive || browser->path[0]) BrowserUpdateTitle(browser); else SetWindowTextA(browser->window,title);
     BrowserAddressUpdate(browser);
     BrowserControlPanelLocationChanged(browser);
     if (!same) BrowserHistoryRecord(browser);
     BrowserSidebarLocationChanged(browser);
-    if (wasBin != browser->recycleBin) BrowserBuildToolbar(browser);
+    if (wasBin != browser->recycleBin || wasArchive!=!!archive) BrowserBuildToolbar(browser);
     BrowserTreeSync(browser); BrowserLayout(browser); BrowserUpdate(browser);
     BrowserEndUpdate(browser);
     if (restoreFocus) SetFocus(BrowserControlPanelVisible(browser) ? BrowserControlPanelWindow(browser) : browser->native ? NativeViewList(browser->native) : browser->files);
     return TRUE;
 }
+BOOL BrowserNavigatePlace(Browser *browser,const BrowserPlace *place,int historyIndex)
+{
+    BrowserPlace copy=*place;
+    return NavigateLocation(browser,copy.path[0] ? copy.path : NULL,copy.pidl,historyIndex,copy.member);
+}
+BOOL BrowserNavigate(Browser *browser,const char *path,LPCITEMIDLIST pidl,int historyIndex)
+{ return NavigateLocation(browser,path,pidl,historyIndex,""); }
 void BrowserRefresh(Browser *browser)
 {
+    if(browser->archive) { if(!BrowserArchiveBusy(browser)) BrowserArchiveShow(browser); return; }
     if (browser->native) { NativeViewRefresh(browser->native); BrowserControlPanelRefresh(browser); BrowserUpdate(browser); }
     else if (browser->path[0]) {
         typedef struct SavedSelection { char name[MAX_PATH]; BOOL focused, folder; } SavedSelection;
@@ -512,6 +565,7 @@ void BrowserSpecial(Browser *browser, int folder)
 }
 static void Up(Browser *browser)
 {
+    if(browser->archive) { BrowserArchiveUp(browser); return; }
     if (browser->path[0]) {
         char parent[MAX_PATH]; int length;
         lstrcpyA(parent, browser->path); length = lstrlenA(parent);
@@ -547,6 +601,13 @@ static BOOL AddressPath(Browser *browser,const char *input,char *path)
 static void AddressGo(Browser *browser)
 {
     char input[MAX_PATH], path[MAX_PATH], expanded[MAX_PATH], file[MAX_PATH], arguments[512]; DWORD length, attributes;
+    char archiveInput[MAX_PATH*2+2],archiveExpanded[MAX_PATH*2+2]; BrowserPlace place;
+    length=(DWORD)SendMessageA(browser->address,WM_GETTEXTLENGTH,0,0);
+    if(length<sizeof(archiveInput)) {
+        GetWindowTextA(browser->address,archiveInput,sizeof(archiveInput));
+        DWORD size=ExpandEnvironmentStringsA(archiveInput,archiveExpanded,sizeof(archiveExpanded));
+        if(size && size<=sizeof(archiveExpanded) && BrowserArchiveResolve(archiveExpanded,&place)) { BrowserNavigatePlace(browser,&place,-1); return; }
+    }
     if(SendMessageA(browser->address,WM_GETTEXTLENGTH,0,0)>=MAX_PATH) {
         BrowserError(browser->window,"The path is too long.",ERROR_FILENAME_EXCED_RANGE); return;
     }
@@ -573,6 +634,7 @@ static void AddressGo(Browser *browser)
         if(!AddressPath(browser,file,path)) { BrowserError(browser->window,"The path is too long.",ERROR_FILENAME_EXCED_RANGE); return; }
         attributes=GetFileAttributesA(path);
     }
+    if(attributes!=INVALID_FILE_ATTRIBUTES && !(attributes&FILE_ATTRIBUTE_DIRECTORY) && ArchivePath(path) && !arguments[0]) { BrowserNavigate(browser,path,NULL,-1); return; }
     if(attributes!=INVALID_FILE_ATTRIBUTES && !(attributes&FILE_ATTRIBUTE_DIRECTORY)) {
         HWND window=browser->window; lstrcpyA(expanded,browser->path);
         /* ShellExecute can run a nested loop in which this browser closes. */
@@ -657,6 +719,7 @@ static void BuildMenu(Browser *browser)
     browser->favoritesMenu = CreatePopupMenu(); FavoritesMenu(browser);
     AppendMenuA(tools, MF_STRING, ID_SEARCH, "&Find Files or Folders...\tF3");
     AppendMenuA(tools, MF_STRING, ID_CUSTOMIZE_TOOLBAR, "Customize &Toolbar..."); AppendMenuA(tools, MF_STRING, ID_BROWSER_OPTIONS, "Folder &Options...");
+    AppendMenuA(help,MF_STRING,ID_ARCHIVE_LICENSE,"Archive decoder license...");
     AppendMenuA(help, MF_STRING, ID_ABOUT, "&About Explorer95");
     AppendMenuA(menu, MF_POPUP, (UINT_PTR)file, "&File"); AppendMenuA(menu, MF_POPUP, (UINT_PTR)edit, "&Edit");
     AppendMenuA(menu, MF_POPUP, (UINT_PTR)view, "&View"); AppendMenuA(menu, MF_POPUP, (UINT_PTR)browser->favoritesMenu, "F&avorites");
@@ -674,18 +737,19 @@ void BrowserSetPane(Browser *browser, int pane)
 }
 static void Command(Browser *browser, int command)
 {
+    if(BrowserArchiveCommand(browser,command)) return;
     if (BrowserControlPanelCommand(browser, command)) return;
     if (command == ID_GO) AddressGo(browser);
     else if (command == ID_UP) Up(browser);
     else if (command == ID_BACK || command == ID_FORWARD) {
         int index = browser->historyIndex + (command == ID_BACK ? -1 : 1);
-        if (index >= 0 && index < browser->historyCount) BrowserNavigate(browser, browser->history[index].path[0] ? browser->history[index].path : NULL, browser->history[index].pidl, index);
+        if (index >= 0 && index < browser->historyCount) BrowserNavigatePlace(browser,&browser->history[index],index);
     } else if (command == ID_BACK_HISTORY || command == ID_FORWARD_HISTORY) {
         HMENU menu = CreatePopupMenu(); RECT rect; POINT point; int i, selected;
         int step = command == ID_BACK_HISTORY ? -1 : 1;
         for (i = browser->historyIndex + step; i >= 0 && i < browser->historyCount; i += step) {
-            char label[MAX_PATH]; SHFILEINFOA info; BrowserPlace *place = &browser->history[i];
-            if (place->path[0]) lstrcpyA(label, place->path);
+            char label[MAX_PATH*2+2]; SHFILEINFOA info; BrowserPlace *place = &browser->history[i];
+            if (place->path[0]) wsprintfA(label,"%s%s%s",place->path,place->member[0] ? "\\" : "",place->member);
             else {
                 ZeroMemory(&info, sizeof(info));
                 SHGetFileInfoA((LPCSTR)place->pidl, 0, &info, sizeof(info), SHGFI_PIDL | SHGFI_DISPLAYNAME);
@@ -701,7 +765,7 @@ static void Command(Browser *browser, int command)
         DestroyMenu(menu);
         if (selected > 0 && selected <= browser->historyCount) {
             BrowserPlace *place = &browser->history[selected - 1];
-            BrowserNavigate(browser, place->path[0] ? place->path : NULL, place->pidl, selected - 1);
+            BrowserNavigatePlace(browser,place,selected-1);
         }
     } else if (command == ID_REFRESH) BrowserRefresh(browser);
     else if (command == ID_EMPTY_RECYCLE) {
@@ -831,6 +895,7 @@ static LRESULT CALLBACK BrowserProc(HWND window, UINT message, WPARAM wp, LPARAM
         else Command(browser, LOWORD(wp));
         return 0;
     case WM_TIMER:
+        if (browser && wp == 12) { BrowserArchiveTick(browser); return 0; }
         if (browser && wp == 11) { BrowserSearchTick(browser); return 0; }
         if (browser && wp == 10 && browser->watch && !browser->busy && !browser->optionsWindow && !browser->context &&
             !ListView_GetEditControl(browser->files) && WaitForSingleObject(browser->watch, 0) == WAIT_OBJECT_0) {
@@ -959,7 +1024,8 @@ static LRESULT CALLBACK BrowserProc(HWND window, UINT message, WPARAM wp, LPARAM
         DestroyWindow(window); return 0;
     case WM_DESTROY:
         if (browser) {
-            int i; browser->closing = TRUE; KillTimer(window, 10);
+            int i; browser->closing = TRUE; KillTimer(window, 10); KillTimer(window,12);
+            BrowserArchiveDestroy(browser->archive); browser->archive=NULL;
             FileDropRevoke(browser->fileDrop); browser->fileDrop=NULL;
             BrowserAddressDestroy(browser); BrowserSearchDestroy(browser); BrowserSidebarDestroy(browser); BrowserControlPanelDestroy(browser);
             if (browser->toolbar) DestroyWindow(browser->toolbar);
@@ -996,8 +1062,6 @@ static HWND Open(const char *path, LPCITEMIDLIST pidl)
 }
 HWND BrowserOpen(const char *path)
 {
-    DWORD attributes=GetFileAttributesA(path);
-    if(ArchivePath(path) && attributes!=INVALID_FILE_ATTRIBUTES && !(attributes&FILE_ATTRIBUTE_DIRECTORY)) return BrowserArchiveOpen(path);
     return Open(path,NULL);
 }
 HWND BrowserOpenNamespace(LPCITEMIDLIST absolute) { return Open(NULL, absolute); }
@@ -1017,6 +1081,7 @@ BOOL BrowserNavigateTarget(Browser *browser, const char *target)
     ZeroMemory(&request, sizeof(request)); request.version = 1;
     if (lstrlenA(target) >= MAX_PATH) return FALSE;
     lstrcpyA(request.target, target); if (!FolderRequestValid(&request)) return FALSE;
+    { BrowserPlace place; if(BrowserArchiveResolve(target,&place)) return BrowserNavigatePlace(browser,&place,-1); }
     if (target[0] != ':') return BrowserNavigate(browser, target, NULL, -1);
     pidl = ParseFolder(target);
     if (!pidl) { BrowserError(browser->window, "This saved system folder is unavailable.", ERROR_PATH_NOT_FOUND); return FALSE; }
@@ -1058,7 +1123,7 @@ static BOOL CALLBACK RefreshRecycleBin(HWND window, LPARAM unused)
     return TRUE;
 }
 void BrowserRecycleBinsChanged(void) { EnumWindows(RefreshRecycleBin, 0); }
-void BrowserShutdown(void) { BrowserArchiveShutdown(); EnumWindows(CloseBrowser, 0); if (browserSymbols) { DeleteObject(browserSymbols); browserSymbols = NULL; } }
+void BrowserShutdown(void) { EnumWindows(CloseBrowser, 0); BrowserArchiveShutdown(); if (browserSymbols) { DeleteObject(browserSymbols); browserSymbols = NULL; } }
 
 BOOL BrowserRegister(HINSTANCE instance, HFONT font)
 {
@@ -1078,7 +1143,6 @@ BOOL BrowserRegister(HINSTANCE instance, HFONT font)
 }
 BOOL BrowserTranslate(MSG *message)
 {
-    if(BrowserArchiveTranslate(message)) return TRUE;
     HWND root = message->hwnd; Browser *browser; BOOL address;
     while (root && (GetWindowLongA(root, GWL_STYLE) & WS_CHILD)) root = GetParent(root);
     { char kind[64]; GetClassNameA(root, kind, sizeof(kind));
@@ -1102,6 +1166,7 @@ BOOL BrowserTranslate(MSG *message)
     if (message->message == WM_KEYDOWN) {
         int command = message->wParam == VK_F5 ? ID_REFRESH : message->wParam == VK_F3 ? ID_SEARCH : 0;
         HWND sidebar = BrowserSidebarWindow(browser);
+        if(browser->archive && message->wParam==VK_ESCAPE && BrowserArchiveExtracting(browser)) { BrowserArchiveCommand(browser,ID_ARCHIVE_CANCEL); return TRUE; }
         if (browser->dragging && message->wParam == VK_ESCAPE) { SendMessageA(root, WM_CANCELMODE, 0, 0); return TRUE; }
         BOOL inSidebar = sidebar && (message->hwnd == sidebar || IsChild(sidebar, message->hwnd));
         if (GetKeyState(VK_CONTROL) & 0x8000) {

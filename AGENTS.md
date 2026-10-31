@@ -65,7 +65,7 @@ Explorer95 — любительская нативная оболочка для
 | `src/environment.c` | Общее состояние, панель задач, группировка окон, Quick Launch, часы, appbar, горячие клавиши и выполнение команд. |
 | `src/shell_startup.c/.h`, `tests/shell_startup_cases.h` | Потоковое чтение личной/общей Startup, снимок HKLM/HKCU Run/RunOnce, отложенное удаление !; запуск только primary session, проверки на частных registry roots и собственном ярлыке. |
 | `src/archive.c/.h`, `tests/archive_cases.h` | Политика имён и лимитов архива, порционное перечисление и извлечение по 32 КиБ, CREATE_NEW, отмена и проверки настоящих ZIP/RAR. |
-| `src/browser_archive.c/.h` | Отдельное read-only окно архивов: ListView, навигация, выбор места и распаковка, EN/RU, лицензия; обычные файловые команды не получают синтетические пути. |
+| `src/browser_archive.c/.h` | Read-only архивная локация обычного Browser: строки FileEntry, навигация, выбор места и распаковка, EN/RU, лицензия; обычные файловые команды не получают синтетические пути. |
 | `src/archive_codec.c/.h`, `src/archive_codec_port.h`, `third_party/unarr/` | Отдельная заменяемая LGPLv3 DLL: ZIP/RAR 2–4, Win95 HANDLE/heap вместо CRT, встроенный ресурс 208 и полные лицензии 209/210. |
 | `src/shell_features.c`, `src/shell_features.h` | Доступность сетевой команды и Log Off по метрике установленной сети, профилям/провайдеру входа и ограничениям Explorer; без обращения к сети. |
 | `src/taskbar_panels.c/.h`, `tests/taskbar_panels_cases.h` | Папки-панели, их меню/resize/overflow, отдельная папка Taskbar Pins, уведомления и привязка к запущенным задачам. |
@@ -1539,8 +1539,13 @@ Rename со скрытым расширением, системные Properties
 
 ## Архивы
 
-ZIP/RAR открываются через EnvironmentLaunch/BrowserOpen в отдельном read-only
-окне. Не передавайте пути членов в обычные Rename/Delete/Paste или ShellExecute.
+ZIP/RAR открываются через EnvironmentLaunch/BrowserOpen в обычном Browser.
+Открытие из файлового списка и адреса использует текущее окно. Состояние архива
+владеет моделью, исходным путём и префиксом членов; Browser.path остаётся пустым.
+BrowserPlace хранит исходный файл и member отдельно, Back/Forward используют
+BrowserNavigatePlace. Строки архива расширяют FileEntry и используют общее
+представление; не подставляйте синтетические пути в filesystem path.
+Не передавайте пути членов в обычные Rename/Delete/Paste, clipboard, OLE или ShellExecute.
 Модель держит исходный файл открытым только для чтения; интерфейс перечисляет
 до 32 записей и извлекает до 32 КиБ за один tick. Solid RAR последовательно
 читает предшествующие элементы без записи, чтобы выбор позднего файла не создавал

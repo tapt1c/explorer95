@@ -16,7 +16,7 @@ struct BrowserAddress {
     int count, current, dropHeight;
     BOOL rebuilding, pending, dropdown;
     BrowserPlace destination;
-    char dropText[MAX_PATH];
+    char dropText[MAX_PATH*2+2];
     PaintBuffer buffer;
 };
 static const char property[] = "Explorer95.Address";
@@ -40,17 +40,18 @@ static void TraceAddress(Browser *browser,const char *stage,UINT code)
     if(GetFocus()==address->edit) flags|=512;
     RenderTraceShell(stage,S_OK,code,flags);
 }
-static BOOL SamePlace(const BrowserPlace *place, const char *path, LPCITEMIDLIST pidl)
-{ return path && path[0] ? !lstrcmpiA(place->path, path) : !place->path[0] && BrowserSamePidl(place->pidl, pidl); }
-static int Add(Browser *browser, const char *label, const char *path, LPCITEMIDLIST pidl, int image, int indent)
+static BOOL SamePlace(const BrowserPlace *place, const char *path, LPCITEMIDLIST pidl,const char *member)
+{ return path && path[0] ? !lstrcmpiA(place->path,path) && !lstrcmpiA(place->member,member ? member : "") : !place->path[0] && BrowserSamePidl(place->pidl,pidl); }
+static int AddPlace(Browser *browser, const char *label, const char *path, LPCITEMIDLIST pidl, int image, int indent,const char *member)
 {
     BrowserAddress *address = browser->location; AddressRow *row; char converted[MAX_PATH]; int i, index;
     if (pidl && SHGetPathFromIDListA(pidl, converted)) { path = converted; pidl = NULL; }
-    for (i = 0; i < address->count; ++i) if (SamePlace(&address->rows[i]->target, path, pidl)) return i;
+    for (i = 0; i < address->count; ++i) if (SamePlace(&address->rows[i]->target, path, pidl,member)) return i;
     if (address->count == ADDRESS_LIMIT) return -1;
     row = EnvAlloc(sizeof(*row)); if (!row) return -1;
     if (path && path[0]) lstrcpynA(row->target.path, path, MAX_PATH);
     else if (!(row->target.pidl = BrowserClonePidl(pidl))) { EnvFree(row); return -1; }
+    if(member) lstrcpyA(row->target.member,member);
     row->image = image; row->indent = indent;
     /* Publish the row before CB_ADDSTRING can synchronously draw it. */
     address->rows[address->count++] = row;
@@ -58,6 +59,8 @@ static int Add(Browser *browser, const char *label, const char *path, LPCITEMIDL
     if (index < 0) { --address->count; EnvFree(row->target.pidl); EnvFree(row); }
     return index;
 }
+static int Add(Browser *browser,const char *label,const char *path,LPCITEMIDLIST pidl,int image,int indent)
+{ return AddPlace(browser,label,path,pidl,image,indent,NULL); }
 static void Special(Browser *browser, const char *label, int folder, int image, int indent)
 {
     LPITEMIDLIST pidl;
@@ -72,12 +75,12 @@ static void Clear(Browser *browser)
     for (i = 0; i < address->count; ++i) { EnvFree(address->rows[i]->target.pidl); EnvFree(address->rows[i]); }
     address->count = 0; address->current = -1;
 }
-static void Ancestors(Browser *browser, int root, int indent)
+static void Ancestors(Browser *browser,const char *location, int root, int indent)
 {
-    char path[MAX_PATH]; int end, start = root, length = lstrlenA(browser->path);
-    for (end = root; end <= length; ++end) if (!browser->path[end] || browser->path[end] == '\\') {
+    char path[MAX_PATH]; int end, start = root, length = lstrlenA(location);
+    for (end = root; end <= length; ++end) if (!location[end] || location[end] == '\\') {
         if (end > start) {
-            lstrcpyA(path, browser->path); path[end] = 0;
+            lstrcpyA(path, location); path[end] = 0;
             Add(browser, path + start, path, NULL, end == length ? 1 : 0, indent++);
         }
         start = end + 1;
@@ -85,7 +88,8 @@ static void Ancestors(Browser *browser, int root, int indent)
 }
 static void Build(Browser *browser)
 {
-    BrowserAddress *address = browser->location; char drives[512] = {0}, *drive, title[MAX_PATH]; int i;
+    BrowserAddress *address = browser->location; char drives[512] = {0}, *drive, title[MAX_PATH],display[MAX_PATH*2+2]; int i;
+    const char *location=browser->archive ? BrowserArchivePath(browser) : browser->path;
     address->rebuilding = TRUE; Clear(browser);
     Special(browser, "Desktop", CSIDL_DESKTOP, 8, 0);
     Special(browser, "My Documents", CSIDL_PERSONAL, 5, 1);
@@ -95,29 +99,35 @@ static void Build(Browser *browser)
     if (GetLogicalDriveStringsA(sizeof(drives), drives) < sizeof(drives)) {
         for (drive = drives; *drive; drive += lstrlenA(drive) + 1) {
             Add(browser, drive, drive, NULL, drive[0] == 'A' || drive[0] == 'B' ? 7 : 6, 2);
-            if (browser->path[1] == ':' && (browser->path[0] | 32) == (drive[0] | 32)) Ancestors(browser, 3, 3);
+            if (location[1] == ':' && (location[0] | 32) == (drive[0] | 32)) Ancestors(browser,location, 3, 3);
         }
     }
     Special(browser, "Control Panel", CSIDL_CONTROLS, 9, 2);
     Special(browser, "Network Neighborhood", CSIDL_NETWORK, 3, 1);
-    if (browser->path[0] == '\\' && browser->path[1] == '\\') {
+    if (location[0] == '\\' && location[1] == '\\') {
         int end = 2, parts = 0; char root[MAX_PATH];
-        while (browser->path[end] && parts < 2) { if (browser->path[end] == '\\') ++parts; if (parts < 2) ++end; }
-        lstrcpyA(root, browser->path); root[end] = 0;
-        Add(browser, root, root, NULL, 0, 2); Ancestors(browser, browser->path[end] ? end + 1 : end, 3);
+        while (location[end] && parts < 2) { if (location[end] == '\\') ++parts; if (parts < 2) ++end; }
+        lstrcpyA(root, location); root[end] = 0;
+        Add(browser, root, root, NULL, 0, 2); Ancestors(browser,location, location[end] ? end + 1 : end, 3);
     }
     Special(browser, "Recycle Bin", CSIDL_BITBUCKET, 4, 1);
     /* The address names the Shell location, not the translated frame caption.
      * An ANSI editable ComboBox cannot round-trip a Unicode caption through
      * a different system code page. Keep native names and paths literal. */
     { SHFILEINFOA info; ZeroMemory(&info, sizeof(info));
-      if (!browser->path[0]) SHGetFileInfoA((LPCSTR)browser->pidl, 0, &info, sizeof(info), SHGFI_PIDL | SHGFI_DISPLAYNAME);
+      if (!location[0]) SHGetFileInfoA((LPCSTR)browser->pidl, 0, &info, sizeof(info), SHGFI_PIDL | SHGFI_DISPLAYNAME);
       lstrcpynA(title, info.szDisplayName[0] ? info.szDisplayName : "System folder", sizeof(title)); }
-    address->current = Add(browser, browser->path[0] ? browser->path : title,
-        browser->path[0] ? browser->path : NULL, browser->pidl, 1, 2);
+    if(browser->archive) {
+        BrowserPlace place; BrowserArchivePlace(browser,&place); BrowserArchiveAddress(browser,display);
+        address->current=AddPlace(browser,display,place.path,NULL,1,2,place.member);
+    } else address->current = Add(browser, location[0] ? location : title,
+        location[0] ? location : NULL, browser->pidl, 1, 2);
     for (i = browser->historyCount - 1; i >= 0; --i) {
         BrowserPlace *place = &browser->history[i];
-        if (place->path[0]) Add(browser, place->path, place->path, NULL, 0, 0);
+        if (place->path[0]) {
+            char label[MAX_PATH*2+2]; wsprintfA(label,"%s%s%s",place->path,place->member[0] ? "\\" : "",place->member);
+            AddPlace(browser,label,place->path,NULL,0,0,place->member);
+        }
         else {
             SHFILEINFOA info; ZeroMemory(&info, sizeof(info));
             SHGetFileInfoA((LPCSTR)place->pidl, 0, &info, sizeof(info), SHGFI_PIDL | SHGFI_DISPLAYNAME);
@@ -125,7 +135,7 @@ static void Build(Browser *browser)
         }
     }
     SendMessageA(browser->address, CB_SETCURSEL, address->current, 0);
-    UiSetLiteralWindowTextA(browser->address, browser->path[0] ? browser->path : title);
+    UiSetLiteralWindowTextA(browser->address,browser->archive ? display : location[0] ? location : title);
     address->rebuilding = FALSE;
 }
 UINT BrowserAddressHeight(Browser *browser)
@@ -170,14 +180,14 @@ BOOL BrowserAddressCreate(Browser *browser)
 }
 void BrowserAddressMove(Browser *browser,int x,int y,int width,int height)
 {
-    BrowserAddress *address=browser->location; RECT old; POINT origin; char text[MAX_PATH],after[MAX_PATH]; BOOL rebuilding; DWORD selection;
+    BrowserAddress *address=browser->location; RECT old; POINT origin; char text[MAX_PATH*2+2],after[MAX_PATH*2+2]; BOOL rebuilding; DWORD selection;
     if(!address) return;
     GetWindowRect(browser->address,&old); origin.x=old.left; origin.y=old.top;
     ScreenToClient(browser->window,&origin);
     /* USER reports the closed field height, not the requested dropdown height.
      * Comparing the former with 220 caused WM_SIZE on every navigation. */
     if(origin.x==x && origin.y==y && old.right-old.left==width && address->dropHeight==height) return;
-    SendMessageA(address->edit,WM_GETTEXT,MAX_PATH,(LPARAM)text);
+    SendMessageA(address->edit,WM_GETTEXT,sizeof(text),(LPARAM)text);
     selection=(DWORD)SendMessageA(address->edit,EM_GETSEL,0,0);
     rebuilding=address->rebuilding; address->rebuilding=TRUE;
     TraceAddress(browser,"address.move.before",0);
@@ -187,7 +197,7 @@ void BrowserAddressMove(Browser *browser,int x,int y,int width,int height)
     /* Original Win95 restores an old EDIT value during ComboBox WM_SIZE.
      * Preserve the actual edit, including an unsubmitted command, rather than
      * forcing the current folder over whatever the user was typing. */
-    SendMessageA(address->edit,WM_GETTEXT,MAX_PATH,(LPARAM)after);
+    SendMessageA(address->edit,WM_GETTEXT,sizeof(after),(LPARAM)after);
     if(lstrcmpA(after,text)) UiSetLiteralWindowTextA(browser->address,text);
     if((DWORD)SendMessageA(address->edit,EM_GETSEL,0,0)!=selection)
         SendMessageA(address->edit,EM_SETSEL,LOWORD(selection),HIWORD(selection));
@@ -227,20 +237,20 @@ void BrowserAddressUpdate(Browser *browser)
     SendMessageA(browser->address,CB_SHOWDROPDOWN,FALSE,0);
     Build(browser); ZeroMemory(&info, sizeof(info));
     TraceAddress(browser,"address.built",address->current);
-    SHGetFileInfoA(browser->path[0] ? browser->path : (LPCSTR)browser->pidl, 0, &info, sizeof(info),
-        SHGFI_ICON | SHGFI_SMALLICON | (browser->path[0] ? 0 : SHGFI_PIDL));
+    SHGetFileInfoA(browser->archive ? BrowserArchivePath(browser) : browser->path[0] ? browser->path : (LPCSTR)browser->pidl, 0, &info, sizeof(info),
+        SHGFI_ICON | SHGFI_SMALLICON | (browser->archive || browser->path[0] ? 0 : SHGFI_PIDL));
     old = address->currentIcon; address->currentIcon = info.hIcon; if (old) DestroyIcon(old);
     InvalidateRect(address->icon, NULL, FALSE);
 }
 BOOL BrowserAddressDraw(Browser *browser, const DRAWITEMSTRUCT *draw)
 {
     BrowserAddress *address = browser->location; RECT rect = draw->rcItem, text = rect; HDC dc; HGDIOBJ old; int image = 0, indent = 0; HICON icon;
-    BOOL selected = !!(draw->itemState & ODS_SELECTED); char label[MAX_PATH] = "";
+    BOOL selected = !!(draw->itemState & ODS_SELECTED); char label[MAX_PATH*2+2] = "";
     if (draw->CtlID != ID_ADDRESS && draw->CtlID != ID_ADDRESS_ICON) return FALSE;
     if (!address) { FillRect(draw->hDC, &rect, (HBRUSH)(COLOR_WINDOW + 1)); return TRUE; }
     if (draw->CtlID == ID_ADDRESS && draw->itemID < (UINT)address->count) {
         AddressRow *row = address->rows[draw->itemID]; image = row->image; indent = row->indent > 8 ? 8 : row->indent;
-        if (SendMessageA(browser->address, CB_GETLBTEXTLEN, draw->itemID, 0) < MAX_PATH)
+        if (SendMessageA(browser->address, CB_GETLBTEXTLEN, draw->itemID, 0) < (LRESULT)sizeof(label))
             SendMessageA(browser->address, CB_GETLBTEXT, draw->itemID, (LPARAM)label);
     }
     icon = draw->CtlID == ID_ADDRESS_ICON ? (address->currentIcon ? address->currentIcon : address->images[0]) : address->images[image];
@@ -262,7 +272,7 @@ void BrowserAddressCommand(Browser *browser, int code)
     if (!address || address->rebuilding || browser->closing) return;
     if (code == CBN_DROPDOWN) {
         address->dropdown=FALSE;
-        GetWindowTextA(browser->address, address->dropText, MAX_PATH); Build(browser);
+        GetWindowTextA(browser->address, address->dropText, sizeof(address->dropText)); Build(browser);
         UiSetLiteralWindowTextA(browser->address, address->dropText); address->dropdown=TRUE;
     } else if (code == CBN_SELENDCANCEL) {
         if(!address->dropdown) return;
@@ -276,7 +286,7 @@ void BrowserAddressCommand(Browser *browser, int code)
             DWORD error = ERROR_NOT_ENOUGH_MEMORY;
             EnvFree(address->destination.pidl); address->destination.pidl = NULL;
             address->pending = FALSE;
-            lstrcpyA(address->destination.path, place->path);
+            lstrcpyA(address->destination.path, place->path); lstrcpyA(address->destination.member,place->member);
             if (!place->pidl || (address->destination.pidl = BrowserClonePidl(place->pidl))) {
                 address->pending = TRUE;
                 if (PostMessageA(browser->window, WM_BROWSER_ADDRESS, 0, 0)) return;
@@ -293,7 +303,7 @@ void BrowserAddressOpen(Browser *browser)
     BrowserAddress *address = browser->location; BrowserPlace place;
     if (!address || !address->pending || browser->closing) return;
     place = address->destination; address->destination.pidl = NULL; address->pending = FALSE;
-    if (!BrowserNavigate(browser, place.path[0] ? place.path : NULL, place.pidl, -1)) BrowserAddressUpdate(browser);
+    if (!BrowserNavigatePlace(browser,&place,-1)) BrowserAddressUpdate(browser);
     EnvFree(place.pidl);
 }
 void BrowserAddressDestroy(Browser *browser)
