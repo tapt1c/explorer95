@@ -1,10 +1,14 @@
 # Следующие задачи Explorer95
 
-## В работе: публикация v0.9.0-alpha.92
+## Выполнено: публикация v0.9.0-alpha.92
 
 Код, сборка x86/PE, native/layout, check_incremental и полный UI Wine 10 прошли
 на 3d171ea: https://github.com/tapt1c/explorer95/actions/runs/41205306543
-Остались release workflow и проверка скачанных EXE/ZIP/SHA256SUMS.
+Release workflow из 405a0bb повторно прошёл полный UI и x86 gate:
+https://github.com/tapt1c/explorer95/actions/runs/41205816091
+Релиз: https://github.com/tapt1c/explorer95/releases/tag/v0.9.0-alpha.92
+EXE/ZIP/SHA256SUMS скачаны с GitHub: обе суммы совпали, ZIP содержит тот же
+EXE и README; повторный PE gate прошёл для EXE и всех трёх встроенных DLL.
 
 Run/RunOnce HKLM/HKCU подключены только к primary session. Снимок исключает
 смещение индексов при удалении; ! сохраняет запись до завершения процесса,
@@ -42,9 +46,8 @@ C.UTF-8, без изменения приложения и проверок им
 сглаживания host-шрифта; собственный NONANTIALIASED HFONT сохраняет точные
 RGB-проверки и проходит все случаи длинных подписей/границ теней.
 
-Следующие шаги: итоговый полный UI-набор и release gate. Публиковать бинарный
-релиз только после обязательного полного UI и x86 gate; Win95-поведение новых
-функций ещё требует проверки пользователем.
+Итоговый полный UI-набор и release gate завершены успешно. Win95-поведение
+новых функций ещё требует проверки пользователем.
 
 CI 104864f/e5b92e6 прошёл архивы, но выявил прежнюю зависимость panel fixture
 от доступной ширины: actual=333, expected=380, видимая task button=79px.
