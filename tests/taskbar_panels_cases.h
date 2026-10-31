@@ -382,6 +382,11 @@ static void __attribute__((noinline)) TaskbarPanelsTests(HWND bar,const char *di
     PanelGuiFixture(module,target);
     Check(pins && toolbar && IsWindowVisible(pins) && IsWindowVisible(toolbar),"the shell loads pinned applications and a persisted custom folder panel");
     Check(!IsWindowVisible(GetDlgItem(bar,ID_QUICKGRIP)) && !GetPrivateProfileIntA("Taskbar","QuickLaunch",TRUE,settings),"Quick Launch is disabled for a fresh profile while pinned applications remain visible");
+    /* This phase requires one complete 160px task slot. Clock/font/Start
+     * widths can otherwise make the competing folder panel legitimately
+     * shrink that slot at 640x480. Overflow has dedicated cases below. */
+    SendMessageA(bar,WM_COMMAND,ID_TOOLBAR_TOGGLE,0);
+    Check(!IsWindowVisible(toolbar),"hide the competing folder panel while checking a complete shared task slot");
     /* Every fixture process is closed and the startup browser is gone.
      * UpdateTasks assigns contiguous IDs and removes unused buttons before
      * laying out the strip. Wait for that empty state and its settled width;
@@ -472,6 +477,8 @@ static void __attribute__((noinline)) TaskbarPanelsTests(HWND bar,const char *di
     Check(DeleteFileA(live),"unpin by deleting only the shortcut copy");
     WaitPanelWidth(pins,initial,"removing a shortcut immediately removes its pinned tile");
     Check(GetFileAttributesA(target)!=INVALID_FILE_ATTRIBUTES,"unpinning leaves the application executable intact");
+    SendMessageA(bar,WM_COMMAND,ID_TOOLBAR_TOGGLE,0);
+    Check(IsWindowVisible(toolbar),"restore the configured folder panel before its layout and overflow checks");
     PanelScrollTests(bar,pins,directory,source,initial);
     Check(DeleteFileA(broken) && DeleteFileA(source) && DeleteFileA(target),"remove only our live shortcut fixtures");
     GetWindowRect(bar,&before); PanelDrag(toolbar,-30,FALSE); GetWindowRect(bar,&after);
