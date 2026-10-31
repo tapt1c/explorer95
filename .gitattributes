@@ -1,2 +1,4 @@
 *.sh text eol=lf
-tests/fixtures/archives/lorem_ipsum.txt -text
+# Preserve upstream source layout and byte-exact archive reference data.
+tests/fixtures/archives/lorem_ipsum.txt -text -whitespace
+third_party/unarr/** -whitespace

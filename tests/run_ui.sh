@@ -3,6 +3,9 @@
 set -eu
 cd "$(dirname "$0")/.."
 : "${WINEPREFIX:?Set WINEPREFIX to a disposable Wine prefix}"
+# The Unix filesystem must represent Windows ANSI/OEM names losslessly.
+# Debian's default C locale otherwise makes Wine fail non-ASCII CreateFileA.
+export LANG=C.UTF-8 LC_ALL=C.UTF-8
 # Wine's Unix Recycle Bin uses XDG data outside the prefix by default.
 export XDG_DATA_HOME="$WINEPREFIX/xdg-data"
 mkdir -p "$XDG_DATA_HOME"

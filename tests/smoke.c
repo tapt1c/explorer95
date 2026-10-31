@@ -308,6 +308,7 @@ static void DesktopLabelShadowAlignment(HWND list,COLORREF backdrop)
 static void DesktopLabelPaintTests(void)
 {
     HWND parent, list; LVITEMA item; RECT label, oldLabel; COLORREF backdrop = RGB(240,240,240);
+    LOGFONTA labelMetrics; HFONT labelFont;
     InitCommonControls(); shadowTestBrush = CreateSolidBrush(backdrop);
     parent = CreateWindowExA(0, "STATIC", "Desktop label paint", WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CLIPCHILDREN,
         10, 10, 340, 230, NULL, NULL, GetModuleHandleA(NULL), NULL);
@@ -316,11 +317,22 @@ static void DesktopLabelPaintTests(void)
     Check(parent && list && shadowTestBrush, "create a native ListView on a cloud-light background without touching the desktop");
     shadowListOriginal = (WNDPROC)SetWindowLongPtrA(list, GWLP_WNDPROC, (LONG_PTR)ShadowListProc);
     ListView_SetBkColor(list, CLR_NONE); ListView_SetTextBkColor(list, CLR_NONE); ListView_SetTextColor(list, RGB(255,255,255));
-    SendMessageA(list, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), FALSE);
+    GetObjectA(GetStockObject(DEFAULT_GUI_FONT),sizeof(labelMetrics),&labelMetrics);
+    labelMetrics.lfQuality=NONANTIALIASED_QUALITY;
+    labelFont=CreateFontIndirectA(&labelMetrics);
+    Check(labelFont!=NULL,"use a private non-antialiased font for exact Win95 label pixel checks");
+    SendMessageA(list, WM_SETFONT, (WPARAM)labelFont, FALSE);
     ZeroMemory(&item, sizeof(item)); item.mask = LVIF_TEXT; item.pszText = "Clouds & Desktop";
     Check(ListView_InsertItem(list, &item) == 0, "insert an isolated label fixture, including a literal ampersand");
     ListView_SetItemPosition(list, 0, 16, 16);
     RedrawWindow(list, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
+    if(ListView_GetItemRect(list,0,&label,LVIR_LABEL) && (!ShadowPixels(list,&label,RGB(0,0,0)) || !ShadowPixels(list,&label,RGB(255,255,255)))) {
+        char note[200]; HDC dc=GetDC(list);
+        wsprintfA(note,"Initial label: rect=%ld,%ld,%ld,%ld black=%d white=%d first=%08lx visible=%d foreground=%d\r\n",
+            label.left,label.top,label.right,label.bottom,ShadowPixels(list,&label,RGB(0,0,0)),ShadowPixels(list,&label,RGB(255,255,255)),
+            GetPixel(dc,label.left,label.top),IsWindowVisible(parent),GetForegroundWindow()==parent);
+        ReleaseDC(list,dc); Log(note); SaveScreen("build/desktop-initial-label-failure.bmp");
+    }
     Check(ListView_GetItemRect(list, 0, &label, LVIR_LABEL) && ShadowPixels(list, &label, RGB(0,0,0)) > 5 &&
         ShadowPixels(list, &label, RGB(255,255,255)) > 5,
         "the real native label retains its white foreground and gains dark contrast on a light background");
@@ -366,7 +378,7 @@ static void DesktopLabelPaintTests(void)
             ListView_SetImageList(list,NULL,LVSIL_NORMAL); ImageList_Destroy(images);
         }
     }
-    DestroyWindow(parent); DeleteObject(shadowTestBrush);
+    DestroyWindow(parent); DeleteObject(labelFont); DeleteObject(shadowTestBrush);
 }
 
 #include "icon_scale_cases.h"
