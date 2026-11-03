@@ -7,10 +7,12 @@
 201 RCDATA "build/ui64/tray_hook.dll"
 205 RCDATA "build/ui64/task_switch_hook.dll"
 208 RCDATA "build/ui64/ex95archive.dll"
+211 RCDATA "build/ui64/ex95settings.cpl"
 #else
 201 RCDATA "build/tray_hook.dll"
 205 RCDATA "build/task_switch_hook.dll"
 208 RCDATA "build/ex95archive.dll"
+211 RCDATA "build/ex95settings.cpl"
 206 RCDATA "build/native/EX95TS01.VXD"
 #endif
 

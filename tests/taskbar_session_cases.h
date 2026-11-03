@@ -41,12 +41,36 @@ static void TaskbarSessionTests(const char *directory,const char *executable)
         char edge[8]; wsprintfA(edge,"%d",phase);
         WritePrivateProfileStringA("Taskbar","Edge",edge,profile);
         WritePrivateProfileStringA("Taskbar","AutoHide",phase==ABE_TOP ? "1" : "0",profile);
-        wsprintfA(command,"\"%s\" --settings=\"%s\" --open=\"%s\"",executable,profile,directory);
+        if(phase==1) wsprintfA(command,"\"%s\" --properties --settings=\"%s\"",executable,profile);
+        else wsprintfA(command,"\"%s\" --settings=\"%s\" --open=\"%s\"",executable,profile,directory);
         Check(CreateProcessA(NULL,command,NULL,NULL,FALSE,0,NULL,NULL,&info,&process),
             "start a fresh session fixture without running login programs");
         sessionWorkBar=WaitFor("Explorer95.Taskbar",NULL);
         sessionWorkWindow=FindWindowA("Explorer95.Session",NULL); PumpFor(100);
         Check(sessionWorkBar && sessionWorkWindow,"locate the bar and its hidden session-notification window");
+        if(phase==0 || phase==1) {
+            HWND properties;
+            if(phase==0) {
+                PROCESS_INFORMATION client;
+                wsprintfA(command,"\"%s\" --properties --settings=\"%s\"",executable,profile);
+                Check(CreateProcessA(NULL,command,NULL,NULL,FALSE,0,NULL,NULL,&info,&client),"start an inert Control Panel settings client for the running shell");
+                Check(WaitForGuiProcess(client.hProcess,5000)==WAIT_OBJECT_0,"the settings client forwards its request without creating a second shell");
+                CloseHandle(client.hThread); CloseHandle(client.hProcess);
+            }
+            properties=WaitFor("Explorer95.Properties",NULL);
+            Check(properties!=NULL,phase ? "a cold properties command opens Explorer95 settings" : "a forwarded properties command opens settings in the running shell");
+            SendMessageA(properties,WM_COMMAND,IDCANCEL,0); PumpFor(30);
+        }
+        if(phase==3) {
+            HWND window,searchWindow=NULL; DWORD started;
+            SendMessageA(sessionWorkBar,WM_COMMAND,311,0); started=GetTickCount();
+            do {
+                for(window=FindWindowA(BROWSER_CLASS,NULL);window;window=FindWindowExA(NULL,window,BROWSER_CLASS,NULL))
+                    if(IsWindowVisible(PaneControl(window,ID_SEARCH_NAME))) { searchWindow=window; break; }
+                if(!searchWindow) PumpFor(20);
+            } while(!searchWindow && GetTickCount()-started<4000);
+            Check(searchWindow!=NULL,"the shell Find command opens the Explorer95 search pane instead of the original Explorer");
+        }
         GetWindowRect(sessionWorkBar,&barRect);
         Check(SystemParametersInfoA(SPI_GETWORKAREA,0,&reserved,0),"read the running session reservation");
         if(primary) {

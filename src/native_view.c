@@ -955,7 +955,7 @@ BOOL NativeViewSelectionMenu(NativeView *view,POINT point,HWND owner)
     DestroyMenu(menu); --view->operationDepth;
     if(command && view->view && IsWindow(view->list)) {
         if((!lstrcmpiA(verb,"open") || !lstrcmpiA(verb,"explore")) && OpenSelection(view)) {}
-        else if(!lstrcmpiA(verb,"rename") || !lstrcmpiA(verb,"delete") || !lstrcmpiA(verb,"copy") || !lstrcmpiA(verb,"cut"))
+        else if(!lstrcmpiA(verb,"find") || !lstrcmpiA(verb,"rename") || !lstrcmpiA(verb,"delete") || !lstrcmpiA(verb,"copy") || !lstrcmpiA(verb,"cut"))
             NativeViewInvoke(view,verb,FALSE);
         else {
             CMINVOKECOMMANDINFO invoke; ZeroMemory(&invoke,sizeof(invoke)); invoke.cbSize=sizeof(invoke);
@@ -1441,6 +1441,11 @@ BOOL NativeViewInvoke(NativeView *view, const char *verb, BOOL background)
     IContextMenu *context; CMINVOKECOMMANDINFO action; HRESULT result; HMENU menu;
     BOOL clipboardFallback,clipboardCommand;
     if (!view || view->operationDepth) return FALSE;
+    if(!background && !lstrcmpiA(verb,"find")) {
+        NativeSelection selection;
+        if(!NativeViewSelection(view,&selection) || selection.count!=1 || !(selection.capabilities&SFGAO_FOLDER)) return FALSE;
+        EnvironmentFind(view->parent,selection.path[0] ? selection.path : NULL); return TRUE;
+    }
     if(!background && !lstrcmpiA(verb,"rename")) {
         HWND edit;
         if(view->recycleBin || ListView_GetSelectedCount(view->list)!=1) return FALSE;

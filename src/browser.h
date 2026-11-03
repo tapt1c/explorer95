@@ -73,6 +73,7 @@
 BOOL BrowserRegister(HINSTANCE instance, HFONT font);
 HWND BrowserOpen(const char *path);
 HWND BrowserFindFiles(const char *query);
+HWND BrowserFindInFolder(const char *directory);
 #define BROWSER_SEARCH_QUERY_SIZE 512
 HWND BrowserOpenNamespace(LPCITEMIDLIST absolute);
 HWND BrowserOpenRequest(const FolderRequest *request);

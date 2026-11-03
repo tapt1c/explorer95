@@ -312,16 +312,26 @@ void BrowserSearchDestroy(Browser *browser)
     for (i = 0; i < 9; ++i) if (controls[i]) DestroyWindow(controls[i]);
     EnvFree(s); browser->search = NULL;
 }
-HWND BrowserFindFiles(const char *query)
+HWND BrowserFindInFolder(const char *directory)
 {
     char root[MAX_PATH]; HWND window; Browser *browser;
-    if(!query || !query[0] || lstrlenA(query)>=BROWSER_SEARCH_QUERY_SIZE) return NULL;
-    if(!GetWindowsDirectoryA(root,MAX_PATH)) return NULL;
-    if(root[1]==':') root[3]=0;
-    window=BrowserOpen(root); if(!window) return NULL;
+    if(!directory || !*directory) {
+        if(!GetWindowsDirectoryA(root,MAX_PATH)) return NULL;
+        if(root[1]==':') root[3]=0;
+        directory=root;
+    }
+    window=BrowserOpen(directory); if(!window) return NULL;
     browser=(Browser *)GetWindowLongPtrA(window,GWLP_USERDATA);
     BrowserSetPane(browser,BROWSER_PANE_SEARCH);
     if(!browser->search) { DestroyWindow(window); return NULL; }
+    return window;
+}
+HWND BrowserFindFiles(const char *query)
+{
+    HWND window; Browser *browser;
+    if(!query || !query[0] || lstrlenA(query)>=BROWSER_SEARCH_QUERY_SIZE) return NULL;
+    window=BrowserFindInFolder(NULL); if(!window) return NULL;
+    browser=(Browser *)GetWindowLongPtrA(window,GWLP_USERDATA);
     UiSetLiteralWindowTextA(browser->search->name,query);
     StartSearch(browser); return window;
 }

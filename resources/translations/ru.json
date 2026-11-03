@@ -537,5 +537,7 @@
   "Extraction cancelled. Completed files were kept.": "Распаковка отменена. Уже извлечённые файлы сохранены.",
   "Choose where to extract the archive. A new folder will be created.": "Выберите место для распаковки. Будет создана новая папка.",
   "Cannot open this archive. RAR5, encrypted and multipart archives are not supported.": "Не удалось открыть архив. RAR5, зашифрованные и многотомные архивы не поддерживаются.",
-  "Extracted %lu object(s).": "Извлечено объектов: %lu."
+  "Extracted %lu object(s).": "Извлечено объектов: %lu.",
+  "The boot shell was changed, but its Control Panel item could not be updated.": "Загрузочная оболочка изменена, но не удалось обновить её элемент в Панели управления.",
+  "Customize the Explorer95 desktop, Start menu and taskbar.": "Настройка рабочего стола, меню «Пуск» и панели задач Explorer95."
 }

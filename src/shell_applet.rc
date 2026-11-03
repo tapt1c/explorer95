@@ -1,0 +1,6 @@
+1 ICON "resources/explorer95.ico"
+STRINGTABLE
+BEGIN
+    2 "Explorer95"
+    3 "Explorer95"
+END

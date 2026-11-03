@@ -31,7 +31,8 @@
 #define ID_SHUTDOWN 314
 #define ID_EXPLORER 315
 #define ID_COMMAND 316
-#define ID_PROPERTIES 600
+#include "shell_applet.h"
+#define ID_PROPERTIES SHELL_PROPERTIES_COMMAND
 #define ID_LOCK 601
 #define ID_AUTOHIDE 602
 #define ID_QUICK 603

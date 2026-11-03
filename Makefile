@@ -38,6 +38,10 @@ TEST_SOURCES += src/shutdown_dos.c
 TEST_SOURCES += src/shell_commands.c
 TEST_SOURCES += src/shell_run.c
 SOURCES += src/archive.c src/browser_archive.c
+SOURCES += src/appbar.c
+TEST_SOURCES += src/appbar.c
+SOURCES += src/shell_applet.c
+TEST_SOURCES += src/shell_applet.c
 TEST_SOURCES += src/archive.c
 ARCHIVE_CODEC_SOURCES = src/archive_codec.c $(wildcard third_party/unarr/common/*.c third_party/unarr/rar/*.c third_party/unarr/zip/*.c third_party/unarr/lzmasdk/*.c)
 ARCHIVE_CODEC_OBJECTS = $(ARCHIVE_CODEC_SOURCES:%.c=build/codec32/%.o)
@@ -53,6 +57,16 @@ build/ex95archive.dll: $(ARCHIVE_CODEC_OBJECTS) Makefile
 build/ui64/ex95archive.dll: $(ARCHIVE_CODEC_OBJECTS64) Makefile
 	@mkdir -p $(@D)
 	$(CC64) $(CFLAGS_COMMON) -shared -nostdlib $(filter %.o,$^) -Wl,--entry,DllMain -Wl,--kill-at -lkernel32 -lgcc -o $@
+
+build/applet-resources.o: src/shell_applet.rc resources/explorer95.ico Makefile
+	$(WINDRES) -I. -i $< -o $@
+build/ui64/applet-resources.o: src/shell_applet.rc resources/explorer95.ico Makefile
+	@mkdir -p $(@D)
+	$(WINDRES64) -I. -i $< -o $@
+build/ex95settings.cpl: build/obj32/src/shell_applet.o build/obj32/src/shell_applet_cpl.o build/applet-resources.o Makefile
+	$(CC) $(CFLAGS) -shared -nostdlib $(filter %.o,$^) -Wl,--entry,_DllMain@12 -Wl,--kill-at -Wl,--subsystem,windows:4.0 -Wl,--major-os-version,4 -Wl,--minor-os-version,0 -Wl,--disable-dynamicbase -Wl,--disable-nxcompat -ladvapi32 -luser32 -lkernel32 -o $@
+build/ui64/ex95settings.cpl: build/obj64/src/shell_applet.o build/obj64/src/shell_applet_cpl.o build/ui64/applet-resources.o Makefile
+	$(CC64) $(CFLAGS_COMMON) -shared -nostdlib $(filter %.o,$^) -Wl,--entry,DllMain -Wl,--kill-at -ladvapi32 -luser32 -lkernel32 -o $@
 OBJECTS = $(SOURCES:%.c=build/obj32/%.o)
 OBJECTS64 = $(SOURCES:%.c=build/obj64/%.o)
 TEST_OBJECTS = $(TEST_SOURCES:%.c=build/obj32/%.o)
@@ -129,6 +143,8 @@ build/ui64/resources.o: src/explorer95.rc resources/Bitmap143.bmp resources/welc
 	@mkdir -p $(@D)
 	$(WINDRES64) --preprocessor="$(CC64)" --preprocessor-arg=-E --preprocessor-arg=-xc -I. -i $< -o $@
 
+build/resources.o: build/ex95settings.cpl
+build/ui64/resources.o: build/ui64/ex95settings.cpl
 check: all
 	python3 tests/check_vxd.py build/native/EX95TS01.VXD
 	python3 -m unittest discover -s tests -p test_check_vxd.py
@@ -138,6 +154,7 @@ check: all
 	python3 tests/check_pe.py build/tray_hook.dll --dll
 	python3 tests/check_pe.py build/task_switch_hook.dll --dll
 	python3 tests/check_pe.py build/ex95archive.dll --library
+	python3 tests/check_pe.py build/ex95settings.cpl --library
 	python3 tests/check_pe.py build/explorer95.exe
 
 check-build:

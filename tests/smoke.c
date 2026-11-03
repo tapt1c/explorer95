@@ -1203,6 +1203,8 @@ static void MoveTestPointer(LONG x,LONG y)
 #include "shutdown_dos_cases.h"
 #include "session_logoff_cases.h"
 #include "taskbar_session_cases.h"
+#include "appbar_cases.h"
+#include "shell_applet_cases.h"
 #include "shell_startup_cases.h"
 #include "task_groups_cases.h"
 #include "task_switch_cases.h"
@@ -2032,7 +2034,9 @@ void start(void)
     wsprintfA(settingsDir, "%s profile", fixture);
     Check(CreateDirectoryA(settingsDir, NULL), "create isolated settings directory");
     wsprintfA(settings, "%s\\settings.ini", settingsDir);
-    if(group==GROUP_SESSION || group==GROUP_MENU || group==GROUP_FULL) TaskbarSessionTests(settingsDir,executable);
+    if(group==GROUP_SESSION || group==GROUP_MENU || group==GROUP_FULL) {
+        AppbarTests(); ShellAppletTests(settingsDir); TaskbarSessionTests(settingsDir,executable);
+    }
     if(group==GROUP_SESSION) goto cleanup;
     if(group==GROUP_LANGUAGE) { ShutdownDosTests(settingsDir); LanguageTests(settingsDir); LanguageRestartTests(settingsDir,executable); goto cleanup; }
     if(group==GROUP_FULL || group==GROUP_CORE || group==GROUP_BROWSER) ArchiveTests(settingsDir);
@@ -2045,7 +2049,7 @@ void start(void)
         Check(SUCCEEDED(OleInitialize(NULL)),"initialize the native item-action regression host");
         HWND parent=CreateWindowA("STATIC","Native item actions",WS_OVERLAPPEDWINDOW|WS_CLIPCHILDREN|WS_VISIBLE,0,0,400,300,NULL,NULL,GetModuleHandleA(NULL),NULL);
         Check(parent!=NULL,"create only our visible native item-action fixture");
-        NativeSortTests(parent); ShellEditContractTests(parent);
+        NativeSortTests(parent); ShellEditContractTests(parent); NativeSelectionTests(parent);
         DestroyWindow(parent); OleUninitialize();
     }
     if(group==GROUP_FULL || group==GROUP_MENU || group==GROUP_CORE) { TaskbarQueryTests(settingsDir,module); TaskbarLinksTests(settingsDir,module); TaskMenuNativeTests(); }

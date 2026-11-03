@@ -1,6 +1,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include "settings_internal.h"
 #include "folder_handler.h"
+#include "shell_applet.h"
 #define EX95_LOCALIZE_UI
 #include "localization.h"
 #define ID_APPLY_NOW 0x3021
@@ -83,6 +84,19 @@ static void ShellSelection(HWND owner, BOOL restore)
      * leave Windows pointing at a file we have deleted. */
     if (!error && !restore) WritePrivateProfileStringA("Recovery", "InstalledPath", target, recovery);
     if (error) { EnvError(owner, "Could not change the boot shell. Existing recovery files were preserved.", error); return; }
+    {
+        HKEY storage; char system[MAX_PATH]; DWORD length=GetSystemDirectoryA(system,MAX_PATH);
+        error=(!length || length>=MAX_PATH) ? ERROR_PATH_NOT_FOUND : ERROR_SUCCESS;
+        if(!error) error=RegCreateKeyExA(HKEY_LOCAL_MACHINE,SHELL_APPLET_KEY,0,NULL,0,KEY_READ|KEY_WRITE,NULL,&storage,NULL);
+        if(!error) {
+            error=ShellAppletConfigure(env.host.instance,storage,system,restore ? NULL : target,env.ini,restore);
+            RegCloseKey(storage);
+        }
+        if(error) {
+            EnvError(owner,"The boot shell was changed, but its Control Panel item could not be updated.",error); return;
+        }
+        SHChangeNotify(SHCNE_ASSOCCHANGED,SHCNF_IDLIST,NULL,NULL);
+    }
     MessageBoxA(owner, restore ? "The previous shell was restored for the next Windows startup." :
                 "Explorer95 is selected for the next Windows startup.\r\n"
                 "You can restore the previous shell from these properties at any time.",

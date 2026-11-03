@@ -48,9 +48,17 @@ DWORD FolderSettingsPath(const char *command, char *path)
     }
     return ERROR_SUCCESS;
 }
+BOOL ShellPropertiesRequested(const char *command)
+{
+    char token[MAX_PATH+64]; const char *p=command;
+    if(!command) return FALSE;
+    if(Token(&p,token,sizeof(token))) return FALSE;
+    while(!Token(&p,token,sizeof(token)) && token[0]) if(!lstrcmpA(token,"--properties")) return TRUE;
+    return FALSE;
+}
 DWORD FolderRequestParse(const char *command, FolderRequest *request, BOOL *present)
 {
-    char token[MAX_PATH + 64], settings[MAX_PATH]; const char *p = command; DWORD error;
+    char token[MAX_PATH + 64], settings[MAX_PATH]; const char *p = command; DWORD error; BOOL properties=FALSE;
     ZeroMemory(request,sizeof(*request)); *present = FALSE; request->version = 1;
     error = FolderSettingsPath(command,settings);
     if (error) return error;
@@ -60,6 +68,7 @@ DWORD FolderRequestParse(const char *command, FolderRequest *request, BOOL *pres
         error = Token(&p,token,sizeof(token)); if (error) return error;
         if (!token[0]) { while (*p == ' ' || *p == '\t') ++p; if (!*p) break; return ERROR_INVALID_PARAMETER; }
         if (Prefix(token,"--settings=") || !lstrcmpA(token,"--trace-render")) continue;
+        if(!lstrcmpA(token,"--properties")) { if(properties) return ERROR_INVALID_PARAMETER; properties=TRUE; continue; }
         if (*present) return ERROR_INVALID_PARAMETER;
         target = token;
         if (Prefix(token,"--open=")) target += 7;
@@ -80,7 +89,7 @@ DWORD FolderRequestParse(const char *command, FolderRequest *request, BOOL *pres
         if (!FolderRequestValid(request)) return ERROR_INVALID_PARAMETER;
         *present = TRUE;
     }
-    return ERROR_SUCCESS;
+    return properties && *present ? ERROR_INVALID_PARAMETER : ERROR_SUCCESS;
 }
 BOOL FolderRequestCopy(const COPYDATASTRUCT *copy, FolderRequest *request)
 {

@@ -13,6 +13,7 @@
 #include "shell_run.h"
 #include "session_logoff.h"
 #include "shutdown.h"
+#include "shell_applet.h"
 #define EX95_LOCALIZE_UI
 #include "localization.h"
 
@@ -86,10 +87,11 @@ void start(void)
     HWND previous;
     EnvironmentHost host;
     HRESULT ole;
-    FolderRequest request; BOOL requested; DWORD error, waited; HANDLE startup;
+    FolderRequest request; BOOL requested,properties; DWORD error, waited; HANDLE startup;
     instance = GetModuleHandleA(NULL);
     error = FolderRequestParse(GetCommandLineA(),&request,&requested);
-    if(!error && SessionLogoffClientRequested(GetCommandLineA()) && requested) error=ERROR_INVALID_PARAMETER;
+    properties=ShellPropertiesRequested(GetCommandLineA());
+    if(!error && SessionLogoffClientRequested(GetCommandLineA()) && (requested || properties)) error=ERROR_INVALID_PARAMETER;
     if (error) { ErrorMessage(NULL,"Invalid folder-opening command.",error); ExitProcess(1); }
     if(SessionLogoffClientRequested(GetCommandLineA())) {
         InitializeUi(); ole=OleInitialize(NULL); InitCommonControls();
@@ -109,6 +111,7 @@ void start(void)
             if (error) ErrorMessage(previous,"The running Explorer95 could not accept the folder request.",error);
             ExitProcess(error ? 1 : 0);
         }
+        if(properties) { PostMessageA(previous,WM_COMMAND,SHELL_PROPERTIES_COMMAND,0); ExitProcess(0); }
         if (RenderTraceRequested()) MessageBoxA(previous,
             "Explorer95 is already running. Exit that instance before starting rendering diagnostics.",
             "Explorer95 diagnostics", MB_OK | MB_ICONINFORMATION);
@@ -133,6 +136,7 @@ void start(void)
     if (!bar) { EnvironmentShutdown(); UiShutdown(); RenderTraceClose(); ExitProcess(1); }
     ReleaseMutex(startup); CloseHandle(startup);
     if (requested) EnvironmentOpenRequest(&request);
+    else if(properties) EnvironmentShowProperties();
     else EnvironmentStartSession();
     while (GetMessageA(&message, NULL, 0, 0) > 0) {
         if (BrowserTranslate(&message)) continue;

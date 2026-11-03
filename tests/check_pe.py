@@ -38,7 +38,9 @@ ALLOWED = {
     # GetCurrentThreadId scopes the temporary native About CBT hook to our UI thread.
     # CreateProcessA is stock Win95: a separate GUI caller requests Log Off so
     # Windows includes the shell itself in its session-end notifications.
+    # VirtualQuery is stock Win95; bound the shared appbar RECT reply.
     "kernel32.dll": set("""
+        VirtualQuery
         SetFilePointer SetFileTime DosDateTimeToFileTime LocalFileTimeToFileTime
         FindResourceA LoadResource SizeofResource LockResource GetCurrentProcess ReadProcessMemory GetACP Module32First
         GetDiskFreeSpaceA GetVolumeInformationA WideCharToMultiByte WritePrivateProfileSectionA
@@ -66,8 +68,9 @@ ALLOWED = {
     # SetActiveWindow preserves edit input when an owned search popup is shown; stock Win95.
     # GetMenuItemInfoA is stock Win95; callers use its original cbSize.
     # GetSubMenu / ModifyMenuA are base Win95 menu APIs for native edit commands.
+    # EqualRect is a classic USER rectangle helper, present before Win95.
     "user32.dll": set("""
-        CharNextA
+        CharNextA EqualRect
         CreateIconIndirect
         SetWindowsHookExA CallNextHookEx UnhookWindowsHookEx
         CharUpperBuffA SetScrollInfo GetScrollInfo IsRectEmpty SetRectEmpty OffsetRect

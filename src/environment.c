@@ -14,6 +14,7 @@
 #include "shell_startup.h"
 #include "archive.h"
 #include "browser.h"
+#include "appbar.h"
 #define EX95_LOCALIZE_UI
 #include "localization.h"
 
@@ -246,27 +247,7 @@ BOOL EnvironmentLaunch(HWND owner, const char *path, const char *arguments, cons
 void EnvironmentRecordLaunch(const char *path, const char *arguments) { StartRecord(path, arguments); }
 void EnvironmentFind(HWND owner, const char *directory)
 {
-    typedef BOOL (WINAPI *FindFiles)(LPCITEMIDLIST, LPCITEMIDLIST);
-    DWORD version = GetVersion(); char fallback[MAX_PATH];
-    /* Win95 Shell32 ordinal 90 opens its native Find Files dialog directly.
-     * Using Directory\shell\find first can start the original Explorer to
-     * service its DDE verb while Explorer95 is the primary shell. */
-    if ((version & 0x80000000UL) && LOBYTE(LOWORD(version)) == 4 && HIBYTE(LOWORD(version)) == 0) {
-        FindFiles find = (FindFiles)(void *)GetProcAddress(GetModuleHandleA("shell32.dll"), MAKEINTRESOURCEA(90));
-        IShellFolder *desktop = NULL; LPITEMIDLIST pidl = NULL; WCHAR wide[MAX_PATH]; BOOL opened = FALSE;
-        if (find) {
-            if (directory && *directory && MultiByteToWideChar(CP_ACP, 0, directory, -1, wide, MAX_PATH) && SUCCEEDED(SHGetDesktopFolder(&desktop)))
-                IShellFolder_ParseDisplayName(desktop, owner, NULL, wide, NULL, &pidl, NULL);
-            opened = find(pidl, NULL); if (pidl) CoTaskMemFree(pidl); if (desktop) IShellFolder_Release(desktop);
-            if (opened) return;
-        }
-    }
-    if (!directory || !*directory) {
-        if (!env.host.specialPath(CSIDL_PERSONAL, fallback)) GetWindowsDirectoryA(fallback, MAX_PATH);
-        directory = fallback;
-    }
-    if ((INT_PTR)ShellExecuteA(owner, "find", directory, NULL, NULL, SW_SHOWNORMAL) <= 32)
-        MessageBoxA(owner, "The installed Windows shell does not provide a Find command.", "Find Files", MB_OK | MB_ICONINFORMATION);
+    if(!BrowserFindInFolder(directory)) EnvError(owner,"Cannot open file search.",ERROR_PATH_NOT_FOUND);
 }
 void EnvironmentOpenNamespace(int csidl)
 {
@@ -283,7 +264,7 @@ static BOOL CALLBACK CollectWindows(HWND window, LPARAM context)
     LONG style = GetWindowLongA(window, GWL_EXSTYLE);
     char title[2], kind[64]; int i;
     if (!IsWindowVisible(window) || window == env.bar || window == env.desktop ||
-        window == env.start || window == bridge || (style & WS_EX_TOOLWINDOW)) return TRUE;
+        window == env.start || window == bridge || AppbarIsWindow(window) || (style & WS_EX_TOOLWINDOW)) return TRUE;
     if (GetWindow(window, GW_OWNER) && !(style & WS_EX_APPWINDOW)) return TRUE;
     GetClassNameA(window, kind, sizeof(kind));
     if (!lstrcmpA(kind, "Progman") || !lstrcmpA(kind, "Shell_TrayWnd") || !lstrcmpA(kind, "WorkerW")) return TRUE;
@@ -785,12 +766,8 @@ void EnvPositionBar(void)
     if (env.appbar && (env.anchor.left != data.rc.left || env.anchor.top != data.rc.top ||
         env.anchor.right != data.rc.right || env.anchor.bottom != data.rc.bottom)) SHAppBarMessage(ABM_SETPOS, &data);
     if (env.primary) {
-        switch (env.options.edge) {
-        case ABE_LEFT: work.left += reserve; break;
-        case ABE_RIGHT: work.right -= reserve; break;
-        case ABE_TOP: work.top += reserve; break;
-        default: work.bottom -= reserve; break;
-        }
+        AppbarTaskbar(env.options.edge,&data.rc,env.options.autoHide,env.options.topmost);
+        AppbarWorkArea(&work);
         /* Unchanged work-area broadcasts make Win95 Shell32 rebuild even
          * unrelated open folders. Applying desktop/Start options is not a resize. */
         if (!SystemParametersInfoA(SPI_GETWORKAREA, 0, &current, 0) ||
@@ -1049,7 +1026,11 @@ static LRESULT CALLBACK DesktopProc(HWND window, UINT message, WPARAM wp, LPARAM
 }
 static LRESULT CALLBACK BridgeProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
 {
-    if (message == WM_COPYDATA) return TrayCopyData((const COPYDATASTRUCT *)lp);
+    if (message == WM_COPYDATA) {
+        const COPYDATASTRUCT *copy=(const COPYDATASTRUCT *)lp;
+        if(copy && !copy->dwData) return env.closing || barAreaReleased ? 0 : AppbarCopyData((HWND)wp,copy);
+        return TrayCopyData(copy);
+    }
     if (message == WM_COMMAND) { PostMessageA(env.bar, message, wp, lp); return 0; }
     if (message == WM_SYSCOMMAND && (wp & 0xfff0) == SC_TASKLIST) {
         PostMessageA(env.bar, message, wp, lp); return 0;
@@ -1088,7 +1069,9 @@ static void ReleaseBarArea(void)
     if(env.appbar) {
         ZeroMemory(&data,sizeof(data)); data.cbSize=sizeof(data); data.hWnd=env.bar;
         SHAppBarMessage(ABM_REMOVE,&data); env.appbar=FALSE;
-    } else if(env.primary) SystemParametersInfoA(SPI_SETWORKAREA,0,&env.originalArea,SPIF_SENDCHANGE);
+    } else if(env.primary) {
+        AppbarDestroy(); SystemParametersInfoA(SPI_SETWORKAREA,0,&env.originalArea,SPIF_SENDCHANGE);
+    }
 }
 static LRESULT CALLBACK SessionProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
 {
@@ -1224,7 +1207,7 @@ static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
         }
         if (wp == 2) { WinKeyTick(); return 0; }
         if (wp == 4) { TaskbarPanelsTick(); return 0; }
-        UpdateTasks(); TrayPrune(); AutoHideTick();
+        UpdateTasks(); TrayPrune(); AppbarObserve(); AutoHideTick();
         GetLocalTime(&now);
         if (!GetTimeFormatA(LOCALE_USER_DEFAULT, TIME_NOSECONDS, &now, NULL, text, sizeof(text)))
             wsprintfA(text, "%02u:%02u", now.wHour, now.wMinute);
@@ -1404,6 +1387,7 @@ HWND EnvironmentCreate(const EnvironmentHost *callbacks)
         if (EnvRegister("Shell_TrayWnd", BridgeProc, NULL, 0))
             bridge = CreateWindowExA(WS_EX_TOOLWINDOW, "Shell_TrayWnd", "Explorer95 Tray", WS_POPUP,
                 0, 0, 640, 30, NULL, NULL, env.host.instance, NULL);
+        AppbarInitialize(env.bar,env.desktop,EnvPositionBar);
     } else {
         ZeroMemory(&data, sizeof(data)); data.cbSize = sizeof(data); data.hWnd = env.bar; data.uCallbackMessage = WM_APPBAR;
         env.appbar = (BOOL)SHAppBarMessage(ABM_NEW, &data);

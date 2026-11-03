@@ -7,6 +7,7 @@
 typedef struct FolderRequest { DWORD version, explore; char target[MAX_PATH]; } FolderRequest;
 DWORD FolderRequestParse(const char *command, FolderRequest *request, BOOL *present);
 DWORD FolderSettingsPath(const char *command, char *path);
+BOOL ShellPropertiesRequested(const char *command);
 BOOL FolderRequestValid(const FolderRequest *request);
 BOOL FolderRequestCopy(const COPYDATASTRUCT *copy, FolderRequest *request);
 DWORD FolderRequestSend(HWND owner, const FolderRequest *request);

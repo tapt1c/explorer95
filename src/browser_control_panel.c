@@ -2,10 +2,11 @@
  * The installed control.exe opens CPL applets; this page only reads icons. */
 #define WIN32_LEAN_AND_MEAN
 #include "browser_internal.h"
+#include "shell_applet.h"
 #define EX95_LOCALIZE_UI
 #include "localization.h"
 #define CONTROL_PAGE_CLASS "Explorer95.ControlPanel"
-#define CONTROL_ITEMS 7
+#define CONTROL_ITEMS 8
 typedef struct ControlItem { const char *title, *description, *file; int special; } ControlItem;
 static const ControlItem items[CONTROL_ITEMS] = {
     {"Accessibility Options", "Customize accessibility features for your computer.", "access.cpl", 0},
@@ -14,7 +15,8 @@ static const ControlItem items[CONTROL_ITEMS] = {
     {"Dial-Up Networking", "Connects your computer to other computers using a modem.", NULL, -1},
     {"Display", "Customizes your desktop display and screen saver.", "desk.cpl", 0},
     {"Printers", "Adds, removes, and configures local and network printers.", NULL, CSIDL_PRINTERS},
-    {"Add/Remove Programs", "Installs and removes programs and Windows components.", "appwiz.cpl", 0}
+    {"Add/Remove Programs", "Installs and removes programs and Windows components.", "appwiz.cpl", 0},
+    {"Explorer95", "Customize the Explorer95 desktop, Start menu and taskbar.", NULL, -2}
 };
 struct BrowserControlPanel {
     HWND window, content, all, links[CONTROL_ITEMS];
@@ -111,6 +113,14 @@ static void ReadItems(Browser *browser)
         if(items[i].file) {
             c->available[i]=AppletPath(items[i].file,path);
             if(c->available[i]) ExtractIconExA(path,0,&c->icons[i],NULL,1);
+        } else if(items[i].special==-2) {
+            HKEY storage; ShellAppletRecord record;
+            c->available[i]=FALSE;
+            if(!RegOpenKeyExA(HKEY_LOCAL_MACHINE,SHELL_APPLET_KEY,0,KEY_READ,&storage)) {
+                c->available[i]=ShellAppletRead(storage,&record)==ERROR_SUCCESS && GetFileAttributesA(record.applet)!=INVALID_FILE_ATTRIBUTES;
+                RegCloseKey(storage);
+            }
+            if(c->available[i]) c->icons[i]=CopyIcon(LoadIconA(browserInstance,"EXPLORER95"));
         } else if(items[i].special<0) {
             c->available[i]=c->dialup!=NULL; c->icons[i]=FolderIcon(c->dialup);
         } else {
@@ -255,7 +265,8 @@ static void Activate(Browser *browser,int index)
     if(index<0 || index>=CONTROL_ITEMS || !c->available[index]) return;
     if(items[index].file) {
         BrowserOpenApplet(browser,items[index].file);
-    } else if(items[index].special<0) {
+    } else if(items[index].special==-2) EnvironmentShowProperties();
+    else if(items[index].special<0) {
         if(c->dialup) BrowserNavigate(browser,NULL,c->dialup,-1);
     } else BrowserSpecial(browser,items[index].special);
 }

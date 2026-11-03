@@ -10,6 +10,10 @@ HWND BrowserOpenNamespace(LPCITEMIDLIST pidl)
 { (void)pidl; Check(FALSE, "native message probe must not open a folder"); return NULL; }
 BOOL EnvironmentLaunch(HWND owner, const char *path, const char *args, const char *directory)
 { (void)owner; (void)path; (void)args; (void)directory; Check(FALSE, "native message probe must not launch a program"); return FALSE; }
+static int nativeFindCalls;
+static char nativeFindDirectory[MAX_PATH];
+void EnvironmentFind(HWND owner,const char *directory)
+{ (void)owner; ++nativeFindCalls; lstrcpynA(nativeFindDirectory,directory ? directory : "",MAX_PATH); }
 void BrowserRecycleBinsChanged(void) { Check(FALSE, "native message probe must not change the Recycle Bin"); }
 void EnvironmentShowProperties(void) { Check(FALSE, "native message probe must not open settings"); }
 void EnvironmentArrangeDesktop(BOOL automatic) { (void)automatic; Check(FALSE, "native message probe must not arrange desktop"); }
@@ -570,6 +574,9 @@ static void NativeSelectionTests(HWND parent)
         "non-folder default actions remain with the native view without clipboard or navigation probes");
     ListView_SetItemState(list,-1,0,LVIS_SELECTED|LVIS_FOCUSED);
     ListView_SetItemState(list,folderIndex,LVIS_SELECTED|LVIS_FOCUSED,LVIS_SELECTED|LVIS_FOCUSED);
+    nativeFindCalls=0;
+    Check(NativeViewInvoke(view,"find",FALSE) && nativeFindCalls==1 && !lstrcmpiA(nativeFindDirectory,nativeSelectionTarget),
+        "the native folder Find verb reaches Explorer95 search with the selected directory rather than invoking Explorer DDE");
     SendMessageA(list,WM_KEYDOWN,VK_RETURN,0);
     Check(nativeSelectionNavigations==1 && !nativeSelectionDataRequests,
         "native folder Enter routes once without obtaining a clipboard object");
@@ -593,6 +600,9 @@ static void NativeSelectionTests(HWND parent)
             Check(SUCCEEDED(SHGetSpecialFolderLocation(NULL,roots[r],&nativeSelectionNamespace)),"prepare a canonical virtual selection medium");
             Check(NativeViewSelection(view,&selection) && (selection.capabilities&SFGAO_FOLDER),
                 "canonical system folder selection remains navigable on the legacy-interface fallback");
+            nativeFindCalls=0;
+            Check(NativeViewInvoke(view,"find",FALSE) && nativeFindCalls==1,
+                "Find on a canonical system folder stays with Explorer95 instead of starting the native Explorer");
             Check(ICommDlgBrowser_OnDefaultCommand(dialog,shell)==S_OK && nativeSelectionNavigations==before+1,
                 "system folder default activation stays inside Explorer95 when IShellFolderView is absent");
             CoTaskMemFree(nativeSelectionNamespace); nativeSelectionNamespace=NULL;
