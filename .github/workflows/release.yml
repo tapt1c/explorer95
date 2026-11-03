@@ -76,15 +76,18 @@ jobs:
         with:
           name: release-files
           path: release/
-      - name: Publish prerelease and attach downloads
+      - name: Publish release and attach downloads
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          gh release create "$RELEASE_TAG" \
-            --verify-tag \
-            --prerelease \
-            --title "Explorer95 $RELEASE_TAG — classic shell prototype" \
-            --notes-file .github/release-notes/environment.md \
+          options=(--verify-tag --title "Explorer95 $RELEASE_TAG"
+            --notes-file .github/release-notes/environment.md)
+          if [[ "$RELEASE_TAG" == *-* ]]; then
+            options+=(--prerelease)
+          else
+            options+=(--latest)
+          fi
+          gh release create "$RELEASE_TAG" "${options[@]}" \
             release/explorer95.exe release/*.zip release/SHA256SUMS.txt

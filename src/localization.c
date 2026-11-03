@@ -4,6 +4,7 @@
 #include "localization.h"
 #include "paint.h"
 #include "font_resource.h"
+#include "version.h"
 #include <shellapi.h>
 #include <stdarg.h>
 
@@ -702,7 +703,7 @@ void UiAbout(HWND owner,HICON icon)
     /* A temporary hook on THIS thread only. No global observation or DLL.
      * Pass readable English initially, even if hook installation fails. */
     state.hook=SetWindowsHookExA(WH_CBT,AboutActivate,NULL,GetCurrentThreadId());
-    ShellAboutA(owner,"Explorer95",aboutCredits,icon);
+    ShellAboutA(owner,"Explorer95 " EXPLORER95_VERSION,aboutCredits,icon);
     if(state.hook) UnhookWindowsHookEx(state.hook);
     activeAbout=NULL;
 }

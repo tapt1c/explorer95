@@ -426,6 +426,65 @@ static void __attribute__((noinline)) BrowserAddressProgramTests(HWND browser,co
     Navigate(browser,fixture);
     Check(DeleteFileA(shortcut) && DeleteFileA(target) && RemoveDirectoryA(folder),"remove only our owned address-launch executable, shortcut and folder");
 }
+static void SearchResultText(HWND list,int index,char *text,int capacity)
+{
+    LVITEMA item; BYTE *remote=VirtualAllocEx(process.hProcess,NULL,sizeof(item)+capacity,MEM_COMMIT|MEM_RESERVE,PAGE_READWRITE);
+    Check(remote!=NULL,"allocate only the owned process's cross-process item-text buffer");
+    ZeroMemory(&item,sizeof(item)); item.pszText=(char *)(remote+sizeof(item)); item.cchTextMax=capacity;
+    Check(WriteProcessMemory(process.hProcess,remote,&item,sizeof(item),NULL),"marshal the paging item-text request");
+    SendMessageA(list,LVM_GETITEMTEXTA,index,(LPARAM)remote);
+    Check(ReadProcessMemory(process.hProcess,remote+sizeof(item),text,capacity,NULL),"read the owned paging result text");
+    text[capacity-1]=0; VirtualFreeEx(process.hProcess,remote,0,MEM_RELEASE);
+}
+static void BrowserSearchPagingTests(HWND browser,const char *fixture)
+{
+    char folder[MAX_PATH],path[MAX_PATH],text[MAX_PATH],selected[MAX_PATH]; HANDLE file;
+    HWND results,list,next,previous; int i; DWORD started;
+    wsprintfA(folder,"%s\\paged-search",fixture);
+    Check(CreateDirectoryA(folder,NULL),"create only the large-search fixture directory");
+    for(i=0;i<1100;++i) {
+        wsprintfA(path,"%s\\entry%04d.txt",folder,i);
+        file=CreateFileA(path,GENERIC_WRITE,0,NULL,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL);
+        if(file==INVALID_HANDLE_VALUE) { Check(FALSE,"create only the 1100 owned paging fixtures"); break; }
+        CloseHandle(file);
+    }
+    if(!IsWindowVisible(PaneControl(browser,ID_SEARCH_NAME))) SendMessageA(browser,WM_COMMAND,ID_SEARCH,0);
+    SetWindowTextA(PaneControl(browser,ID_SEARCH_NAME),"*.txt"); SetWindowTextA(PaneControl(browser,ID_SEARCH_SCOPE),folder);
+    PaneClick(PaneControl(browser,ID_SEARCH_START));
+    results=FindWindowA(BROWSER_SEARCH_CLASS,NULL); list=GetDlgItem(results,ID_SEARCH_RESULTS);
+    next=GetDlgItem(results,ID_SEARCH_NEXT); previous=GetDlgItem(results,ID_SEARCH_PREVIOUS);
+    started=GetTickCount();
+    while(!IsWindowEnabled(next) && IsWindowEnabled(PaneControl(browser,ID_SEARCH_STOP)) && GetTickCount()-started<5000) PumpFor(20);
+    Check(IsWindowVisible(next) && IsWindowEnabled(next),"results expose the next page while a large query is being collected");
+    SendMessageA(results,WM_COMMAND,ID_SEARCH_NEXT,0); WaitSearch(browser);
+    Check(ListView_GetItemCount(list)==512 && IsWindowEnabled(previous),"paging during a search keeps exactly one page of rows in the native ListView");
+    SendMessageA(results,WM_COMMAND,ID_SEARCH_PREVIOUS,0);
+    GetWindowTextA(GetDlgItem(results,ID_SEARCH_PAGE),text,sizeof(text));
+    Check(!lstrcmpA(text,"Page 1 of 3") && !IsWindowEnabled(previous) && ListView_GetItemCount(list)==512,
+        "more than 1024 real matches remain available in three disk-backed pages");
+    SendMessageA(results,WM_COMMAND,ID_SEARCH_NEXT,0); SendMessageA(results,WM_COMMAND,ID_SEARCH_NEXT,0);
+    GetWindowTextA(GetDlgItem(results,ID_SEARCH_PAGE),text,sizeof(text));
+    Check(!lstrcmpA(text,"Page 3 of 3") && ListView_GetItemCount(list)==76 && !IsWindowEnabled(next),
+        "the last partial page contains all remaining results and disables Next");
+    SaveScreen("build\\search-paged-results.bmp");
+    SearchResultText(list,0,selected,sizeof(selected));
+    NativeSelectItem(list,0);
+    SendMessageA(results,WM_COMMAND,ID_SEARCH_OPEN_FOLDER,0); started=GetTickCount();
+    do {
+        PumpFor(20); SendMessageA(GetDlgItem(browser,ID_ADDRESS),WM_GETTEXT,sizeof(text),(LPARAM)text);
+    } while(lstrcmpiA(text,folder) && GetTickCount()-started<5000);
+    i=ListView_GetNextItem(GetDlgItem(browser,ID_FILES),-1,LVNI_SELECTED);
+    SearchResultText(GetDlgItem(browser,ID_FILES),i,text,sizeof(text));
+    Check(i>=0 && !lstrcmpiA(text,selected),"opening a later-page result selects its actual file rather than a first-page row");
+    Navigate(browser,fixture);
+    SetWindowTextA(PaneControl(browser,ID_SEARCH_SCOPE),fixture); SetWindowTextA(PaneControl(browser,ID_SEARCH_NAME),"no-paging-match-xyz");
+    PaneClick(PaneControl(browser,ID_SEARCH_START)); WaitSearch(browser);
+    Check(!IsWindowVisible(next) && !IsWindowVisible(previous) && !ListView_GetItemCount(list),
+        "a new small query releases the old result set and hides unneeded paging controls");
+    SendMessageA(results,WM_CLOSE,0,0);
+    for(i=0;i<1100;++i) { wsprintfA(path,"%s\\entry%04d.txt",folder,i); if(!DeleteFileA(path)) Check(FALSE,"remove only our paging fixture files"); }
+    Check(RemoveDirectoryA(folder),"remove only the owned paging fixture directory");
+}
 static void BrowserPaneTests(HWND browser, const char *fixture, const char *settings)
 {
     HWND sidebar, list, options, toolbar, results; RECT original; char path[MAX_PATH], value[MAX_PATH + 32], root[MAX_PATH]; HANDLE file; DWORD started;
@@ -541,6 +600,7 @@ static void BrowserPaneTests(HWND browser, const char *fixture, const char *sett
     Check(IsWindowVisible(results), "Show results reopens the same results window without rerunning the search");
     SendMessageA(results, WM_CLOSE, 0, 0);
     Check(DeleteFileA(path), "remove the nested search fixture");
+    BrowserSearchPagingTests(browser,fixture);
     Navigate(browser, fixture); wsprintfA(path, "%s\\sub", fixture); Navigate(browser, path);
     wsprintfA(path, "%s\\empty", fixture); Navigate(browser, path);
     SendMessageA(browser, WM_COMMAND, ID_HISTORY, 0); PumpFor(60); list = PaneControl(browser, ID_HISTORY_LIST);

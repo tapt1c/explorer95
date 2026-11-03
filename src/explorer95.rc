@@ -1,3 +1,33 @@
+#include <windows.h>
+#include "src/version.h"
+
+1 VERSIONINFO
+FILEVERSION EXPLORER95_VERSION_NUMBER
+PRODUCTVERSION EXPLORER95_VERSION_NUMBER
+FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+FILEFLAGS 0
+FILEOS VOS__WINDOWS32
+FILETYPE VFT_APP
+FILESUBTYPE 0
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904E4"
+        BEGIN
+            VALUE "FileDescription", "Explorer95\0"
+            VALUE "FileVersion", EXPLORER95_VERSION "\0"
+            VALUE "InternalName", "Explorer95\0"
+            VALUE "OriginalFilename", "explorer95.exe\0"
+            VALUE "ProductName", "Explorer95\0"
+            VALUE "ProductVersion", EXPLORER95_VERSION "\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1252
+    END
+END
+
 "EXPLORER95" ICON "resources/explorer95.ico"
 143 BITMAP "resources/Bitmap143.bmp"
 207 BITMAP "resources/welcome.bmp"
