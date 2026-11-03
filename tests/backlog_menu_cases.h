@@ -13,26 +13,34 @@ static void TaskManagerMenuTests(HWND bar)
     Check(properties!=NULL,"the last taskbar command now opens Properties instead of exiting the shell");
     SendMessageA(properties,WM_COMMAND,IDCANCEL,0);
 }
-static int TileFixtureButtons(HWND bar, BOOL square)
+static int TileFixtureButtons(HWND bar,HWND *buttons)
 {
     int i,count=0;
     for(i=ID_TASK;i<ID_TASK+TASK_LIMIT;++i) {
-        HWND button=GetDlgItem(bar,i); char title[160]; RECT rect;
+        HWND button=GetDlgItem(bar,i); char title[160];
         title[0]=0; if(!button || !GetWindowTextA(button,title,sizeof(title))) continue;
         if(!title[0] || title[0]!='T' || title[1]!='i' || title[2]!='l' || title[3]!='e') continue;
-        GetWindowRect(button,&rect);
-        if(square && (rect.right-rect.left!=rect.bottom-rect.top || rect.right-rect.left>40)) return -1;
+        if(buttons) buttons[count]=button;
         ++count;
     }
     return count;
 }
 static void WaitTileButtons(HWND bar, int expected, BOOL square)
 {
-    DWORD started=GetTickCount();
-    while(TileFixtureButtons(bar,square)!=expected && GetTickCount()-started<4000) PumpFor(30);
-    if(TileFixtureButtons(bar,square)!=expected) {
+    DWORD started=GetTickCount(); HWND buttons[TASK_LIMIT]; int count,i; BOOL valid;
+    while(TileFixtureButtons(bar,NULL)!=expected && GetTickCount()-started<4000) PumpFor(30);
+    count=TileFixtureButtons(bar,buttons); valid=count==expected;
+    if(valid && square) for(i=0;i<count;++i) {
+        RECT rect;
+        /* Off-viewport controls intentionally retain old/empty rectangles.
+         * Measure every actual button only after the user's scroll navigation
+         * has brought it into the shared strip, including grouped tasks. */
+        RevealTaskButton(bar,buttons[i]); GetWindowRect(buttons[i],&rect);
+        valid &= rect.right-rect.left==rect.bottom-rect.top && rect.right-rect.left<=40;
+    }
+    if(!valid) {
         char detail[240]; int i;
-        wsprintfA(detail,"FAIL: tiles: actual=%d expected=%d square=%d caption=%d\r\n",TileFixtureButtons(bar,square),expected,square,GetSystemMetrics(SM_CYCAPTION)); Log(detail);
+        wsprintfA(detail,"FAIL: tiles: actual=%d expected=%d square=%d caption=%d\r\n",count,expected,square,GetSystemMetrics(SM_CYCAPTION)); Log(detail);
         for(i=ID_TASK;i<ID_TASK+TASK_LIMIT;++i) {
             HWND button=GetDlgItem(bar,i); char title[160]; RECT rect;
             if(button && GetWindowTextA(button,title,sizeof(title)) && title[0]=='T' && title[1]=='i' && title[2]=='l' && title[3]=='e') {
@@ -41,7 +49,7 @@ static void WaitTileButtons(HWND bar, int expected, BOOL square)
             }
         }
     }
-    Check(TileFixtureButtons(bar,square)==expected,square ? "task tiles are square and grouping remains independent" : "classic task captions and ungrouped buttons are restored");
+    Check(valid && TileFixtureButtons(bar,NULL)==expected,square ? "task tiles are square and grouping remains independent" : "classic task captions and ungrouped buttons are restored");
 }
 static void TaskTileTests(HWND bar, const char *settings)
 {
