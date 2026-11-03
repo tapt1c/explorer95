@@ -41,6 +41,7 @@ static PaintColors desktopColors;
 static BOOL changingDesktopColors;
 static MINIMIZEDMETRICS originalMinimized;
 static BOOL minimizedChanged;
+static BOOL barAreaReleased;
 typedef BOOL (WINAPI *RegisterShellNotifications)(HWND,DWORD);
 static RegisterShellNotifications registerShellNotifications;
 static UINT shellNotificationMessage;
@@ -767,12 +768,14 @@ void EnvPositionBar(void)
 {
     APPBARDATA data; RECT rect, work, current; int full = EnvBarThickness(&env.options), reserve = env.options.autoHide ? 2 : full;
     BOOL vertical = env.options.edge == ABE_LEFT || env.options.edge == ABE_RIGHT;
-    if (!env.bar || env.positioning || env.closing) return;
+    if (!env.bar || env.positioning || env.closing || barAreaReleased) return;
     env.positioning = TRUE;
     ZeroMemory(&data, sizeof(data)); data.cbSize = sizeof(data); data.hWnd = env.bar; data.uEdge = env.options.edge;
-    SetRect(&data.rc, 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
+    /* A primary shell owns the screen, not the previous session's work area.
+     * Win95 can retain that session's reservation after terminating its shell. */
+    SetRect(&work, 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
+    data.rc = work;
     if (env.appbar) SHAppBarMessage(ABM_QUERYPOS, &data);
-    else data.rc = env.primary ? env.originalArea : data.rc;
     switch (env.options.edge) {
     case ABE_LEFT: data.rc.right = data.rc.left + reserve; break;
     case ABE_RIGHT: data.rc.left = data.rc.right - reserve; break;
@@ -782,7 +785,6 @@ void EnvPositionBar(void)
     if (env.appbar && (env.anchor.left != data.rc.left || env.anchor.top != data.rc.top ||
         env.anchor.right != data.rc.right || env.anchor.bottom != data.rc.bottom)) SHAppBarMessage(ABM_SETPOS, &data);
     if (env.primary) {
-        work = env.originalArea;
         switch (env.options.edge) {
         case ABE_LEFT: work.left += reserve; break;
         case ABE_RIGHT: work.right -= reserve; break;
@@ -1077,12 +1079,27 @@ static void AutoHideTick(void)
 
 static PaintBuffer barBuffer, barButtonBuffer;
 
+static void ReleaseBarArea(void)
+{
+    APPBARDATA data;
+    if(barAreaReleased) return;
+    /* SPI_SETWORKAREA and ABM_REMOVE can reenter our positioning handler. */
+    barAreaReleased=TRUE;
+    if(env.appbar) {
+        ZeroMemory(&data,sizeof(data)); data.cbSize=sizeof(data); data.hWnd=env.bar;
+        SHAppBarMessage(ABM_REMOVE,&data); env.appbar=FALSE;
+    } else if(env.primary) SystemParametersInfoA(SPI_SETWORKAREA,0,&env.originalArea,SPIF_SENDCHANGE);
+}
 static LRESULT CALLBACK SessionProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
 {
     if(message==WM_QUERYENDSESSION) { RenderTraceShutdown("session.query",S_OK,0); return TRUE; }
     if(message==WM_ENDSESSION) {
         RenderTraceShutdown(wp ? "exit.session" : "session.cancel",S_OK,(DWORD)lp);
-        if(wp) PostQuitMessage(0);
+        if(wp) {
+            /* Win95 may terminate us as soon as this handler returns. Release
+             * the system reservation now; leave COM/window teardown to the loop. */
+            ReleaseBarArea(); PostQuitMessage(0);
+        }
         return 0;
     }
     return DefWindowProcA(window,message,wp,lp);
@@ -1316,6 +1333,7 @@ HWND EnvironmentCreate(const EnvironmentHost *callbacks)
     APPBARDATA data;
     env.host = *callbacks; if (!SettingsPath()) return NULL;
     NativeViewSetHost(callbacks); PaintColorsChanged(&desktopColors); EnvRefreshStartItems();
+    SetRect(&env.originalArea,0,0,GetSystemMetrics(SM_CXSCREEN),GetSystemMetrics(SM_CYSCREEN));
     SystemParametersInfoA(SPI_GETWORKAREA, 0, &env.originalArea, 0);
     env.primary = FindWindowA("Shell_TrayWnd", NULL) == NULL;
     if (!EnvRegister("Explorer95.Session",SessionProc,NULL,0) ||
@@ -1431,7 +1449,7 @@ BOOL EnvironmentTranslate(MSG *message)
 void EnvironmentShutdown(void)
 {
     if(FileDragDeferClose(env.bar)) return;
-    APPBARDATA data; int i;
+    int i;
     if (env.closing) return;
     env.closing = TRUE;
     if(shellNotifications) {
@@ -1471,9 +1489,7 @@ void EnvironmentShutdown(void)
     if(sessionWindow) { DestroyWindow(sessionWindow); sessionWindow=NULL; }
     SetPropA(env.bar, "Explorer95.ShutdownStage", (HANDLE)6);
     RenderTraceShutdown("exit.appbar",S_OK,0);
-    if (env.appbar) {
-        ZeroMemory(&data, sizeof(data)); data.cbSize = sizeof(data); data.hWnd = env.bar; SHAppBarMessage(ABM_REMOVE, &data);
-    } else if (env.primary) SystemParametersInfoA(SPI_SETWORKAREA, 0, &env.originalArea, SPIF_SENDCHANGE);
+    ReleaseBarArea();
     if(minimizedChanged) {
         MINIMIZEDMETRICS current; ZeroMemory(&current,sizeof(current)); current.cbSize=sizeof(current);
         if(SystemParametersInfoA(SPI_GETMINIMIZEDMETRICS,sizeof(current),&current,0) &&

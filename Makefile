@@ -178,7 +178,22 @@ build/ui64/explorer95.exe: $(OBJECTS64) build/ui64/resources.o Makefile
 build/ui64/smoke.exe: $(TEST_OBJECTS64) build/ui64/resources.o Makefile build/archive-fixtures/complete.stamp
 	$(CC64) $(CFLAGS_COMMON) $(filter %.o,$^) -nostdlib -Wl,--entry,start $(TEST_LIBS) -o $@
 
+# The same production objects, with only shell discovery/work-area APIs
+# wrapped to model a primary Win95 session despite Wine's stock tray/cache.
+SESSION_PLATFORM = build/obj64/tests/taskbar_session_platform.o
+SESSION_WRAPS = -Wl,--wrap=__imp_FindWindowA -Wl,--wrap=__imp_SystemParametersInfoA
+build/ui64/session-fixture/explorer95.exe: $(OBJECTS64) build/ui64/resources.o $(SESSION_PLATFORM) Makefile
+	@mkdir -p $(@D)
+	$(CC64) $(CFLAGS_COMMON) $(filter %.o,$^) -nostdlib -mwindows -Wl,--entry,start $(SESSION_WRAPS) $(LDLIBS) -o $@
+build/ui64/session-fixture/smoke.exe: $(TEST_OBJECTS64) build/ui64/resources.o $(SESSION_PLATFORM) Makefile build/archive-fixtures/complete.stamp
+	@mkdir -p $(@D)
+	$(CC64) $(CFLAGS_COMMON) $(filter %.o,$^) -nostdlib -Wl,--entry,start $(SESSION_WRAPS) $(TEST_LIBS) -o $@
+ifneq ($(filter full menu session,$(TEST_GROUP)),)
+ui64-smoke: build/ui64/session-fixture/explorer95.exe build/ui64/session-fixture/smoke.exe
+SESSION_TEST_RUN = $(WINE) build/ui64/session-fixture/smoke.exe --group=session
+endif
 ui64-smoke: build/ui64/smoke.exe
+	$(SESSION_TEST_RUN)
 	$(WINE) build/ui64/smoke.exe --group="$(TEST_GROUP)"
 
 -include $(sort $(OBJECTS:.o=.d) $(OBJECTS64:.o=.d) $(TEST_OBJECTS:.o=.d) $(TEST_OBJECTS64:.o=.d) $(ARCHIVE_CODEC_OBJECTS:.o=.d) $(ARCHIVE_CODEC_OBJECTS64:.o=.d) build/obj32/src/tray_hook.d build/obj64/src/tray_hook.d build/obj32/src/task_switch_hook.d build/obj64/src/task_switch_hook.d)

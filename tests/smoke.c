@@ -24,7 +24,7 @@ static HWND WaitFor(const char *kind,const char *title);
 static void NativeSelectItem(HWND list, int index);
 static int NativeItemIndex(HWND list, const char *name);
 static HFONT PixelTestFont(HFONT source);
-typedef enum TestGroup { GROUP_FULL, GROUP_CORE, GROUP_MENU, GROUP_BROWSER, GROUP_LANGUAGE } TestGroup;
+typedef enum TestGroup { GROUP_FULL, GROUP_CORE, GROUP_MENU, GROUP_BROWSER, GROUP_LANGUAGE, GROUP_SESSION } TestGroup;
 
 void *memset(void *destination, int value, size_t count)
 {
@@ -1202,6 +1202,7 @@ static void MoveTestPointer(LONG x,LONG y)
 #include "backlog_menu_cases.h"
 #include "shutdown_dos_cases.h"
 #include "session_logoff_cases.h"
+#include "taskbar_session_cases.h"
 #include "shell_startup_cases.h"
 #include "task_groups_cases.h"
 #include "task_switch_cases.h"
@@ -2007,7 +2008,8 @@ void start(void)
             else if (!lstrcmpA(args, "--group=menu")) group = GROUP_MENU;
             else if (!lstrcmpA(args, "--group=browser")) group = GROUP_BROWSER;
             else if (!lstrcmpA(args, "--group=language")) group = GROUP_LANGUAGE;
-            else Check(!lstrcmpA(args, "--group=full"), "known test group (full, core, menu, browser, language)");
+            else if (!lstrcmpA(args, "--group=session")) group = GROUP_SESSION;
+            else Check(!lstrcmpA(args, "--group=full"), "known test group (full, core, menu, browser, language, session)");
         }
     }
     SetCursorPos(GetSystemMetrics(SM_CXSCREEN) - 2, GetSystemMetrics(SM_CYSCREEN) - 2);
@@ -2030,6 +2032,8 @@ void start(void)
     wsprintfA(settingsDir, "%s profile", fixture);
     Check(CreateDirectoryA(settingsDir, NULL), "create isolated settings directory");
     wsprintfA(settings, "%s\\settings.ini", settingsDir);
+    if(group==GROUP_SESSION || group==GROUP_MENU || group==GROUP_FULL) TaskbarSessionTests(settingsDir,executable);
+    if(group==GROUP_SESSION) goto cleanup;
     if(group==GROUP_LANGUAGE) { ShutdownDosTests(settingsDir); LanguageTests(settingsDir); LanguageRestartTests(settingsDir,executable); goto cleanup; }
     if(group==GROUP_FULL || group==GROUP_CORE || group==GROUP_BROWSER) ArchiveTests(settingsDir);
     if (group == GROUP_FULL || group == GROUP_CORE || group == GROUP_BROWSER) ShellNewTests(settingsDir, module);
