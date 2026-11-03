@@ -56,6 +56,13 @@ def main():
         welcome = work / "resources/welcome.bmp"
         welcome.write_bytes(welcome.read_bytes())
         run("welcome bitmap changes rebuild only resources", 0, 1)
+        applet = work / "src/shell_applet_cpl.c"
+        applet.write_text(applet.read_text() + "\n/* CPL dependency probe */\n")
+        run("CPL launcher changes rebuild its embedded module and resources", 0, 1)
+        applet_header = work / "src/shell_applet.h"
+        applet_header.write_text(applet_header.read_text() + "\n/* CPL header dependency probe */\n")
+        run("CPL header changes rebuild its module and resources", 0, 1)
+        run("CPL rebuild settles without extra compilation", 0, 0)
         for bitmap in sorted((work / "resources/toolbar98").glob("*.bmp")):
             bitmap.write_bytes(bitmap.read_bytes())
             run(f"Windows 98 toolbar bitmap {bitmap.name} rebuilds resources", 0, 1)

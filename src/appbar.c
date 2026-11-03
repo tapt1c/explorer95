@@ -151,9 +151,9 @@ typedef struct AppbarPacket95 {
 static BOOL SharedReply(DWORD address)
 {
     MEMORY_BASIC_INFORMATION info; DWORD protection;
-    if(!(GetVersion()&0x80000000UL) || address<0x80000000UL || address>0xffffffefUL) return FALSE;
+    if(!(GetVersion()&0x80000000UL) || address<0x80000000UL || address>0xbffffff0UL) return FALSE;
     if(!VirtualQuery((const void *)(UINT_PTR)address,&info,sizeof(info)) || info.State!=MEM_COMMIT ||
-       (UINT_PTR)info.AllocationBase<0x80000000UL || (info.Protect&(PAGE_GUARD|PAGE_NOACCESS)) ||
+       (UINT_PTR)info.AllocationBase<0x80000000UL || (UINT_PTR)info.AllocationBase>=0xc0000000UL || (info.Protect&(PAGE_GUARD|PAGE_NOACCESS)) ||
        (UINT_PTR)info.BaseAddress>address || info.RegionSize<sizeof(RECT) ||
        address-(UINT_PTR)info.BaseAddress>info.RegionSize-sizeof(RECT)) return FALSE;
     protection=info.Protect&0xff;

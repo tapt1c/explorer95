@@ -1,5 +1,6 @@
 #define WIN32_LEAN_AND_MEAN
 #include "shell_applet.h"
+#include "environment.h"
 
 static const char *Name(const char *path)
 { const char *name=path; for(;*path;++path) if(*path=='\\' || *path=='/') name=path+1; return name; }
@@ -26,6 +27,16 @@ DWORD ShellAppletRead(HKEY storage,ShellAppletRecord *record)
        !Path(record->applet) || !Path(record->executable) || !Path(record->settings) ||
        !StagedName(Name(record->applet),".CPL") || !StagedName(Name(record->executable),".EXE")) return ERROR_INVALID_DATA;
     return ERROR_SUCCESS;
+}
+BOOL ShellAppletBootMatches(const ShellAppletRecord *record,const char *systemIni)
+{
+    char command[MAX_PATH+32],*begin,*end;
+    if(!record || !Path(record->executable) || ReadBootShell(systemIni,command,sizeof(command))) return FALSE;
+    begin=command;
+    if(*begin=='"') { ++begin; end=begin; while(*end && *end!='"') ++end; if(!*end) return FALSE; }
+    else { end=begin; while(*end && *end!=' ' && *end!='\t') ++end; }
+    *end=0;
+    return !lstrcmpiA(begin,record->executable) || !lstrcmpiA(begin,Name(record->executable));
 }
 static DWORD Hash(const BYTE *bytes,DWORD size,DWORD hash)
 { while(size--) { hash^=*bytes++; hash*=16777619UL; } return hash; }
@@ -63,10 +74,10 @@ DWORD ShellAppletConfigure(HINSTANCE image,HKEY storage,const char *systemDirect
         /* A CPL may be loaded in Control Panel while Restore is clicked.
          * Without the record its GETCOUNT returns zero, so it is unregistered
          * even when Win95 keeps the loaded file locked until that window closes. */
-        if(!DeleteFileA(previous.applet)) {
-            error=GetLastError();
-            if(error!=ERROR_FILE_NOT_FOUND && error!=ERROR_SHARING_VIOLATION && error!=ERROR_LOCK_VIOLATION) return error;
-        }
+        /* Deleting a loaded image can report ACCESS_DENIED as well as a
+         * sharing violation. File cleanup is optional after unregistration;
+         * the saved size/hash was checked before touching this owned path. */
+        DeleteFileA(previous.applet);
         return ERROR_SUCCESS;
     }
     if(!Path(executable) || !Path(settings) || !StagedName(Name(executable),".EXE") || lstrlenA(systemDirectory)+14>=MAX_PATH)

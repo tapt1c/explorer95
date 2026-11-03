@@ -39,4 +39,5 @@ DWORD ConfigureBootShell(const char *systemIni, const char *backupIni,
                         const char *recoveryIni, const char *selection,
                         BOOL restore);
 DWORD StageShellExecutable(const char *source, const char *directory, char *selection);
+DWORD ReadBootShell(const char *ini,char *out,DWORD capacity);
 #endif

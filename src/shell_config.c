@@ -26,7 +26,7 @@ static char *Trim(char *text)
     while(end>text && (end[-1]==' ' || end[-1]=='\t')) --end;
     *end=0; return text;
 }
-static DWORD ReadShell(const char *ini, char *out, DWORD capacity)
+DWORD ReadBootShell(const char *ini, char *out, DWORD capacity)
 {
     HANDLE file; char *data,*line,*end; BOOL boot=FALSE;
     DWORD size,high,count,result=ERROR_INVALID_DATA;
@@ -84,7 +84,7 @@ DWORD ConfigureBootShell(const char *systemIni, const char *backupIni,
     if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_DIRECTORY))
         return ERROR_FILE_NOT_FOUND;
     if (attributes & FILE_ATTRIBUTE_READONLY) return ERROR_ACCESS_DENIED;
-    error = ReadShell(systemIni, current, sizeof(current));
+    error = ReadBootShell(systemIni, current, sizeof(current));
     if (error) return error;
     GetPrivateProfileStringA("Recovery", "SelectedShell", "EXPLR95.EXE", previous, sizeof(previous), recoveryIni);
     GetPrivateProfileStringA("Recovery", "OriginalShell", "", encoded, sizeof(encoded), recoveryIni);
@@ -108,7 +108,7 @@ DWORD ConfigureBootShell(const char *systemIni, const char *backupIni,
     }
     if (!WritePrivateProfileStringA("boot", "shell", selection, systemIni)) return ERROR_WRITE_FAULT;
     WritePrivateProfileStringA(NULL, NULL, NULL, systemIni);
-    if (ReadShell(systemIni, verify, sizeof(verify)) || lstrcmpA(verify, selection)) {
+    if (ReadBootShell(systemIni, verify, sizeof(verify)) || lstrcmpA(verify, selection)) {
         WritePrivateProfileStringA("boot", "shell", current, systemIni);
         return ERROR_WRITE_FAULT;
     }

@@ -10,6 +10,7 @@ typedef struct ShellAppletRecord {
     char applet[MAX_PATH],executable[MAX_PATH],settings[MAX_PATH];
 } ShellAppletRecord;
 DWORD ShellAppletRead(HKEY storage,ShellAppletRecord *record);
+BOOL ShellAppletBootMatches(const ShellAppletRecord *record,const char *systemIni);
 DWORD ShellAppletConfigure(HINSTANCE image,HKEY storage,const char *systemDirectory,
     const char *executable,const char *settings,BOOL restore);
 #endif

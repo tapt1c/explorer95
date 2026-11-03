@@ -3,6 +3,7 @@
 #include <cpl.h>
 #include <stddef.h>
 #include "shell_applet.h"
+#include "environment.h"
 static HINSTANCE module;
 void *memset(void *out,int value,size_t count)
 { volatile BYTE *p=out; while(count--) *p++=(BYTE)value; return out; }
@@ -16,7 +17,13 @@ static BOOL Selected(ShellAppletRecord *record)
     if(RegOpenKeyExA(HKEY_LOCAL_MACHINE,SHELL_APPLET_KEY,0,KEY_READ,&storage)) return FALSE;
     found=ShellAppletRead(storage,record)==ERROR_SUCCESS; RegCloseKey(storage);
     length=GetModuleFileNameA(module,path,MAX_PATH);
-    return found && length && length<MAX_PATH && !lstrcmpiA(path,record->applet);
+    if(!found || !length || length>=MAX_PATH || lstrcmpiA(path,record->applet)) return FALSE;
+    /* The item belongs only to the selected boot shell, including when
+     * SYSTEM.INI was restored manually rather than through our settings. */
+    length=GetWindowsDirectoryA(path,MAX_PATH);
+    if(!length || length+12>=MAX_PATH) return FALSE;
+    lstrcatA(path,"\\SYSTEM.INI");
+    return ShellAppletBootMatches(record,path);
 }
 __declspec(dllexport) LONG CALLBACK CPlApplet(HWND owner,UINT message,LPARAM index,LPARAM parameter)
 {

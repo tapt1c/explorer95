@@ -63,9 +63,9 @@ build/applet-resources.o: src/shell_applet.rc resources/explorer95.ico Makefile
 build/ui64/applet-resources.o: src/shell_applet.rc resources/explorer95.ico Makefile
 	@mkdir -p $(@D)
 	$(WINDRES64) -I. -i $< -o $@
-build/ex95settings.cpl: build/obj32/src/shell_applet.o build/obj32/src/shell_applet_cpl.o build/applet-resources.o Makefile
+build/ex95settings.cpl: build/obj32/src/shell_applet.o build/obj32/src/shell_applet_cpl.o build/obj32/src/shell_config.o build/applet-resources.o Makefile
 	$(CC) $(CFLAGS) -shared -nostdlib $(filter %.o,$^) -Wl,--entry,_DllMain@12 -Wl,--kill-at -Wl,--subsystem,windows:4.0 -Wl,--major-os-version,4 -Wl,--minor-os-version,0 -Wl,--disable-dynamicbase -Wl,--disable-nxcompat -ladvapi32 -luser32 -lkernel32 -o $@
-build/ui64/ex95settings.cpl: build/obj64/src/shell_applet.o build/obj64/src/shell_applet_cpl.o build/ui64/applet-resources.o Makefile
+build/ui64/ex95settings.cpl: build/obj64/src/shell_applet.o build/obj64/src/shell_applet_cpl.o build/obj64/src/shell_config.o build/ui64/applet-resources.o Makefile
 	$(CC64) $(CFLAGS_COMMON) -shared -nostdlib $(filter %.o,$^) -Wl,--entry,DllMain -Wl,--kill-at -ladvapi32 -luser32 -lkernel32 -o $@
 OBJECTS = $(SOURCES:%.c=build/obj32/%.o)
 OBJECTS64 = $(SOURCES:%.c=build/obj64/%.o)
@@ -213,7 +213,7 @@ ui64-smoke: build/ui64/smoke.exe
 	$(SESSION_TEST_RUN)
 	$(WINE) build/ui64/smoke.exe --group="$(TEST_GROUP)"
 
--include $(sort $(OBJECTS:.o=.d) $(OBJECTS64:.o=.d) $(TEST_OBJECTS:.o=.d) $(TEST_OBJECTS64:.o=.d) $(ARCHIVE_CODEC_OBJECTS:.o=.d) $(ARCHIVE_CODEC_OBJECTS64:.o=.d) build/obj32/src/tray_hook.d build/obj64/src/tray_hook.d build/obj32/src/task_switch_hook.d build/obj64/src/task_switch_hook.d)
+-include $(sort $(OBJECTS:.o=.d) $(OBJECTS64:.o=.d) $(TEST_OBJECTS:.o=.d) $(TEST_OBJECTS64:.o=.d) $(ARCHIVE_CODEC_OBJECTS:.o=.d) $(ARCHIVE_CODEC_OBJECTS64:.o=.d) build/obj32/src/tray_hook.d build/obj64/src/tray_hook.d build/obj32/src/task_switch_hook.d build/obj64/src/task_switch_hook.d build/obj32/src/shell_applet_cpl.d build/obj64/src/shell_applet_cpl.d)
 
 clean:
 	rm -rf build

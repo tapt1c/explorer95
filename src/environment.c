@@ -43,6 +43,8 @@ static BOOL changingDesktopColors;
 static MINIMIZEDMETRICS originalMinimized;
 static BOOL minimizedChanged;
 static BOOL barAreaReleased;
+static BOOL appbarPositionPending;
+#define APPBAR_REPOSITION (WM_APP+37)
 typedef BOOL (WINAPI *RegisterShellNotifications)(HWND,DWORD);
 static RegisterShellNotifications registerShellNotifications;
 static UINT shellNotificationMessage;
@@ -745,6 +747,14 @@ static void ResizeDesktop(void)
     SetWindowPos(env.desktop, HWND_BOTTOM, 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN), SWP_NOACTIVATE);
     SystemParametersInfoA(SPI_GETWORKAREA, 0, &work, 0); NativeViewResize(env.desktopView, &work);
 }
+static void AppbarAreaChanged(void)
+{
+    if(env.closing || barAreaReleased) return;
+    if(!env.positioning) EnvPositionBar();
+    /* A client's SPI_SETWORKAREA callback may negotiate another rectangle
+     * inside the current layout. Reconcile that state after the outer call. */
+    else if(!appbarPositionPending) appbarPositionPending=PostMessageA(env.bar,APPBAR_REPOSITION,0,0);
+}
 void EnvPositionBar(void)
 {
     APPBARDATA data; RECT rect, work, current; int full = EnvBarThickness(&env.options), reserve = env.options.autoHide ? 2 : full;
@@ -1170,6 +1180,8 @@ static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
         }
         return 0;
     }
+    case APPBAR_REPOSITION:
+        appbarPositionPending=FALSE; EnvPositionBar(); return 0;
     case WM_APP + 36: {
         char path[MAX_PATH]; SHELLEXECUTEINFOA launch;
         if(!startupStarted || startupLaunching || env.closing) return 0;
@@ -1387,7 +1399,7 @@ HWND EnvironmentCreate(const EnvironmentHost *callbacks)
         if (EnvRegister("Shell_TrayWnd", BridgeProc, NULL, 0))
             bridge = CreateWindowExA(WS_EX_TOOLWINDOW, "Shell_TrayWnd", "Explorer95 Tray", WS_POPUP,
                 0, 0, 640, 30, NULL, NULL, env.host.instance, NULL);
-        AppbarInitialize(env.bar,env.desktop,EnvPositionBar);
+        AppbarInitialize(env.bar,env.desktop,AppbarAreaChanged);
     } else {
         ZeroMemory(&data, sizeof(data)); data.cbSize = sizeof(data); data.hWnd = env.bar; data.uCallbackMessage = WM_APPBAR;
         env.appbar = (BOOL)SHAppBarMessage(ABM_NEW, &data);

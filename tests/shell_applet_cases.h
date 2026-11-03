@@ -12,6 +12,12 @@ static void ShellAppletTests(const char *directory)
         "install the embedded CPL only in our temporary directory and private registry root");
     Check(!lstrcmpA(record.executable,exe) && !lstrcmpA(record.settings,profile) && GetFileAttributesA(record.applet)!=INVALID_FILE_ATTRIBUTES,
         "the atomic applet record retains the exact installed executable and settings profile");
+    wsprintfA(path,"%s\\applet-boot.ini",directory);
+    Check(WritePrivateProfileStringA("boot","shell","EX950001.EXE /test",path) && ShellAppletBootMatches(&record,path),
+        "the item belongs to its selected shell even when boot arguments are present");
+    Check(WritePrivateProfileStringA("boot","shell","explorer.exe",path) && !ShellAppletBootMatches(&record,path),
+        "manual restoration of another boot shell hides the item without changing host boot settings");
+    DeleteFileA(path);
     library=LoadLibraryA(record.applet); Check(library!=NULL,"load only the CPL extracted into the test directory");
     applet=(Applet)(void *)GetProcAddress(library,"CPlApplet");
     Check(applet && applet(NULL,CPL_INIT,0,0),"the native Win95 CPlApplet entry point is exported without a decorated name");

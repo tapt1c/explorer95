@@ -119,6 +119,13 @@ static void ReadItems(Browser *browser)
             if(!RegOpenKeyExA(HKEY_LOCAL_MACHINE,SHELL_APPLET_KEY,0,KEY_READ,&storage)) {
                 c->available[i]=ShellAppletRead(storage,&record)==ERROR_SUCCESS && GetFileAttributesA(record.applet)!=INVALID_FILE_ATTRIBUTES;
                 RegCloseKey(storage);
+                if(c->available[i]) {
+                    DWORD length=GetWindowsDirectoryA(path,MAX_PATH);
+                    c->available[i]=FALSE;
+                    if(length && length+12<MAX_PATH) {
+                        lstrcatA(path,"\\SYSTEM.INI"); c->available[i]=ShellAppletBootMatches(&record,path);
+                    }
+                }
             }
             if(c->available[i]) c->icons[i]=CopyIcon(LoadIconA(browserInstance,"EXPLORER95"));
         } else if(items[i].special<0) {
