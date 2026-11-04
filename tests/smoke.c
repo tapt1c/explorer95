@@ -1828,7 +1828,7 @@ static void EnvironmentTests(HWND bar, HWND browser, HWND childWindow, HWND menu
             SendDlgItemMessageA(properties, 621, CB_SETCURSEL, rows - 1, 0);
             SendMessageA(properties, WM_COMMAND, MAKELONG(621, CBN_SELCHANGE), 0);
             SendMessageA(properties, WM_COMMAND, 0x3021, 0); PumpFor(80);
-            TaskbarRowHeightCheck(bar,rows);
+            TaskbarRowHeightCheck(bar,rows,childWindow);
             GetWindowRect(notification, &firstRect); GetWindowRect(second, &secondRect);
             Check(firstRect.right - firstRect.left == 20 && firstRect.bottom - firstRect.top == 20 &&
                 secondRect.right - secondRect.left == 20 && secondRect.bottom - secondRect.top == 20,
@@ -2070,7 +2070,7 @@ void start(void)
         Check(SUCCEEDED(OleInitialize(NULL)),"initialize COM for the installed-program UI fixture");
         Check(SUCCEEDED(SHGetSpecialFolderLocation(NULL,CSIDL_PROGRAMS,&programs)),"locate this isolated test user's Programs folder");
         Check(SHGetPathFromIDListA(programs,directory),"obtain the Programs fixture directory"); CoTaskMemFree(programs);
-        wsprintfA(programsShortcut,"%s\\Explorer95 smoke program %lu.lnk",directory,GetCurrentProcessId());
+        wsprintfA(programsShortcut,"%s\\Explorer95 smoke program %lu-%lu.lnk",directory,GetCurrentProcessId(),GetTickCount());
         Check(GetFileAttributesA(programsShortcut) == INVALID_FILE_ATTRIBUTES && Shortcut(programsShortcut,module),
             "create only our own uniquely named All Programs shortcut for Run/history integration");
         OleUninitialize();

@@ -1,7 +1,19 @@
 /* Uses only disposable Wine display metrics and our own windows/profile. */
-static void TaskbarRowHeightCheck(HWND bar,int rows)
+static void TaskbarRowHeightCheck(HWND bar,int rows,HWND fixture)
 {
-    RECT start; int id,visible=0,cell; BOOL aligned=TRUE;
+    RECT start; int id,visible=0,cell; BOOL aligned=TRUE; char title[160]; HWND task=NULL;
+    GetWindowTextA(fixture,title,sizeof(title));
+    for(id=ID_TASK;id<ID_TASK+TASK_LIMIT && title[0];++id) {
+        HWND candidate=GetDlgItem(bar,id); char text[160]={0};
+        if(candidate && GetWindowTextA(candidate,text,sizeof(text))) {
+            char prefix[160]; lstrcpynA(prefix,text,lstrlenA(title)+1);
+            if(!lstrcmpA(prefix,title)) { task=candidate; break; }
+        }
+    }
+    Check(task!=NULL,"the row-height fixture has a real unpinned task button");
+    /* Pins can occupy the whole current viewport after switching icon size.
+     * Reveal the existing task through normal scrolling before measuring it. */
+    RevealTaskButton(bar,task);
     GetWindowRect(GetDlgItem(bar,ID_START),&start); cell=start.bottom-start.top+2;
     /* Opening Properties can regroup/reorder tasks, and a task may occupy
      * either selected row. Read the live buttons instead of retaining ID 200. */
