@@ -42,8 +42,9 @@ SOURCES += src/appbar.c
 TEST_SOURCES += src/appbar.c
 SOURCES += src/shell_applet.c
 TEST_SOURCES += src/shell_applet.c
-SOURCES += src/search_store.c
-TEST_SOURCES += src/search_store.c
+SOURCES += src/search_store.c src/search_sort.c src/search_query.c src/search_scan.c src/search_index.c
+SOURCES += src/browser_search_options.c
+TEST_SOURCES += src/search_store.c src/search_sort.c src/search_query.c src/search_scan.c src/search_index.c
 TEST_SOURCES += src/archive.c
 ARCHIVE_CODEC_SOURCES = src/archive_codec.c $(wildcard third_party/unarr/common/*.c third_party/unarr/rar/*.c third_party/unarr/zip/*.c third_party/unarr/lzmasdk/*.c)
 ARCHIVE_CODEC_OBJECTS = $(ARCHIVE_CODEC_SOURCES:%.c=build/codec32/%.o)

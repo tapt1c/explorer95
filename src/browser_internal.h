@@ -174,6 +174,8 @@ BOOL BrowserOpenApplet(Browser *browser, const char *file);
 BOOL BrowserSearchCreate(Browser *browser, HWND parent);
 BOOL BrowserSearchRegister(void);
 BOOL BrowserSearchTranslate(MSG *message);
+BOOL BrowserSearchDialogsTranslate(MSG *message);
+BOOL BrowserSearchDeferClose(Browser *browser);
 void BrowserSearchLayout(Browser *browser, int width, int height, BOOL show);
 void BrowserSearchTick(Browser *browser);
 void BrowserSearchStop(Browser *browser, BOOL finished);

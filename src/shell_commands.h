@@ -11,6 +11,7 @@ HRESULT ShellCommandDefault(IContextMenu *context, HWND owner);
 /* Invoke through the item's owner; ShellExecute may apply folder associations
  * to Win95 Control Panel applets, which are namespace actions rather than paths. */
 HRESULT ShellNamespaceInvoke(HWND owner, LPCITEMIDLIST absolute);
+IContextMenu *ShellPathContext(HWND owner,const char *path);
 void ShellCommandShortcuts(IContextMenu *context, HMENU menu);
 void ShellFolderMenuUnique(IContextMenu *context, HMENU menu);
 const char *ShellDesktopEditKey(UINT key, BOOL control, BOOL shift, BOOL alt);

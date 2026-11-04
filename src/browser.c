@@ -1020,6 +1020,7 @@ static LRESULT CALLBACK BrowserProc(HWND window, UINT message, WPARAM wp, LPARAM
             return TRUE;
         } break;
     case WM_CLOSE:
+        if(browser && BrowserSearchDeferClose(browser)) return 0;
         if(browser && browser->busy && FileDragDeferClose(window)) return 0;
         DestroyWindow(window); return 0;
     case WM_DESTROY:
@@ -1147,6 +1148,8 @@ BOOL BrowserTranslate(MSG *message)
     while (root && (GetWindowLongA(root, GWL_STYLE) & WS_CHILD)) root = GetParent(root);
     { char kind[64]; GetClassNameA(root, kind, sizeof(kind));
       if (!lstrcmpA(kind, BROWSER_SEARCH_CLASS)) return BrowserSearchTranslate(message);
+      if (!lstrcmpA(kind,"Explorer95.SearchOptions") || !lstrcmpA(kind,"Explorer95.SavedSearches") ||
+          !lstrcmpA(kind,"Explorer95.SearchReport")) return BrowserSearchDialogsTranslate(message);
       if (!lstrcmpA(kind,"Explorer95.FolderOptions")) return BrowserOptionsTranslate(message); }
     if (!BrowserIsWindow(root)) return FALSE;
     browser = (Browser *)GetWindowLongPtrA(root, GWLP_USERDATA); if (!browser) return FALSE;

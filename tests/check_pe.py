@@ -36,12 +36,16 @@ ALLOWED = {
     "gdi32.dll": {"CreateScalableFontResourceA", "AddFontResourceA", "RemoveFontResourceA", "GetCurrentObject", "CreatePatternBrush", "PatBlt", "GetDeviceCaps", "GetClipBox", "SaveDC", "RestoreDC", "IntersectClipRect", "ExcludeClipRect", "Arc", "CreatePen", "Ellipse", "CreateSolidBrush", "GetDIBits", "SetDIBits", "LineTo", "MoveToEx", "GetStockObject", "SelectObject", "SetBkMode", "SetTextColor", "BitBlt",
                   "ExtTextOutA", "Polygon", "StretchBlt", "SetStretchBltMode", "CreateCompatibleBitmap", "CreateBitmap", "SetBkColor", "SetWindowOrgEx", "CreateFontIndirectA", "GetTextFaceA", "GetTextExtentPoint32A", "GetTextMetricsA", "CreateCompatibleDC", "DeleteDC", "DeleteObject", "GetObjectA"},
     # GetCurrentThreadId scopes the temporary native About CBT hook to our UI thread.
+    # GetDriveTypeA and FlushFileBuffers are stock Win95: explicit local-drive
+    # selection and committing a completed search index use no newer shell API.
     # CreateProcessA is stock Win95: a separate GUI caller requests Log Off so
     # Windows includes the shell itself in its session-end notifications.
     # VirtualQuery is stock Win95; bound the shared appbar RECT reply.
     "kernel32.dll": set("""
         VirtualQuery
         SetFilePointer SetFileTime DosDateTimeToFileTime LocalFileTimeToFileTime
+        FlushFileBuffers
+        GetDriveTypeA
         FindResourceA LoadResource SizeofResource LockResource GetCurrentProcess ReadProcessMemory GetACP Module32First
         GetDiskFreeSpaceA GetVolumeInformationA WideCharToMultiByte WritePrivateProfileSectionA
         CreateMutexA ReleaseMutex CreateToolhelp32Snapshot Process32First Process32Next GetSystemTimeAsFileTime GetTempFileNameA GetTempPathA MoveFileA

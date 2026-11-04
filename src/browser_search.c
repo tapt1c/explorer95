@@ -1,384 +1,498 @@
-/* Filename search stays on the UI thread in small timer batches. No shell
- * indexing service, recursive directory watcher, worker lifetime, or CRT. */
+/* Cooperative filesystem and index searches. Results and global sorting stay
+ * disk backed; native RTM ListView holds only one page. */
 #define WIN32_LEAN_AND_MEAN
-#include "browser_internal.h"
-#include "search_store.h"
+#include "browser_search_internal.h"
+#include "shell_commands.h"
 #define EX95_LOCALIZE_UI
 #include "localization.h"
 
-#define SEARCH_DEPTH 64
-typedef struct SearchFrame { struct SearchFrame *parent; HANDLE find; WIN32_FIND_DATAA data; char path[MAX_PATH]; BOOL ready; } SearchFrame;
-struct BrowserSearch {
-    HWND parent, nameLabel, name, scopeLabel, scope, recursive, start, stop, results, status;
-    HWND window, resultNote, openFolder, open, show, previousPage, nextPage, pageLabel;
-    Browser *browser;
-    SearchFrame *frame;
-    SearchStore store;
-    SearchStoreRecord page[SEARCH_PAGE_SIZE];
-    DWORD first,shown,error;
-    int depth, skipped;
-    BOOL active, descend, limited;
-    char pattern[BROWSER_SEARCH_QUERY_SIZE+2];
-};
-static BOOL Matches(const char *pattern, const char *filename)
+static void Pager(BrowserSearch *s)
 {
-    char name[MAX_PATH]; const char *star = NULL, *retry = NULL;
-    lstrcpynA(name, filename, MAX_PATH); CharUpperBuffA(name, lstrlenA(name));
-    filename = name;
-    while (*filename) {
-        if (*pattern == '?' || *pattern == *filename) { ++pattern; ++filename; }
-        else if (*pattern == '*') { star = ++pattern; retry = filename; }
-        else if (star) { pattern = star; filename = ++retry; }
-        else return FALSE;
-    }
-    while (*pattern == '*') ++pattern;
-    return !*pattern;
-}
-static BOOL PushFrame(BrowserSearch *search, const char *path)
-{
-    char pattern[MAX_PATH]; SearchFrame *frame;
-    if (search->depth == SEARCH_DEPTH || !EnvJoin(pattern, path, "*")) { ++search->skipped; return FALSE; }
-    frame = EnvAlloc(sizeof(*frame));
-    if (!frame) { search->limited = TRUE; return FALSE; }
-    frame->find = FindFirstFileA(pattern, &frame->data);
-    if (frame->find == INVALID_HANDLE_VALUE) {
-        DWORD error = GetLastError();
-        if (error != ERROR_FILE_NOT_FOUND && error != ERROR_NO_MORE_FILES) ++search->skipped;
-        EnvFree(frame); return FALSE;
-    }
-    lstrcpyA(frame->path, path); frame->ready = TRUE;
-    frame->parent = search->frame; search->frame = frame; ++search->depth;
-    return TRUE;
-}
-static void PopFrame(BrowserSearch *search)
-{
-    SearchFrame *frame = search->frame;
-    if (!frame) return;
-    search->frame = frame->parent; --search->depth; FindClose(frame->find); EnvFree(frame);
-}
-static void Pager(BrowserSearch *search)
-{
-    char text[96]; DWORD pages=search->store.count ? (search->store.count-1)/SEARCH_PAGE_SIZE+1 : 1;
+    char text[96]; DWORD pages=s->store.count ? (s->store.count-1)/SEARCH_PAGE_SIZE+1 : 1;
     BOOL more=pages>1,changed;
-    changed=EnvShowControl(search->previousPage,more);
-    changed|=EnvShowControl(search->nextPage,more); changed|=EnvShowControl(search->pageLabel,more);
-    EnableWindow(search->previousPage,search->first>0);
-    EnableWindow(search->nextPage,search->first+SEARCH_PAGE_SIZE<search->store.count);
-    wsprintfA(text,"Page %lu of %lu",search->first/SEARCH_PAGE_SIZE+1,pages); SetWindowTextA(search->pageLabel,text);
-    if(changed) SendMessageA(search->window,WM_SIZE,0,0);
+    changed=EnvShowControl(s->previousPage,more); changed|=EnvShowControl(s->nextPage,more); changed|=EnvShowControl(s->pageLabel,more);
+    EnableWindow(s->previousPage,!s->sort && s->first>0);
+    EnableWindow(s->nextPage,!s->sort && s->first+SEARCH_PAGE_SIZE<s->store.count);
+    wsprintfA(text,"Page %lu of %lu",s->first/SEARCH_PAGE_SIZE+1,pages); SetWindowTextA(s->pageLabel,text);
+    if(changed) SendMessageA(s->window,WM_SIZE,0,0);
 }
-static BOOL AddRow(BrowserSearch *search,const SearchStoreRecord *record)
+static void DateText(const FILETIME *modified,char *text,int capacity)
 {
-    LVITEMA item; SHFILEINFOA info; char folder[MAX_PATH]; const char *name; int length,index;
-    lstrcpyA(folder,record->path); name=record->path+lstrlenA(record->path);
-    while(name>record->path && name[-1]!='\\' && name[-1]!='/') --name;
-    length=(int)(name-record->path); if(length>3) --length; folder[length]=0;
-    ZeroMemory(&info,sizeof(info));
-    SHGetFileInfoA(record->path,record->folder ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL,&info,sizeof(info),
-        SHGFI_USEFILEATTRIBUTES|SHGFI_SYSICONINDEX|SHGFI_SMALLICON|SHGFI_TYPENAME);
-    ZeroMemory(&item,sizeof(item)); item.mask=LVIF_TEXT|LVIF_IMAGE|LVIF_PARAM;
-    item.iItem=(int)search->shown; item.pszText=(char *)name; item.iImage=info.iIcon; item.lParam=search->shown;
-    index=ListView_InsertItem(search->results,&item); if(index<0) return FALSE;
-    search->page[search->shown]=*record; ++search->shown;
-    ListView_SetItemText(search->results,index,1,folder); ListView_SetItemText(search->results,index,2,info.szTypeName); return TRUE;
+    FILETIME local; SYSTEMTIME time; text[0]=0;
+    if(FileTimeToLocalFileTime(modified,&local) && FileTimeToSystemTime(&local,&time))
+        GetDateFormatA(LOCALE_USER_DEFAULT,DATE_SHORTDATE,&time,NULL,text,capacity);
 }
-static BOOL LoadPage(BrowserSearch *search,DWORD first)
+static BOOL AddRow(BrowserSearch *s,const SearchStoreRecord *record)
+{
+    LVITEMA item; SHFILEINFOA info; char folder[MAX_PATH],text[64]; int index;
+    SearchRecordFolder(record,folder); ZeroMemory(&info,sizeof(info));
+    SHGetFileInfoA(record->path,record->attributes,&info,sizeof(info),SHGFI_USEFILEATTRIBUTES|SHGFI_SYSICONINDEX|SHGFI_SMALLICON|SHGFI_TYPENAME);
+    ZeroMemory(&item,sizeof(item)); item.mask=LVIF_TEXT|LVIF_IMAGE|LVIF_PARAM;
+    item.iItem=(int)s->shown; item.pszText=(char *)SearchRecordName(record); item.iImage=info.iIcon; item.lParam=s->shown;
+    index=ListView_InsertItem(s->results,&item); if(index<0) return FALSE;
+    s->page[s->shown++]=*record;
+    ListView_SetItemText(s->results,index,1,folder); ListView_SetItemText(s->results,index,2,info.szTypeName);
+    if(record->folder) text[0]=0;
+    else if(record->sizeHigh) lstrcpyA(text,UiText("> 4 GB"));
+    else wsprintfA(text,"%lu bytes",record->sizeLow);
+    ListView_SetItemText(s->results,index,3,text); DateText(&record->modified,text,sizeof(text));
+    ListView_SetItemText(s->results,index,4,text); return TRUE;
+}
+static BOOL LoadPage(BrowserSearch *s,DWORD first)
 {
     DWORD count,i,error;
-    /* Only one page lives in the native ListView. lParam is a checked slot
-     * index, never a pointer into an ever-growing result allocation. */
-    ListView_DeleteAllItems(search->results); search->shown=0;
-    error=SearchStoreReadPage(&search->store,first,search->page,SEARCH_PAGE_SIZE,&count);
-    if(error) { BrowserError(search->window,"Cannot read search results.",error); return FALSE; }
-    search->first=first; SendMessageA(search->results,WM_SETREDRAW,FALSE,0);
-    for(i=0;i<count;++i) if(!AddRow(search,&search->page[i])) break;
-    SendMessageA(search->results,WM_SETREDRAW,TRUE,0); InvalidateRect(search->results,NULL,TRUE); Pager(search);
-    if(i<count) { BrowserError(search->window,"Cannot display search results.",ERROR_NOT_ENOUGH_MEMORY); return FALSE; }
-    return TRUE;
-}
-static void SearchStatus(BrowserSearch *search, const char *state)
-{
-    char text[192];
-    wsprintfA(text, "%s: %d match(es).%s\r\n%d folder(s) skipped.", state, (int)search->store.count,
-        search->limited ? " Limit reached." : "", search->skipped);
-    SetWindowTextA(search->status, text);
-    SetWindowTextA(search->resultNote, text);
-    Pager(search);
-}
-void BrowserSearchStop(Browser *browser, BOOL finished)
-{
-    BrowserSearch *search = browser->search;
-    if (!search) return;
-    KillTimer(browser->window, 11);
-    while (search->frame) PopFrame(search);
-    if (search->active) SearchStatus(search, finished ? "Complete" : "Stopped");
-    search->active = FALSE; EnableWindow(search->start, TRUE); EnableWindow(search->stop, FALSE);
-}
-static void ClearResults(BrowserSearch *search)
-{
-    ListView_DeleteAllItems(search->results);
-    SearchStoreClose(&search->store);
-    search->first=search->shown=search->error=0; search->skipped=0; search->limited=FALSE; Pager(search);
-}
-static void StartSearch(Browser *browser)
-{
-    BrowserSearch *search = browser->search; char scope[MAX_PATH] = {0}, full[MAX_PATH], query[BROWSER_SEARCH_QUERY_SIZE] = {0}; DWORD length, attributes;
-    GetWindowTextA(search->scope, scope, MAX_PATH); GetWindowTextA(search->name, query, sizeof(query));
-    length = GetFullPathNameA(scope, MAX_PATH, full, NULL);
-    if (!scope[0] || !length || length >= MAX_PATH) { BrowserError(browser->window, "Choose a valid search folder.", ERROR_BAD_PATHNAME); return; }
-    attributes = GetFileAttributesA(full);
-    if (attributes == INVALID_FILE_ATTRIBUTES || !(attributes & FILE_ATTRIBUTE_DIRECTORY)) {
-        BrowserError(browser->window, "The search folder is unavailable.", attributes == INVALID_FILE_ATTRIBUTES ? GetLastError() : ERROR_DIRECTORY); return;
+    SendMessageA(s->results,WM_SETREDRAW,FALSE,0); ListView_DeleteAllItems(s->results); s->shown=0;
+    error=SearchStoreReadPage(&s->store,first,s->page,SEARCH_PAGE_SIZE,&count);
+    if(!error) {
+        s->first=first;
+        for(i=0;i<count;++i) if(!AddRow(s,&s->page[i])) { error=ERROR_NOT_ENOUGH_MEMORY; break; }
     }
-    {
-        SearchStore fresh; DWORD error;
-        BrowserSearchStop(browser,FALSE);
-        error=SearchStoreCreate(&fresh,NULL);
-        if(error) { BrowserError(browser->window,"Cannot create search result storage.",error); return; }
-        ClearResults(search); search->store=fresh;
+    SendMessageA(s->results,WM_SETREDRAW,TRUE,0); InvalidateRect(s->results,NULL,TRUE); Pager(s);
+    if(error) BrowserError(s->window,"Cannot display search results.",error);
+    return !error;
+}
+static void Buttons(BrowserSearch *s)
+{
+    EnableWindow(s->start,!s->active && !s->sort);
+    EnableWindow(s->stop,s->active || s->sort); EnableWindow(s->pause,s->active);
+    SetWindowTextA(s->pause,s->paused ? "Resume" : "Pause");
+    Pager(s);
+}
+static void Status(BrowserSearch *s,const char *state)
+{
+    char text[640],note[640],date[64]; DWORD matches=s->indexing ? s->indexPosition : s->store.count;
+    wsprintfA(text,"%s: %lu match(es), %lu checked.\r\n%lu folder(s) skipped.",UiText(state),matches,s->visited,s->skipped);
+    UiMarkTranslated(text); lstrcpyA(note,text);
+    if(s->indexed) {
+        DateText(&s->indexInfo.updated,date,sizeof(date));
+        wsprintfA(note,"%s\r\nIndex snapshot: %s. Refresh after changes.",text,date); UiMarkTranslated(note);
     }
-    ShowWindow(search->window, SW_SHOWNORMAL); SetForegroundWindow(search->window);
-    if (!query[0] || !lstrcmpA(query, "*.*")) lstrcpyA(search->pattern, "*");
+    if(s->active && !s->indexed && s->scan.current[0]) {
+        int n=lstrlenA(text); if(n+4+lstrlenA(s->scan.current)<(int)sizeof(text)) { lstrcatA(text,"\r\n"); lstrcatA(text,s->scan.current); }
+    }
+    SetWindowTextA(s->resultNote,note); SetWindowTextA(s->status,text);
+    EnableWindow(s->report,s->skipped>0); Pager(s);
+}
+void BrowserSearchReadFields(BrowserSearch *s)
+{
+    GetWindowTextA(s->name,s->options.name,sizeof(s->options.name));
+    GetWindowTextA(s->scope,s->options.locations,sizeof(s->options.locations));
+    s->options.recursive=SendMessageA(s->recursive,BM_GETCHECK,0,0)==BST_CHECKED;
+}
+void BrowserSearchWriteFields(BrowserSearch *s)
+{
+    UiSetLiteralWindowTextA(s->name,s->options.name); UiSetLiteralWindowTextA(s->scope,s->options.locations);
+    SendMessageA(s->recursive,BM_SETCHECK,s->options.recursive ? BST_CHECKED : BST_UNCHECKED,0);
+}
+void BrowserSearchIndexText(BrowserSearch *s,char *text,int capacity)
+{
+    SearchStore store; SearchIndexInfo *info=EnvAlloc(sizeof(*info)); char date[64],time[64]; DWORD error; FILETIME local; SYSTEMTIME system;
+    (void)s;
+    if(!info) { lstrcpynA(text,UiText("Index unavailable."),capacity); return; }
+    error=SearchIndexOpen(env.dataDir,NULL,&store,info);
+    if(error) lstrcpynA(text,UiText(error==ERROR_FILE_NOT_FOUND ? "No index yet. Update it to enable faster searches." : "Index unavailable. Use normal search or rebuild the index."),capacity);
     else {
-        int i; BOOL wildcard = FALSE;
-        for (i = 0; query[i]; ++i) if (query[i] == '*' || query[i] == '?') wildcard = TRUE;
-        if (wildcard) lstrcpyA(search->pattern, query); else wsprintfA(search->pattern, "*%s*", query);
+        date[0]=time[0]=0;
+        if(FileTimeToLocalFileTime(&info->updated,&local) && FileTimeToSystemTime(&local,&system)) {
+            GetDateFormatA(LOCALE_USER_DEFAULT,DATE_SHORTDATE,&system,NULL,date,sizeof(date));
+            GetTimeFormatA(LOCALE_USER_DEFAULT,0,&system,NULL,time,sizeof(time));
+        }
+        char note[256]; wsprintfA(note,"Updated: %s %s\r\n%lu entries; %lu folder(s) skipped.\r\nThe snapshot may be out of date.",date,time,info->count,info->skipped);
+        UiMarkTranslated(note); lstrcpynA(text,note,capacity); SearchStoreClose(&store);
     }
-    CharUpperBuffA(search->pattern, lstrlenA(search->pattern));
-    search->descend = SendMessageA(search->recursive, BM_GETCHECK, 0, 0) == BST_CHECKED;
-    search->active = TRUE; EnableWindow(search->start, FALSE); EnableWindow(search->stop, TRUE);
-    PushFrame(search, full);
-    if (!search->frame) BrowserSearchStop(browser, TRUE);
-    else if (!SetTimer(browser->window, 11, 30, NULL)) {
-        BrowserSearchStop(browser, FALSE); BrowserError(browser->window, "Cannot start the search timer.", ERROR_NOT_ENOUGH_MEMORY);
-    } else SearchStatus(search, "Searching");
+    EnvFree(info);
+}
+void BrowserSearchStop(Browser *browser,BOOL finished)
+{
+    BrowserSearch *s=browser->search; BOOL working; if(!s) return;
+    working=s->active || s->sort;
+    KillTimer(browser->window,11); SearchScanStop(&s->scan); SearchStoreClose(&s->indexReader);
+    if(s->indexBuild.mutex) SearchIndexAbort(&s->indexBuild);
+    if(s->sort) { SearchSortCancel(s->sort); s->sort=NULL; }
+    if(working) Status(s,finished ? "Complete" : "Stopped");
+    s->active=s->paused=FALSE; Buttons(s);
+}
+static void ClearResults(BrowserSearch *s)
+{
+    ListView_DeleteAllItems(s->results); SearchStoreClose(&s->store);
+    s->first=s->shown=s->error=s->visited=s->skipped=s->indexPosition=0;
+    s->limited=FALSE; Pager(s);
+}
+void BrowserSearchBegin(BrowserSearch *s,BOOL indexing)
+{
+    SearchQuery *query; SearchStore fresh; DWORD error;
+    if(s->busy) return;
+    BrowserSearchReadFields(s); query=EnvAlloc(sizeof(*query));
+    if(!query) { BrowserError(s->browser->window,"Cannot prepare the search.",ERROR_NOT_ENOUGH_MEMORY); return; }
+    error=SearchQueryPrepare(query,&s->options);
+    if(error) { EnvFree(query); BrowserError(s->browser->window,"Check locations, size limits and dates (YYYY-MM-DD).",error); return; }
+    BrowserSearchStop(s->browser,FALSE);
+    s->query=*query; EnvFree(query); s->indexing=indexing; s->indexed=FALSE;
+    if(indexing) error=SearchIndexBegin(env.dataDir,&s->query,&s->indexBuild);
+    else {
+        error=SearchStoreCreate(&fresh,NULL);
+        if(!error) { ClearResults(s); s->store=fresh; }
+    }
+    if(error) { BrowserError(s->browser->window,indexing ? "Cannot start updating the index." : "Cannot create search result storage.",error); return; }
+    s->visited=s->skipped=s->indexPosition=s->error=0; s->limited=FALSE;
+    SearchScanBegin(&s->scan,&s->query,indexing);
+    if(!indexing && s->query.options.useIndex && !SearchIndexOpen(env.dataDir,&s->query,&s->indexReader,&s->indexInfo)) {
+        s->indexed=TRUE; s->skipped=s->indexInfo.skipped;
+    }
+    s->active=TRUE; s->paused=FALSE; Buttons(s);
+    if(!SetTimer(s->browser->window,11,30,NULL)) {
+        BrowserSearchStop(s->browser,FALSE); BrowserError(s->browser->window,"Cannot start the search timer.",ERROR_NOT_ENOUGH_MEMORY); return;
+    }
+    Status(s,indexing ? "Indexing" : s->query.options.useIndex && !s->indexed ? "Searching folders (index unavailable)" : "Searching");
+    if(!indexing) { ShowWindow(s->window,SW_SHOWNORMAL); SetForegroundWindow(s->window); }
+}
+static BOOL OwnFile(BrowserSearch *s,const char *path)
+{
+    char index[MAX_PATH],backup[MAX_PATH];
+    if(!lstrcmpiA(path,s->store.path) || !lstrcmpiA(path,s->indexBuild.store.path)) return TRUE;
+    if(!EnvJoin(index,env.dataDir,"SearchIndex.dat")) return FALSE;
+    if(!lstrcmpiA(path,index)) return TRUE;
+    wsprintfA(backup,"%s.bak",index); if(!lstrcmpiA(path,backup)) return TRUE;
+    wsprintfA(backup,"%s.lck",index); return !lstrcmpiA(path,backup);
 }
 void BrowserSearchTick(Browser *browser)
 {
-    BrowserSearch *search = browser->search; DWORD started = GetTickCount(); int batch;
-    if (!search || !search->active) return;
-    for (batch = 0; batch < 32 && search->frame && GetTickCount() - started < 15; ++batch) {
-        SearchFrame *frame = search->frame; WIN32_FIND_DATAA data; char path[MAX_PATH]; BOOL folder;
-        if (!frame->ready && !FindNextFileA(frame->find, &frame->data)) {
-            if (GetLastError() != ERROR_NO_MORE_FILES) ++search->skipped;
-            PopFrame(search); continue;
+    BrowserSearch *s=browser->search; DWORD started=GetTickCount(),batch=0;
+    if(!s || s->busy || s->paused) return;
+    if(s->sort) {
+        BOOL done=FALSE;
+        do { s->error=SearchSortTick(s->sort,&done); } while(!s->error && !done && GetTickCount()-started<15);
+        if(done || s->error) {
+            SearchSortCancel(s->sort); s->sort=NULL; KillTimer(browser->window,11);
+            if(s->error) BrowserError(s->window,"Cannot sort search results.",s->error);
+            else LoadPage(s,0);
+            Buttons(s); Status(s,s->error ? "Stopped" : "Sorted");
         }
-        data = frame->data; frame->ready = FALSE;
-        if (!lstrcmpA(data.cFileName, ".") || !lstrcmpA(data.cFileName, "..")) continue;
-        if (!browser->options.hidden && (data.dwFileAttributes & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM))) continue;
-        if (!EnvJoin(path, frame->path, data.cFileName)) { ++search->skipped; continue; }
-        if(!lstrcmpiA(path,search->store.path)) continue;
-        folder = (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
-        if (Matches(search->pattern, data.cFileName)) {
-            DWORD index=search->store.count;
-            search->error=SearchStoreAppend(&search->store,path,folder);
-            if(search->error) { search->limited=TRUE; break; }
-            if(index>=search->first && index-search->first<SEARCH_PAGE_SIZE) {
-                SearchStoreRecord record; record.folder=folder; lstrcpyA(record.path,path);
-                if(!AddRow(search,&record)) { search->limited=TRUE; search->error=ERROR_NOT_ENOUGH_MEMORY; break; }
+        return;
+    }
+    if(!s->active) return;
+    while(batch++<(s->indexed ? 1024UL : 128UL) && GetTickCount()-started<15) {
+        SearchStoreRecord record; BOOL found=FALSE,more=TRUE;
+        if(s->indexed) {
+            DWORD count;
+            more=s->indexPosition<s->indexReader.count;
+            if(more) {
+                s->error=SearchStoreReadPage(&s->indexReader,s->indexPosition++,&record,1,&count);
+                if(!s->error && count==1 && SearchAbsolutePath(record.path)) { found=TRUE; ++s->visited; }
+                else if(!s->error) s->error=ERROR_INVALID_DATA;
             }
+        } else {
+            more=SearchScanNext(&s->scan,&record,&found); s->visited=s->scan.visited; s->skipped=s->scan.skipped;
+            if(s->scan.error) s->error=s->scan.error;
         }
-        /* Reparse points do not exist on Win95; skipping them avoids junction
-         * cycles when the same source is tested on newer hosts. */
-        if (folder && search->descend && !(data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) PushFrame(search, path);
-        if (search->limited) break;
+        if(s->error) break;
+        if(!more) {
+            if(s->indexing) {
+                s->indexBuild.info.skipped=s->skipped;
+                s->error=SearchIndexCommit(&s->indexBuild);
+            }
+            s->active=FALSE; KillTimer(browser->window,11); SearchScanStop(&s->scan); SearchStoreClose(&s->indexReader);
+            Buttons(s); Status(s,s->indexing ? "Index updated" : "Complete"); break;
+        }
+        if(!found || OwnFile(s,record.path)) continue;
+        if(s->indexing) {
+            s->error=SearchStoreAppendRecord(&s->indexBuild.store,&record); s->indexPosition=s->indexBuild.store.count;
+        } else if(SearchQueryMatch(&s->query,&record)) {
+            DWORD index=s->store.count;
+            s->error=SearchStoreAppendRecord(&s->store,&record);
+            if(!s->error && index>=s->first && index-s->first<SEARCH_PAGE_SIZE && !AddRow(s,&record)) s->error=ERROR_NOT_ENOUGH_MEMORY;
+        }
+        if(s->error) break;
     }
-    if (!search->frame || search->limited) {
-        BrowserSearchStop(browser,TRUE);
-        if(search->error) BrowserError(browser->window,"Cannot store search results.",search->error);
-    }
-    else SearchStatus(search, "Searching");
+    if(s->error) {
+        DWORD error=s->error; s->limited=TRUE; BrowserSearchStop(browser,FALSE);
+        BrowserError(s->window,s->indexing ? "Cannot update the index. The previous snapshot was kept." : "Cannot store search results.",error);
+    } else if(s->active) Status(s,s->indexing ? "Indexing" : "Searching");
 }
-static void OpenResult(BrowserSearch *search, BOOL containing)
+static SearchStoreRecord *Selected(BrowserSearch *s)
 {
-    Browser *browser = search->browser; LVITEMA item; SearchStoreRecord *result;
-    ZeroMemory(&item, sizeof(item)); item.mask = LVIF_PARAM;
-    item.iItem = ListView_GetNextItem(search->results, -1, LVNI_SELECTED);
-    if (item.iItem < 0 || !ListView_GetItem(search->results, &item)) return;
-    if(item.lParam>=0 && (UINT_PTR)item.lParam<search->shown) {
-        result=&search->page[item.lParam];
-            char path[MAX_PATH]; lstrcpyA(path, result->path);
-            if (!containing && !result->folder) EnvironmentLaunch(browser->window, path, NULL, NULL);
-            else {
-                int length = lstrlenA(path); const char *name; FileEntry *entry; int i; BOOL navigated = FALSE;
-                while (length && path[length - 1] != '\\') --length;
-                name = result->path + length;
-                if (length > 3) --length;
-                path[length] = 0;
-                if (result->folder && !containing) navigated = BrowserNavigate(browser, result->path, NULL, -1);
-                else if ((navigated = BrowserNavigate(browser, path, NULL, -1))) {
-                    for (entry = browser->entries; entry; entry = entry->next) if (!lstrcmpiA(entry->name, name)) {
-                        for (i = 0; i < ListView_GetItemCount(browser->files); ++i) {
-                            LVITEMA item; ZeroMemory(&item, sizeof(item)); item.mask = LVIF_PARAM; item.iItem = i;
-                            if (ListView_GetItem(browser->files, &item) && (FileEntry *)item.lParam == entry) {
-                                ListView_SetItemState(browser->files, -1, 0, LVIS_SELECTED);
-                                ListView_SetItemState(browser->files, i, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
-                                ListView_EnsureVisible(browser->files, i, FALSE); break;
-                            }
-                        }
-                        break;
-                    }
+    LVITEMA item; ZeroMemory(&item,sizeof(item)); item.mask=LVIF_PARAM;
+    item.iItem=ListView_GetNextItem(s->results,-1,LVNI_SELECTED);
+    if(item.iItem<0 || !ListView_GetItem(s->results,&item) || item.lParam<0 || (UINT_PTR)item.lParam>=s->shown) return NULL;
+    return &s->page[item.lParam];
+}
+static BOOL Current(BrowserSearch *s,const SearchStoreRecord *record)
+{
+    DWORD attributes;
+    if(!SearchAbsolutePath(record->path)) { BrowserError(s->window,"Invalid search result.",ERROR_INVALID_DATA); return FALSE; }
+    attributes=GetFileAttributesA(record->path);
+    if(attributes==INVALID_FILE_ATTRIBUTES || !!(attributes&FILE_ATTRIBUTE_DIRECTORY)!=!!record->folder) {
+        BrowserError(s->window,"This result is no longer available. Search again or refresh the index.",ERROR_FILE_NOT_FOUND); return FALSE;
+    }
+    return TRUE;
+}
+static void OpenResult(BrowserSearch *s,BOOL containing)
+{
+    SearchStoreRecord *selected=Selected(s),record; Browser *browser=s->browser; BOOL navigated=FALSE;
+    if(!selected || s->busy) return;
+    record=*selected; if(!Current(s,&record)) return;
+    if(!containing && !record.folder) EnvironmentLaunch(s->window,record.path,NULL,NULL);
+    else if(record.folder && !containing) navigated=BrowserNavigate(browser,record.path,NULL,-1);
+    else {
+        char folder[MAX_PATH]; FileEntry *entry; int i;
+        SearchRecordFolder(&record,folder); navigated=BrowserNavigate(browser,folder,NULL,-1);
+        if(navigated) for(entry=browser->entries;entry;entry=entry->next) if(!lstrcmpiA(entry->name,SearchRecordName(&record))) {
+            for(i=0;i<ListView_GetItemCount(browser->files);++i) {
+                LVITEMA item; ZeroMemory(&item,sizeof(item)); item.mask=LVIF_PARAM; item.iItem=i;
+                if(ListView_GetItem(browser->files,&item) && (FileEntry *)item.lParam==entry) {
+                    ListView_SetItemState(browser->files,-1,0,LVIS_SELECTED|LVIS_FOCUSED);
+                    ListView_SetItemState(browser->files,i,LVIS_SELECTED|LVIS_FOCUSED,LVIS_SELECTED|LVIS_FOCUSED);
+                    ListView_EnsureVisible(browser->files,i,FALSE); break;
                 }
-                if (navigated) { ShowWindow(search->window, SW_HIDE); SetForegroundWindow(browser->window); }
             }
+            break;
+        }
     }
+    if(navigated) { ShowWindow(s->window,SW_HIDE); SetForegroundWindow(browser->window); }
 }
-static LRESULT CALLBACK ResultsProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
+static void CopyPath(BrowserSearch *s)
 {
-    BrowserSearch *search = (BrowserSearch *)GetWindowLongPtrA(window, GWLP_USERDATA);
-    if (message == WM_CREATE) {
-        LVCOLUMNA column; SHFILEINFOA info; HIMAGELIST images; int i;
-        search = (BrowserSearch *)((CREATESTRUCTA *)lp)->lpCreateParams;
-        SetWindowLongPtrA(window, GWLP_USERDATA, (LONG_PTR)search);
-        search->results = BrowserControl(window, WC_LISTVIEWA, "", WS_BORDER | WS_TABSTOP | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | LVS_SHAREIMAGELISTS, ID_SEARCH_RESULTS);
-        search->resultNote = BrowserControl(window, "STATIC", "", 0, 0);
-        search->open = BrowserControl(window, "BUTTON", "Open", WS_TABSTOP | BS_DEFPUSHBUTTON, ID_SEARCH_OPEN);
-        search->openFolder = BrowserControl(window, "BUTTON", "Open containing folder", WS_TABSTOP, ID_SEARCH_OPEN_FOLDER);
-        search->previousPage=BrowserControl(window,"BUTTON","Previous page",WS_TABSTOP,ID_SEARCH_PREVIOUS);
-        search->nextPage=BrowserControl(window,"BUTTON","Next page",WS_TABSTOP,ID_SEARCH_NEXT);
-        search->pageLabel=BrowserControl(window,"STATIC","",0,ID_SEARCH_PAGE);
-        if (!search->results || !search->resultNote || !search->open || !search->openFolder ||
-            !search->previousPage || !search->nextPage || !search->pageLabel) return -1;
-        Pager(search);
-        images = (HIMAGELIST)SHGetFileInfoA("file.txt", FILE_ATTRIBUTE_NORMAL, &info, sizeof(info), SHGFI_USEFILEATTRIBUTES | SHGFI_SYSICONINDEX | SHGFI_SMALLICON);
-        if (images) ListView_SetImageList(search->results, images, LVSIL_SMALL);
-        ZeroMemory(&column, sizeof(column)); column.mask = LVCF_TEXT | LVCF_WIDTH;
-        for (i = 0; i < 3; ++i) {
-            column.pszText = i == 0 ? "Name" : i == 1 ? "In folder" : "Type"; column.cx = i == 0 ? 190 : i == 1 ? 260 : 120;
-            ListView_InsertColumn(search->results, i, &column);
+    SearchStoreRecord *record=Selected(s); HGLOBAL memory; char *text;
+    if(!record || !OpenClipboard(s->window)) return;
+    memory=GlobalAlloc(GMEM_MOVEABLE,lstrlenA(record->path)+1);
+    if(memory) {
+        text=GlobalLock(memory);
+        if(text) { lstrcpyA(text,record->path); GlobalUnlock(memory); if(EmptyClipboard() && SetClipboardData(CF_TEXT,memory)) memory=NULL; }
+        if(memory) GlobalFree(memory);
+    }
+    CloseClipboard();
+}
+static void Context(BrowserSearch *s,LPARAM coordinates)
+{
+    SearchStoreRecord *selected=Selected(s),record; IContextMenu *context; HMENU menu; POINT point; UINT command; char verb[80]={0};
+    if(!selected || s->busy) return;
+    record=*selected; if(!Current(s,&record)) return;
+    if(coordinates==(LPARAM)-1) { RECT rect; GetWindowRect(s->results,&rect); point.x=rect.left+20; point.y=rect.top+20; }
+    else { point.x=(short)LOWORD(coordinates); point.y=(short)HIWORD(coordinates); }
+    context=ShellPathContext(s->window,record.path); menu=CreatePopupMenu();
+    if(!menu) { if(context) IContextMenu_Release(context); return; }
+    AppendMenuA(menu,MF_STRING,0x7000,"Open");
+    AppendMenuA(menu,MF_STRING,0x7001,"Open containing folder");
+    AppendMenuA(menu,MF_STRING,0x7002,"Copy path\tCtrl+Shift+C");
+    if(context) {
+        AppendMenuA(menu,MF_SEPARATOR,0,NULL);
+        IContextMenu_QueryContextMenu(context,menu,GetMenuItemCount(menu),1,0x6fff,CMF_NORMAL|CMF_CANRENAME);
+        if(record.folder) ShellFolderMenuUnique(context,menu);
+        IContextMenu_QueryInterface(context,&IID_IContextMenu2,(void **)&s->context);
+    }
+    s->busy=TRUE;
+    command=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_RIGHTBUTTON,point.x,point.y,0,s->window,NULL);
+    if(command>=1 && command<=0x6fff && context) {
+        IContextMenu_GetCommandString(context,command-1,GCS_VERBA,NULL,verb,sizeof(verb));
+        if(lstrcmpiA(verb,"open") && lstrcmpiA(verb,"explore") && lstrcmpiA(verb,"rename") && lstrcmpiA(verb,"find")) {
+            CMINVOKECOMMANDINFO invoke; ZeroMemory(&invoke,sizeof(invoke)); invoke.cbSize=sizeof(invoke); invoke.hwnd=s->window;
+            invoke.lpVerb=MAKEINTRESOURCEA(command-1); invoke.nShow=SW_SHOWNORMAL; IContextMenu_InvokeCommand(context,&invoke);
         }
-        EnableWindow(search->open, FALSE); EnableWindow(search->openFolder, FALSE); return 0;
     }
-    if (!search) return DefWindowProcA(window, message, wp, lp);
-    switch (message) {
+    if(s->context) { IContextMenu2_Release(s->context); s->context=NULL; }
+    DestroyMenu(menu); if(context) IContextMenu_Release(context); s->busy=FALSE;
+    if(command==0x7000 || !lstrcmpiA(verb,"open") || !lstrcmpiA(verb,"explore")) OpenResult(s,FALSE);
+    else if(command==0x7001 || !lstrcmpiA(verb,"rename")) {
+        OpenResult(s,TRUE); if(!lstrcmpiA(verb,"rename")) SendMessageA(s->browser->window,WM_COMMAND,ID_RENAME,0);
+    } else if(command==0x7002) CopyPath(s);
+    else if(!lstrcmpiA(verb,"find") && record.folder) BrowserFindInFolder(record.path);
+    if(s->closePending) PostMessageA(s->browser->window,WM_CLOSE,0,0);
+}
+static void SortResults(BrowserSearch *s,int column)
+{
+    DWORD error;
+    if(s->active || s->sort || s->busy || column==2 || !s->store.count) return;
+    s->descending=s->sortColumn==column ? !s->descending : FALSE; s->sortColumn=column;
+    s->sort=SearchSortBegin(&s->store,column,s->descending,&error);
+    if(!s->sort) { BrowserError(s->window,"Cannot sort search results.",error); return; }
+    s->indexing=FALSE;
+    if(!SetTimer(s->browser->window,11,30,NULL)) { SearchSortCancel(s->sort); s->sort=NULL; BrowserError(s->window,"Cannot start the search timer.",ERROR_NOT_ENOUGH_MEMORY); return; }
+    Buttons(s); Status(s,"Sorting");
+}
+static LRESULT CALLBACK ResultsProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
+{
+    BrowserSearch *s=(BrowserSearch *)GetWindowLongPtrA(window,GWLP_USERDATA);
+    if(message==WM_CREATE) {
+        LVCOLUMNA column; SHFILEINFOA info; HIMAGELIST images; int i;
+        const char *names[]={"Name","In folder","Type","Size","Modified"};
+        s=(BrowserSearch *)((CREATESTRUCTA *)lp)->lpCreateParams; SetWindowLongPtrA(window,GWLP_USERDATA,(LONG_PTR)s);
+        s->results=BrowserControl(window,WC_LISTVIEWA,"",WS_BORDER|WS_TABSTOP|LVS_REPORT|LVS_SINGLESEL|LVS_SHOWSELALWAYS|LVS_SHAREIMAGELISTS,ID_SEARCH_RESULTS);
+        s->resultNote=BrowserControl(window,"STATIC","",0,0);
+        s->open=BrowserControl(window,"BUTTON","Open",WS_TABSTOP|BS_DEFPUSHBUTTON,ID_SEARCH_OPEN);
+        s->openFolder=BrowserControl(window,"BUTTON","Open containing folder",WS_TABSTOP,ID_SEARCH_OPEN_FOLDER);
+        s->previousPage=BrowserControl(window,"BUTTON","Previous page",WS_TABSTOP,ID_SEARCH_PREVIOUS);
+        s->nextPage=BrowserControl(window,"BUTTON","Next page",WS_TABSTOP,ID_SEARCH_NEXT);
+        s->pageLabel=BrowserControl(window,"STATIC","",0,ID_SEARCH_PAGE);
+        if(!s->results || !s->resultNote || !s->open || !s->openFolder || !s->previousPage || !s->nextPage || !s->pageLabel ||
+           !BrowserControl(window,"BUTTON","Copy path",WS_TABSTOP,ID_SEARCH_COPY_PATH)) return -1;
+        images=(HIMAGELIST)SHGetFileInfoA("file.txt",FILE_ATTRIBUTE_NORMAL,&info,sizeof(info),SHGFI_USEFILEATTRIBUTES|SHGFI_SYSICONINDEX|SHGFI_SMALLICON);
+        if(images) ListView_SetImageList(s->results,images,LVSIL_SMALL);
+        ZeroMemory(&column,sizeof(column)); column.mask=LVCF_TEXT|LVCF_WIDTH;
+        for(i=0;i<5;++i) { column.pszText=(char *)names[i]; column.cx=i<2 ? 140 : i==3 ? 70 : 90; ListView_InsertColumn(s->results,i,&column); }
+        EnableWindow(s->open,FALSE); EnableWindow(s->openFolder,FALSE); EnableWindow(GetDlgItem(window,ID_SEARCH_COPY_PATH),FALSE);
+        Pager(s); return 0;
+    }
+    if(!s) return DefWindowProcA(window,message,wp,lp);
+    if(s->context && (message==WM_DRAWITEM || message==WM_MEASUREITEM || message==WM_INITMENUPOPUP)) {
+        if(SUCCEEDED(IContextMenu2_HandleMenuMsg(s->context,message,wp,lp))) return message==WM_INITMENUPOPUP ? 0 : TRUE;
+    }
+    switch(message) {
     case WM_SIZE: {
-        RECT rect; int pager=search->store.count>SEARCH_PAGE_SIZE ? 32 : 0; GetClientRect(window, &rect);
-        EnvMoveControl(search->results, 6, 6, rect.right - 12, rect.bottom > 76+pager ? rect.bottom - 76-pager : 1);
-        ListView_SetColumnWidth(search->results, 1, rect.right > 430 ? rect.right - 330 : 100);
-        EnvMoveControl(search->resultNote, 8, rect.bottom - 64-pager, rect.right - 16, 28);
-        EnvMoveControl(search->previousPage,8,rect.bottom-64,88,24);
-        EnvMoveControl(search->nextPage,104,rect.bottom-64,88,24);
-        EnvMoveControl(search->pageLabel,200,rect.bottom-60,rect.right-208,20);
-        EnvMoveControl(search->open, 8, rect.bottom - 30, 80, 24);
-        EnvMoveControl(search->openFolder, 96, rect.bottom - 30, 160, 24); return 0;
+        RECT rect; int pager=s->store.count>SEARCH_PAGE_SIZE ? 32 : 0; GetClientRect(window,&rect);
+        EnvMoveControl(s->results,6,6,rect.right-12,rect.bottom>100+pager ? rect.bottom-100-pager : 1);
+        ListView_SetColumnWidth(s->results,1,rect.right>560 ? rect.right-420 : 130);
+        EnvMoveControl(s->resultNote,8,rect.bottom-88-pager,rect.right-16,50);
+        EnvMoveControl(s->previousPage,8,rect.bottom-64,88,24); EnvMoveControl(s->nextPage,104,rect.bottom-64,88,24);
+        EnvMoveControl(s->pageLabel,200,rect.bottom-60,rect.right-208,20);
+        EnvMoveControl(s->open,8,rect.bottom-30,80,24); EnvMoveControl(s->openFolder,96,rect.bottom-30,160,24);
+        EnvMoveControl(GetDlgItem(window,ID_SEARCH_COPY_PATH),264,rect.bottom-30,104,24); return 0;
     }
-    case WM_GETMINMAXINFO: ((MINMAXINFO *)lp)->ptMinTrackSize.x = 380; ((MINMAXINFO *)lp)->ptMinTrackSize.y = 240; return 0;
-    case WM_SETFOCUS: SetFocus(search->results); return 0;
+    case WM_GETMINMAXINFO: ((MINMAXINFO *)lp)->ptMinTrackSize.x=390; ((MINMAXINFO *)lp)->ptMinTrackSize.y=260; return 0;
+    case WM_SETFOCUS: SetFocus(s->results); return 0;
     case WM_NOTIFY: {
-        NMHDR *header = (NMHDR *)lp;
-        if (header->idFrom == ID_SEARCH_RESULTS) {
-            if (header->code == NM_DBLCLK) OpenResult(search, FALSE);
-            if (header->code == LVN_ITEMCHANGED) {
-                BOOL selected = ListView_GetSelectedCount(search->results) > 0;
-                EnableWindow(search->open, selected); EnableWindow(search->openFolder, selected);
+        NMHDR *header=(NMHDR *)lp;
+        if(header->idFrom==ID_SEARCH_RESULTS) {
+            if(header->code==NM_DBLCLK) OpenResult(s,FALSE);
+            if(header->code==LVN_COLUMNCLICK) SortResults(s,((NMLISTVIEW *)lp)->iSubItem);
+            if(header->code==LVN_ITEMCHANGED) {
+                BOOL selected=ListView_GetSelectedCount(s->results)>0;
+                EnableWindow(s->open,selected); EnableWindow(s->openFolder,selected); EnableWindow(GetDlgItem(window,ID_SEARCH_COPY_PATH),selected);
             }
         }
         return 0;
     }
+    case WM_CONTEXTMENU: if((HWND)wp==s->results) Context(s,lp); return 0;
     case WM_COMMAND:
-        if (LOWORD(wp) == ID_SEARCH_OPEN || LOWORD(wp) == ID_SEARCH_OPEN_FOLDER) OpenResult(search, LOWORD(wp) == ID_SEARCH_OPEN_FOLDER);
-        if(LOWORD(wp)==ID_SEARCH_PREVIOUS && search->first>=SEARCH_PAGE_SIZE) LoadPage(search,search->first-SEARCH_PAGE_SIZE);
-        if(LOWORD(wp)==ID_SEARCH_NEXT && search->first+SEARCH_PAGE_SIZE<search->store.count) LoadPage(search,search->first+SEARCH_PAGE_SIZE);
+        if(s->busy) return 0;
+        if(LOWORD(wp)==ID_SEARCH_OPEN || LOWORD(wp)==ID_SEARCH_OPEN_FOLDER) OpenResult(s,LOWORD(wp)==ID_SEARCH_OPEN_FOLDER);
+        if(LOWORD(wp)==ID_SEARCH_COPY_PATH) CopyPath(s);
+        if(!s->sort && LOWORD(wp)==ID_SEARCH_PREVIOUS && s->first>=SEARCH_PAGE_SIZE) LoadPage(s,s->first-SEARCH_PAGE_SIZE);
+        if(!s->sort && LOWORD(wp)==ID_SEARCH_NEXT && s->first+SEARCH_PAGE_SIZE<s->store.count) LoadPage(s,s->first+SEARCH_PAGE_SIZE);
         return 0;
-    case WM_CLOSE: BrowserSearchStop(search->browser, FALSE); ShowWindow(window, SW_HIDE); return 0;
-    case WM_SYSCOLORCHANGE: PaintNotifySystemColors(window, TRUE); return 0;
+    case WM_CLOSE: if(!s->busy) { BrowserSearchStop(s->browser,FALSE); ShowWindow(window,SW_HIDE); } return 0;
+    case WM_SYSCOLORCHANGE: PaintNotifySystemColors(window,TRUE); return 0;
     }
-    return DefWindowProcA(window, message, wp, lp);
+    return DefWindowProcA(window,message,wp,lp);
 }
 BOOL BrowserSearchRegister(void)
 {
-    WNDCLASSA cls; ZeroMemory(&cls, sizeof(cls)); cls.hInstance = browserInstance; cls.hCursor = LoadCursorA(NULL, IDC_ARROW);
-    cls.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1); cls.lpfnWndProc = ResultsProc; cls.lpszClassName = BROWSER_SEARCH_CLASS;
-    return RegisterClassA(&cls) != 0;
+    WNDCLASSA cls; ZeroMemory(&cls,sizeof(cls)); cls.hInstance=browserInstance; cls.hCursor=LoadCursorA(NULL,IDC_ARROW);
+    cls.hbrBackground=(HBRUSH)(COLOR_BTNFACE+1); cls.lpfnWndProc=ResultsProc; cls.lpszClassName=BROWSER_SEARCH_CLASS;
+    return RegisterClassA(&cls)!=0 && BrowserSearchDialogsRegister();
 }
 BOOL BrowserSearchTranslate(MSG *message)
 {
-    HWND root = message->hwnd;
-    while (root && (GetWindowLongA(root, GWL_STYLE) & WS_CHILD)) root = GetParent(root);
-    if (message->message == WM_KEYDOWN) {
-        if (message->wParam == VK_ESCAPE) { SendMessageA(root, WM_CLOSE, 0, 0); return TRUE; }
-        if (message->wParam == VK_RETURN && GetDlgCtrlID(message->hwnd) == ID_SEARCH_RESULTS) {
-            SendMessageA(root, WM_COMMAND, ID_SEARCH_OPEN, 0); return TRUE;
+    HWND root=message->hwnd;
+    while(root && (GetWindowLongA(root,GWL_STYLE)&WS_CHILD)) root=GetParent(root);
+    if(message->message==WM_KEYDOWN) {
+        if(message->wParam==VK_ESCAPE) { SendMessageA(root,WM_CLOSE,0,0); return TRUE; }
+        if(message->wParam=='C' && GetKeyState(VK_CONTROL)<0 && GetKeyState(VK_SHIFT)<0) { SendMessageA(root,WM_COMMAND,ID_SEARCH_COPY_PATH,0); return TRUE; }
+        if(message->wParam==VK_RETURN) {
+            if(GetDlgCtrlID(message->hwnd)==ID_SEARCH_RESULTS) SendMessageA(root,WM_COMMAND,ID_SEARCH_OPEN,0);
+            else { char kind[24]; GetClassNameA(message->hwnd,kind,sizeof(kind)); if(!lstrcmpiA(kind,"BUTTON")) SendMessageA(message->hwnd,BM_CLICK,0,0); }
+            return TRUE;
         }
-        return IsDialogMessageA(root, message);
+        return IsDialogMessageA(root,message);
     }
     return FALSE;
 }
-BOOL BrowserSearchCommand(Browser *browser, int command, int notification)
+BOOL BrowserSearchCommand(Browser *browser,int command,int notification)
 {
-    BrowserSearch *search = browser->search; (void)notification;
-    if (!search) return FALSE;
-    if (command == ID_SEARCH_START) { StartSearch(browser); return TRUE; }
-    if (command == ID_SEARCH_STOP) { BrowserSearchStop(browser, FALSE); return TRUE; }
-    if (command == ID_SEARCH_SHOW_RESULTS) { ShowWindow(search->window, SW_SHOWNORMAL); SetForegroundWindow(search->window); return TRUE; }
+    BrowserSearch *s=browser->search; (void)notification;
+    if(!s || s->busy) return FALSE;
+    switch(command) {
+    case ID_SEARCH_START: BrowserSearchBegin(s,FALSE); return TRUE;
+    case ID_SEARCH_STOP: BrowserSearchStop(browser,FALSE); return TRUE;
+    case ID_SEARCH_SHOW_RESULTS: ShowWindow(s->window,SW_SHOWNORMAL); SetForegroundWindow(s->window); return TRUE;
+    case ID_SEARCH_BROWSE: BrowserSearchBrowse(s,browser->window,s->scope,TRUE); return TRUE;
+    case ID_SEARCH_ADVANCED: BrowserSearchOptionsOpen(s,0); return TRUE;
+    case ID_SEARCH_SAVED: BrowserSearchSavedOpen(s); return TRUE;
+    case ID_SEARCH_INDEX: BrowserSearchOptionsOpen(s,2); return TRUE;
+    case ID_SEARCH_REPORT: BrowserSearchReportOpen(s); return TRUE;
+    case ID_SEARCH_PAUSE:
+        if(s->active) {
+            s->paused=!s->paused;
+            if(s->paused) KillTimer(browser->window,11);
+            else if(!SetTimer(browser->window,11,30,NULL)) { BrowserSearchStop(browser,FALSE); return TRUE; }
+            Buttons(s); Status(s,s->paused ? "Paused" : s->indexing ? "Indexing" : "Searching");
+        }
+        return TRUE;
+    }
     return FALSE;
 }
-BOOL BrowserSearchCreate(Browser *browser, HWND parent)
+BOOL BrowserSearchDeferClose(Browser *browser)
 {
-    BrowserSearch *search; RECT area; int width, height;
-    if (browser->search) return TRUE;
-    search = EnvAlloc(sizeof(*search)); if (!search) return FALSE;
-    browser->search = search; search->parent = parent; search->browser = browser;
-    search->nameLabel = BrowserControl(parent, "STATIC", "All or part of the file name:", 0, 0);
-    search->name = BrowserControl(parent, "EDIT", "", WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL, ID_SEARCH_NAME);
-    SendMessageA(search->name, EM_LIMITTEXT, BROWSER_SEARCH_QUERY_SIZE-1, 0);
-    search->scopeLabel = BrowserControl(parent, "STATIC", "Look in:", 0, 0);
-    search->scope = BrowserControl(parent, "EDIT", browser->path, WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL, ID_SEARCH_SCOPE);
-    SendMessageA(search->scope, EM_LIMITTEXT, MAX_PATH - 1, 0);
-    if (!browser->path[0]) { char root[MAX_PATH]; GetWindowsDirectoryA(root, MAX_PATH); if (root[1] == ':') root[3] = 0; SetWindowTextA(search->scope, root); }
-    search->recursive = BrowserControl(parent, "BUTTON", "Include subfolders", WS_TABSTOP | BS_AUTOCHECKBOX, ID_SEARCH_RECURSIVE);
-    SendMessageA(search->recursive, BM_SETCHECK, BST_CHECKED, 0);
-    search->start = BrowserControl(parent, "BUTTON", "Search", WS_TABSTOP, ID_SEARCH_START);
-    search->stop = BrowserControl(parent, "BUTTON", "Stop", WS_TABSTOP, ID_SEARCH_STOP); EnableWindow(search->stop, FALSE);
-    search->status = BrowserControl(parent, "STATIC", "Results open in a separate window.\r\nDouble-click a result to open it.", 0, ID_SEARCH_STATUS);
-    search->show = BrowserControl(parent, "BUTTON", "Show results", WS_TABSTOP, ID_SEARCH_SHOW_RESULTS);
-    SystemParametersInfoA(SPI_GETWORKAREA, 0, &area, 0);
-    width = area.right - area.left; if (width > 580) width = 580;
-    height = area.bottom - area.top; if (height > 380) height = 380;
-    search->window = CreateWindowExA(WS_EX_CONTROLPARENT, BROWSER_SEARCH_CLASS, "Search Results", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
-        area.left + (area.right - area.left - width) / 2, area.top + (area.bottom - area.top - height) / 2, width, height,
-        browser->window, NULL, browserInstance, search);
-    if (!search->nameLabel || !search->name || !search->scopeLabel || !search->scope || !search->recursive ||
-        !search->start || !search->stop || !search->status || !search->show || !search->window) { BrowserSearchDestroy(browser); return FALSE; }
-    return TRUE;
+    if(!browser->search || !browser->search->busy) return FALSE;
+    browser->search->closePending=TRUE; return TRUE;
 }
-void BrowserSearchLayout(Browser *browser, int width, int height, BOOL show)
+BOOL BrowserSearchCreate(Browser *browser,HWND parent)
 {
-    BrowserSearch *s = browser->search; HWND controls[9]; int i; (void)height;
-    if (!s) return;
-    controls[0] = s->nameLabel; controls[1] = s->name; controls[2] = s->scopeLabel; controls[3] = s->scope;
-    controls[4] = s->recursive; controls[5] = s->start; controls[6] = s->stop; controls[7] = s->status; controls[8] = s->show;
-    for (i = 0; i < 9; ++i) EnvShowControl(controls[i], show);
-    if (!show) { BrowserSearchStop(browser, FALSE); return; }
-    EnvMoveControl(s->nameLabel, 8, 8, width - 16, 34); EnvMoveControl(s->name, 8, 43, width - 16, 23);
-    EnvMoveControl(s->scopeLabel, 8, 73, width - 16, 18); EnvMoveControl(s->scope, 8, 93, width - 16, 23);
-    EnvMoveControl(s->recursive, 8, 122, width - 16, 23);
-    EnvMoveControl(s->start, 8, 151, (width - 24) / 2, 25); EnvMoveControl(s->stop, (width + 8) / 2, 151, (width - 24) / 2, 25);
-    EnvMoveControl(s->status, 8, 183, width - 16, 48);
-    EnvMoveControl(s->show, 8, 235, width - 16, 26);
+    BrowserSearch *s; RECT area; int width,height; char root[MAX_PATH];
+    if(browser->search) return TRUE;
+    s=EnvAlloc(sizeof(*s)); if(!s) return FALSE;
+    browser->search=s; s->parent=parent; s->browser=browser; s->sortColumn=-1;
+    s->nameLabel=BrowserControl(parent,"STATIC","All or part of the file name:",0,0);
+    s->name=BrowserControl(parent,"EDIT","",WS_BORDER|WS_TABSTOP|ES_AUTOHSCROLL,ID_SEARCH_NAME); SendMessageA(s->name,EM_LIMITTEXT,BROWSER_SEARCH_QUERY_SIZE-1,0);
+    s->scopeLabel=BrowserControl(parent,"STATIC","Look in:",0,0);
+    s->scope=BrowserControl(parent,"EDIT","",WS_BORDER|WS_TABSTOP|ES_AUTOHSCROLL,ID_SEARCH_SCOPE); SendMessageA(s->scope,EM_LIMITTEXT,SEARCH_LOCATIONS_SIZE-1,0);
+    s->browse=BrowserControl(parent,"BUTTON","...",WS_TABSTOP,ID_SEARCH_BROWSE);
+    s->recursive=BrowserControl(parent,"BUTTON","Include subfolders",WS_TABSTOP|BS_AUTOCHECKBOX,ID_SEARCH_RECURSIVE);
+    s->start=BrowserControl(parent,"BUTTON","Search",WS_TABSTOP,ID_SEARCH_START); s->stop=BrowserControl(parent,"BUTTON","Stop",WS_TABSTOP,ID_SEARCH_STOP);
+    s->pause=BrowserControl(parent,"BUTTON","Pause",WS_TABSTOP,ID_SEARCH_PAUSE); s->show=BrowserControl(parent,"BUTTON","Show results",WS_TABSTOP,ID_SEARCH_SHOW_RESULTS);
+    s->advanced=BrowserControl(parent,"BUTTON","Filters...",WS_TABSTOP,ID_SEARCH_ADVANCED); s->saved=BrowserControl(parent,"BUTTON","Saved...",WS_TABSTOP,ID_SEARCH_SAVED);
+    s->indexButton=BrowserControl(parent,"BUTTON","Index...",WS_TABSTOP,ID_SEARCH_INDEX); s->report=BrowserControl(parent,"BUTTON","Report...",WS_TABSTOP,ID_SEARCH_REPORT);
+    s->status=BrowserControl(parent,"STATIC","Results open in a separate window.\r\nDouble-click a result to open it.",0,ID_SEARCH_STATUS);
+    lstrcpyA(root,browser->path);
+    if(!root[0]) { GetWindowsDirectoryA(root,MAX_PATH); if(root[1]==':') root[3]=0; }
+    SearchOptionsDefault(&s->options,root,browser->options.hidden);
+    s->options.useIndex=!!GetPrivateProfileIntA("FileSearch","UseIndex",FALSE,env.ini); BrowserSearchWriteFields(s);
+    SystemParametersInfoA(SPI_GETWORKAREA,0,&area,0); width=area.right-area.left; if(width>620) width=620;
+    height=area.bottom-area.top; if(height>420) height=420;
+    s->window=CreateWindowExA(WS_EX_CONTROLPARENT,BROWSER_SEARCH_CLASS,"Search Results",WS_OVERLAPPEDWINDOW|WS_CLIPCHILDREN,
+        area.left+(area.right-area.left-width)/2,area.top+(area.bottom-area.top-height)/2,width,height,browser->window,NULL,browserInstance,s);
+    if(!s->nameLabel || !s->name || !s->scopeLabel || !s->scope || !s->recursive || !s->start || !s->stop || !s->status || !s->show || !s->window ||
+       !s->browse || !s->pause || !s->advanced || !s->saved || !s->indexButton || !s->report) { BrowserSearchDestroy(browser); return FALSE; }
+    Buttons(s); EnableWindow(s->report,FALSE); return TRUE;
+}
+static int Controls(BrowserSearch *s,HWND *controls)
+{
+    HWND list[]={s->nameLabel,s->name,s->scopeLabel,s->scope,s->recursive,s->start,s->stop,s->status,s->show,s->browse,s->pause,s->advanced,s->saved,s->indexButton,s->report};
+    CopyMemory(controls,list,sizeof(list)); return sizeof(list)/sizeof(list[0]);
+}
+void BrowserSearchLayout(Browser *browser,int width,int height,BOOL show)
+{
+    BrowserSearch *s=browser->search; HWND controls[15]; int i,count,half=(width-24)/2;
+    if(!s) return;
+    count=Controls(s,controls); for(i=0;i<count;++i) EnvShowControl(controls[i],show);
+    if(!show) { BrowserSearchStop(browser,FALSE); return; }
+    EnvMoveControl(s->nameLabel,8,6,width-16,30); EnvMoveControl(s->name,8,36,width-16,23);
+    EnvMoveControl(s->scopeLabel,8,65,width-16,18); EnvMoveControl(s->scope,8,85,width-50,23); EnvMoveControl(s->browse,width-36,85,28,23);
+    EnvMoveControl(s->recursive,8,113,width-16,22);
+    EnvMoveControl(s->start,8,141,half,25); EnvMoveControl(s->stop,half+16,141,half,25);
+    EnvMoveControl(s->pause,8,171,half,25); EnvMoveControl(s->show,half+16,171,half,25);
+    EnvMoveControl(s->advanced,8,201,half,25); EnvMoveControl(s->saved,half+16,201,half,25);
+    EnvMoveControl(s->indexButton,8,231,half,25); EnvMoveControl(s->report,half+16,231,half,25);
+    EnvMoveControl(s->status,8,264,width-16,height>264 ? height-264 : 1);
 }
 void BrowserSearchDestroy(Browser *browser)
 {
-    HWND controls[9]; BrowserSearch *s = browser->search; int i;
-    if (!browser->search) return;
-    BrowserSearchStop(browser, FALSE); ClearResults(s);
-    controls[0] = s->nameLabel; controls[1] = s->name; controls[2] = s->scopeLabel; controls[3] = s->scope;
-    if (s->window) DestroyWindow(s->window);
-    controls[4] = s->recursive; controls[5] = s->start; controls[6] = s->stop; controls[7] = s->status; controls[8] = s->show;
-    for (i = 0; i < 9; ++i) if (controls[i]) DestroyWindow(controls[i]);
-    EnvFree(s); browser->search = NULL;
+    BrowserSearch *s=browser->search; HWND controls[15]; int i,count;
+    if(!s) return;
+    BrowserSearchStop(browser,FALSE);
+    if(s->dialog) DestroyWindow(s->dialog);
+    if(s->savedWindow) DestroyWindow(s->savedWindow);
+    if(s->reportWindow) DestroyWindow(s->reportWindow);
+    if(s->window) DestroyWindow(s->window);
+    SearchStoreClose(&s->store); count=Controls(s,controls);
+    for(i=0;i<count;++i) if(controls[i]) DestroyWindow(controls[i]);
+    EnvFree(s); browser->search=NULL;
 }
 HWND BrowserFindInFolder(const char *directory)
 {
     char root[MAX_PATH]; HWND window; Browser *browser;
-    if(!directory || !*directory) {
-        if(!GetWindowsDirectoryA(root,MAX_PATH)) return NULL;
-        if(root[1]==':') root[3]=0;
-        directory=root;
-    }
+    if(!directory || !*directory) { if(!GetWindowsDirectoryA(root,MAX_PATH)) return NULL; if(root[1]==':') root[3]=0; directory=root; }
     window=BrowserOpen(directory); if(!window) return NULL;
-    browser=(Browser *)GetWindowLongPtrA(window,GWLP_USERDATA);
-    BrowserSetPane(browser,BROWSER_PANE_SEARCH);
+    browser=(Browser *)GetWindowLongPtrA(window,GWLP_USERDATA); BrowserSetPane(browser,BROWSER_PANE_SEARCH);
     if(!browser->search) { DestroyWindow(window); return NULL; }
     return window;
 }
@@ -387,7 +501,6 @@ HWND BrowserFindFiles(const char *query)
     HWND window; Browser *browser;
     if(!query || !query[0] || lstrlenA(query)>=BROWSER_SEARCH_QUERY_SIZE) return NULL;
     window=BrowserFindInFolder(NULL); if(!window) return NULL;
-    browser=(Browser *)GetWindowLongPtrA(window,GWLP_USERDATA);
-    UiSetLiteralWindowTextA(browser->search->name,query);
-    StartSearch(browser); return window;
+    browser=(Browser *)GetWindowLongPtrA(window,GWLP_USERDATA); UiSetLiteralWindowTextA(browser->search->name,query);
+    BrowserSearchBegin(browser->search,FALSE); return window;
 }

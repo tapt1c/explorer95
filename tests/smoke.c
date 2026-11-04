@@ -1206,6 +1206,7 @@ static void MoveTestPointer(LONG x,LONG y)
 #include "appbar_cases.h"
 #include "shell_applet_cases.h"
 #include "search_store_cases.h"
+#include "search_query_cases.h"
 #include "shell_startup_cases.h"
 #include "task_groups_cases.h"
 #include "task_switch_cases.h"
@@ -2041,6 +2042,7 @@ void start(void)
     if(group==GROUP_SESSION) goto cleanup;
     if(group==GROUP_LANGUAGE) { ShutdownDosTests(settingsDir); LanguageTests(settingsDir); LanguageRestartTests(settingsDir,executable); goto cleanup; }
     if(group==GROUP_FULL || group==GROUP_CORE || group==GROUP_BROWSER) SearchStoreTests(settingsDir);
+    if(group==GROUP_FULL || group==GROUP_CORE || group==GROUP_BROWSER) SearchUpgradeBackendTests(settingsDir);
     if(group==GROUP_FULL || group==GROUP_CORE || group==GROUP_BROWSER) ArchiveTests(settingsDir);
     if (group == GROUP_FULL || group == GROUP_CORE || group == GROUP_BROWSER) ShellNewTests(settingsDir, module);
     if (group == GROUP_FULL || group == GROUP_CORE || group == GROUP_BROWSER) FileDropRegistrationTests();

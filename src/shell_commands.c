@@ -97,6 +97,29 @@ HRESULT ShellCommandDefault(IContextMenu *context, HWND owner)
     }
     DestroyMenu(menu); return result;
 }
+IContextMenu *ShellPathContext(HWND owner,const char *path)
+{
+    IShellFolder *desktop=NULL,*parent=NULL; IContextMenu *context=NULL;
+    LPITEMIDLIST absolute=NULL,tail=NULL; LPCITEMIDLIST child; WCHAR wide[MAX_PATH]; UINT offset=0,last=0;
+    if(!MultiByteToWideChar(CP_ACP,0,path,-1,wide,MAX_PATH) || FAILED(SHGetDesktopFolder(&desktop))) return NULL;
+    if(SUCCEEDED(IShellFolder_ParseDisplayName(desktop,owner,NULL,wide,NULL,&absolute,NULL)) && absolute) {
+        while(((LPCITEMIDLIST)((BYTE *)absolute+offset))->mkid.cb) {
+            last=offset; offset+=((LPCITEMIDLIST)((BYTE *)absolute+offset))->mkid.cb;
+        }
+        child=(LPCITEMIDLIST)((BYTE *)absolute+last);
+        tail=CoTaskMemAlloc(offset-last+2);
+        if(tail) {
+            CopyMemory(tail,child,offset-last+2); ((LPITEMIDLIST)((BYTE *)absolute+last))->mkid.cb=0;
+            if(!last) { parent=desktop; IShellFolder_AddRef(parent); }
+            else IShellFolder_BindToObject(desktop,absolute,NULL,&IID_IShellFolder,(void **)&parent);
+            if(parent) IShellFolder_GetUIObjectOf(parent,owner,1,(LPCITEMIDLIST *)&tail,&IID_IContextMenu,NULL,(void **)&context);
+        }
+    }
+    if(tail) CoTaskMemFree(tail);
+    if(parent) IShellFolder_Release(parent);
+    if(absolute) CoTaskMemFree(absolute);
+    IShellFolder_Release(desktop); return context;
+}
 HRESULT ShellNamespaceInvoke(HWND owner, LPCITEMIDLIST absolute)
 {
     IShellFolder *desktop=NULL,*parent=NULL; IContextMenu *context=NULL;

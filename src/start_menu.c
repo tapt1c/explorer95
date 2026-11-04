@@ -738,26 +738,7 @@ static void MorePopup(BOOL pins)
     if (command) SendMessageA(env.start, WM_COMMAND, command, 0);
 }
 static IContextMenu *ApplicationShellContext(const char *path)
-{
-    IShellFolder *desktop=NULL,*parent=NULL; IContextMenu *context=NULL;
-    LPITEMIDLIST absolute=NULL; LPCITEMIDLIST child; WCHAR wide[MAX_PATH]; UINT offset=0,last=0;
-    if(!MultiByteToWideChar(CP_ACP,0,path,-1,wide,MAX_PATH) || FAILED(SHGetDesktopFolder(&desktop))) return NULL;
-    if(SUCCEEDED(IShellFolder_ParseDisplayName(desktop,env.start,NULL,wide,NULL,&absolute,NULL)) && absolute) {
-        while(((LPCITEMIDLIST)((BYTE *)absolute+offset))->mkid.cb) {
-            last=offset; offset+=((LPCITEMIDLIST)((BYTE *)absolute+offset))->mkid.cb;
-        }
-        child=(LPCITEMIDLIST)((BYTE *)absolute+last);
-        LPITEMIDLIST tail=JoinPidl(child,(LPCITEMIDLIST)"\0\0");
-        ((LPITEMIDLIST)((BYTE *)absolute+last))->mkid.cb=0;
-        if(!last) { parent=desktop; IShellFolder_AddRef(parent); }
-        else IShellFolder_BindToObject(desktop,absolute,NULL,&IID_IShellFolder,(void **)&parent);
-        if(parent && tail) IShellFolder_GetUIObjectOf(parent,env.start,1,(LPCITEMIDLIST *)&tail,&IID_IContextMenu,NULL,(void **)&context);
-        if(tail) CoTaskMemFree(tail);
-    }
-    if(parent) IShellFolder_Release(parent);
-    if(absolute) CoTaskMemFree(absolute);
-    IShellFolder_Release(desktop); return context;
-}
+{ return ShellPathContext(env.start,path); }
 static void ApplicationCommandContext(int id,POINT point)
 {
     PinnedProgram pin; char source[MAX_PATH]; BOOL pinned=FALSE,wasPopup=popupActive,program;
