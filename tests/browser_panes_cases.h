@@ -426,16 +426,18 @@ static void __attribute__((noinline)) BrowserAddressProgramTests(HWND browser,co
     Navigate(browser,fixture);
     Check(DeleteFileA(shortcut) && DeleteFileA(target) && RemoveDirectoryA(folder),"remove only our owned address-launch executable, shortcut and folder");
 }
-static void SearchResultText(HWND list,int index,char *text,int capacity)
+static void SearchResultCell(HWND list,int index,int column,char *text,int capacity)
 {
     LVITEMA item; BYTE *remote=VirtualAllocEx(process.hProcess,NULL,sizeof(item)+capacity,MEM_COMMIT|MEM_RESERVE,PAGE_READWRITE);
     Check(remote!=NULL,"allocate only the owned process's cross-process item-text buffer");
-    ZeroMemory(&item,sizeof(item)); item.pszText=(char *)(remote+sizeof(item)); item.cchTextMax=capacity;
+    ZeroMemory(&item,sizeof(item)); item.iSubItem=column; item.pszText=(char *)(remote+sizeof(item)); item.cchTextMax=capacity;
     Check(WriteProcessMemory(process.hProcess,remote,&item,sizeof(item),NULL),"marshal the paging item-text request");
     SendMessageA(list,LVM_GETITEMTEXTA,index,(LPARAM)remote);
     Check(ReadProcessMemory(process.hProcess,remote+sizeof(item),text,capacity,NULL),"read the owned paging result text");
     text[capacity-1]=0; VirtualFreeEx(process.hProcess,remote,0,MEM_RELEASE);
 }
+static void SearchResultText(HWND list,int index,char *text,int capacity)
+{ SearchResultCell(list,index,0,text,capacity); }
 static void BrowserSearchPagingTests(HWND browser,const char *fixture)
 {
     char folder[MAX_PATH],path[MAX_PATH],text[MAX_PATH],selected[MAX_PATH]; HANDLE file;
@@ -485,6 +487,7 @@ static void BrowserSearchPagingTests(HWND browser,const char *fixture)
     for(i=0;i<1100;++i) { wsprintfA(path,"%s\\entry%04d.txt",folder,i); if(!DeleteFileA(path)) Check(FALSE,"remove only our paging fixture files"); }
     Check(RemoveDirectoryA(folder),"remove only the owned paging fixture directory");
 }
+#include "search_ui_cases.h"
 static void BrowserPaneTests(HWND browser, const char *fixture, const char *settings)
 {
     HWND sidebar, list, options, toolbar, results; RECT original; char path[MAX_PATH], value[MAX_PATH + 32], root[MAX_PATH]; HANDLE file; DWORD started;
@@ -601,6 +604,7 @@ static void BrowserPaneTests(HWND browser, const char *fixture, const char *sett
     SendMessageA(results, WM_CLOSE, 0, 0);
     Check(DeleteFileA(path), "remove the nested search fixture");
     BrowserSearchPagingTests(browser,fixture);
+    BrowserSearchUpgradeUiTests(browser,fixture,settings);
     Navigate(browser, fixture); wsprintfA(path, "%s\\sub", fixture); Navigate(browser, path);
     wsprintfA(path, "%s\\empty", fixture); Navigate(browser, path);
     SendMessageA(browser, WM_COMMAND, ID_HISTORY, 0); PumpFor(60); list = PaneControl(browser, ID_HISTORY_LIST);

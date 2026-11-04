@@ -93,7 +93,7 @@ DWORD SearchIndexCommit(SearchIndexBuild *build)
     }
     wsprintfA(backup,"%s.bak",build->target);
     if(exists && !MoveFileA(build->target,backup)) return GetLastError();
-    if(!CloseHandle(build->store.file)) { error=GetLastError(); build->store.file=INVALID_HANDLE_VALUE; }
+    if(!CloseHandle(build->store.file)) { error=GetLastError(); if(!error) error=ERROR_WRITE_FAULT; build->store.file=INVALID_HANDLE_VALUE; }
     else { build->store.file=INVALID_HANDLE_VALUE; if(!MoveFileA(build->store.path,build->target)) error=GetLastError(); }
     if(error) {
         if(exists && !MoveFileA(backup,build->target)) return ERROR_CANNOT_MAKE;

@@ -38,6 +38,10 @@ BOOL BrowserSearchBrowse(BrowserSearch *search,HWND owner,HWND edit,BOOL append)
     BROWSEINFOA browse; LPITEMIDLIST pidl; char path[MAX_PATH],text[SEARCH_LOCATIONS_SIZE],*end; BOOL changed=FALSE;
     ZeroMemory(&browse,sizeof(browse)); browse.hwndOwner=owner; browse.ulFlags=BIF_RETURNONLYFSDIRS;
     search->busy=TRUE; pidl=SHBrowseForFolderA(&browse);
+    if(!search->browser) {
+        if(pidl) CoTaskMemFree(pidl);
+        BrowserSearchEndBusy(search); return FALSE;
+    }
     if(pidl) {
         if(SHGetPathFromIDListA(pidl,path)) {
             text[0]=0; if(append) GetWindowTextA(edit,text,sizeof(text));
@@ -48,14 +52,18 @@ BOOL BrowserSearchBrowse(BrowserSearch *search,HWND owner,HWND edit,BOOL append)
         }
         CoTaskMemFree(pidl);
     }
-    search->busy=FALSE;
-    if(search->closePending) PostMessageA(search->browser->window,WM_CLOSE,0,0);
+    BrowserSearchEndBusy(search);
     return changed;
 }
 static void ShowPage(SearchDialog *state)
 {
-    int i;
+    int i; HWND window=GetParent(state->controls[0]); BOOL visible=IsWindowVisible(window);
+    if(visible) SendMessageA(window,WM_SETREDRAW,FALSE,0);
     for(i=0;i<state->count;++i) ShowWindow(state->controls[i],state->pages[i]==state->page ? SW_SHOWNA : SW_HIDE);
+    if(visible) {
+        SendMessageA(window,WM_SETREDRAW,TRUE,0);
+        RedrawWindow(window,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_ALLCHILDREN|RDW_UPDATENOW);
+    }
 }
 static void AllDisks(HWND window)
 {
@@ -122,10 +130,10 @@ static LRESULT CALLBACK OptionsProc(HWND window,UINT message,WPARAM wp,LPARAM lp
         Control(window,state,1,"BUTTON","Add folder...",WS_TABSTOP,ID_LOCATION_ADD,16,96,166,24);
         Control(window,state,1,"BUTTON","All local hard disks",WS_TABSTOP,ID_SEARCH_ALL_DISKS,196,96,166,24);
         Edit(window,state,1,"Exclude folders (names, masks or full paths):",ID_SEARCH_EXCLUDE_FOLDERS,16,143,346,SEARCH_EXCLUSIONS_SIZE-1);
-        Control(window,state,1,"STATIC","Examples: TEMP;Cache;C:\\Backup\r\nQuote paths containing semicolons.\r\nUp to 16 locations. Overlapping recursive roots are scanned once.",0,0,16,196,346,100);
+        Control(window,state,1,"STATIC","Examples: TEMP;Cache;C:\\Backup\r\nQuote paths containing semicolons.\r\nUp to 32 locations. Overlapping recursive roots are scanned once.",0,0,16,196,346,100);
         CheckBox(window,state,2,"Use the disk index when available",ID_SEARCH_USE_INDEX,16,46,346);
         BrowserSearchIndexText(search,text,sizeof(text));
-        child=Control(window,state,2,"STATIC","",0,ID_INDEX_NOTE,16,80,346,92); UiSetLiteralWindowTextA(child,text);
+        child=Control(window,state,2,"STATIC","",0,ID_INDEX_NOTE,16,80,346,92); SetWindowTextA(child,text);
         Control(window,state,2,"BUTTON","Update index",WS_TABSTOP,ID_SEARCH_UPDATE_INDEX,16,184,166,26);
         Control(window,state,2,"BUTTON","Delete index",WS_TABSTOP,ID_SEARCH_CLEAR_INDEX,196,184,166,26);
         Control(window,state,2,"STATIC","Manual snapshot of the selected locations and excluded folders. Other filters do not limit indexing. Refresh after changing files. If the locations differ, search scans folders normally.",0,0,16,224,346,92);
@@ -140,10 +148,16 @@ static LRESULT CALLBACK OptionsProc(HWND window,UINT message,WPARAM wp,LPARAM lp
         SendDlgItemMessageA(window,ID_SEARCH_HIDDEN,BM_SETCHECK,state->draft.hidden ? BST_CHECKED : BST_UNCHECKED,0);
         SendDlgItemMessageA(window,ID_SEARCH_SYSTEM,BM_SETCHECK,state->draft.system ? BST_CHECKED : BST_UNCHECKED,0);
         SendDlgItemMessageA(window,ID_SEARCH_USE_INDEX,BM_SETCHECK,state->draft.useIndex ? BST_CHECKED : BST_UNCHECKED,0);
+        SetWindowPos(GetDlgItem(window,ID_SEARCH_TABS),HWND_BOTTOM,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
         ShowPage(state); return 0;
     }
     if(!state) return DefWindowProcA(window,message,wp,lp);
     switch(message) {
+    case WM_ERASEBKGND: PaintDialogBackground(window,(HDC)wp); return TRUE;
+    case WM_CTLCOLORSTATIC: case WM_CTLCOLORBTN:
+        SetBkColor((HDC)wp,GetSysColor(COLOR_BTNFACE));
+        SetTextColor((HDC)wp,GetSysColor((GetWindowLongA((HWND)lp,GWL_STYLE)&WS_DISABLED) ? COLOR_GRAYTEXT : COLOR_BTNTEXT));
+        return (LRESULT)(HBRUSH)(COLOR_BTNFACE+1);
     case WM_NOTIFY:
         if(((NMHDR *)lp)->idFrom==ID_SEARCH_TABS && ((NMHDR *)lp)->code==TCN_SELCHANGE) {
             state->page=(int)SendDlgItemMessageA(window,ID_SEARCH_TABS,TCM_GETCURSEL,0,0); ShowPage(state);
@@ -161,8 +175,9 @@ static LRESULT CALLBACK OptionsProc(HWND window,UINT message,WPARAM wp,LPARAM lp
             return 0;
         case ID_SEARCH_CLEAR_INDEX: {
             DWORD error=SearchIndexDelete(env.dataDir); char text[640];
-            if(error) BrowserError(window,"Cannot delete the search index.",error);
-            BrowserSearchIndexText(state->search,text,sizeof(text)); Literal(window,ID_INDEX_NOTE,text); return 0;
+            if(error) BrowserError(window,error==ERROR_INVALID_DATA ?
+                "Unrecognized SearchIndex.dat was kept. Rename it before creating a new index." : "Cannot delete the search index.",error);
+            BrowserSearchIndexText(state->search,text,sizeof(text)); SetWindowTextA(GetDlgItem(window,ID_INDEX_NOTE),text); return 0;
         }
         } break;
     case WM_CLOSE: DestroyWindow(window); return 0;
@@ -214,7 +229,7 @@ static LRESULT CALLBACK SavedProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
             int i,freeSlot=-1; char other[64]; SavedWrite save;
             GetDlgItemTextA(window,ID_SEARCH_SAVED_NAME,label,sizeof(label)); if(!label[0]) return 0;
             for(i=0;i<SEARCH_SAVED;++i) {
-                if(!SearchQueryRead(env.ini,i,other,&state->draft)) { if(freeSlot<0) freeSlot=i; }
+                if(!SearchQueryRead(env.ini,i,other,&state->draft)) { if(freeSlot<0 && !SearchQuerySlotUsed(env.ini,i)) freeSlot=i; }
                 else if(!lstrcmpiA(label,other)) { freeSlot=i; break; }
             }
             if(freeSlot<0) { MessageBoxA(window,"Up to 32 saved searches. Delete an old entry first.","Explorer95",MB_OK|MB_ICONINFORMATION); return 0; }
@@ -243,15 +258,16 @@ static LRESULT CALLBACK ReportProc(HWND window,UINT message,WPARAM wp,LPARAM lp)
 {
     BrowserSearch *search=(BrowserSearch *)GetWindowLongPtrA(window,GWLP_USERDATA);
     if(message==WM_CREATE) {
-        char *text=EnvAlloc(SEARCH_PROBLEMS*(MAX_PATH+48)+256),*end; DWORD i; HWND edit;
+        char *text=EnvAlloc(SEARCH_PROBLEMS*(MAX_PATH+48)+256),*end,heading[160]; DWORD i; HWND edit;
         search=(BrowserSearch *)((CREATESTRUCTA *)lp)->lpCreateParams;
         SetWindowLongPtrA(window,GWLP_USERDATA,(LONG_PTR)search);
         if(!text) return -1;
-        wsprintfA(text,"%lu folder(s) skipped. First %lu problems:\r\n",search->skipped,search->scan.problemCount); end=text+lstrlenA(text);
+        wsprintfA(heading,"%lu folder(s) skipped. First %lu problems:",search->skipped,search->scan.problemCount);
+        Control(window,NULL,0,"STATIC",heading,0,2,8,8,440,42); end=text;
         for(i=0;i<search->scan.problemCount;++i) {
-            wsprintfA(end,"%s  [error %lu]\r\n",search->scan.problems[i].path,search->scan.problems[i].error); end+=lstrlenA(end);
+            wsprintfA(end,"%s  [%lu]\r\n",search->scan.problems[i].path,search->scan.problems[i].error); end+=lstrlenA(end);
         }
-        edit=Control(window,NULL,0,"EDIT","",WS_BORDER|WS_TABSTOP|WS_VSCROLL|ES_MULTILINE|ES_READONLY|ES_AUTOVSCROLL,1,8,8,440,260);
+        edit=Control(window,NULL,0,"EDIT","",WS_BORDER|WS_TABSTOP|WS_VSCROLL|ES_MULTILINE|ES_READONLY|ES_AUTOVSCROLL,1,8,54,440,214);
         UiSetLiteralWindowTextA(edit,text); EnvFree(text);
         Control(window,NULL,0,"BUTTON","Close",WS_TABSTOP|BS_DEFPUSHBUTTON,IDCANCEL,368,280,80,26); return 0;
     }
@@ -300,10 +316,19 @@ BOOL BrowserSearchDialogsTranslate(MSG *message)
     while(root && (GetWindowLongA(root,GWL_STYLE)&WS_CHILD)) root=GetParent(root);
     GetClassNameA(root,kind,sizeof(kind));
     if(message->message==WM_KEYDOWN) {
-        if(message->wParam==VK_ESCAPE) { SendMessageA(root,WM_CLOSE,0,0); return TRUE; }
+        char control[32]; GetClassNameA(message->hwnd,control,sizeof(control));
+        BOOL combo=!lstrcmpiA(control,"ComboBox") && SendMessageA(message->hwnd,CB_GETDROPPEDSTATE,0,0);
+        if(message->wParam==VK_ESCAPE) {
+            if(combo) SendMessageA(message->hwnd,CB_SHOWDROPDOWN,FALSE,0);
+            else SendMessageA(root,WM_CLOSE,0,0);
+            return TRUE;
+        }
         if(message->wParam==VK_RETURN) {
-            char control[32]; GetClassNameA(message->hwnd,control,sizeof(control));
-            if(!lstrcmpiA(control,"BUTTON")) { SendMessageA(message->hwnd,BM_CLICK,0,0); return TRUE; }
+            if(combo) return FALSE;
+            if(!lstrcmpiA(control,"BUTTON")) {
+                LONG style=GetWindowLongA(message->hwnd,GWL_STYLE)&BS_TYPEMASK;
+                if(style==BS_PUSHBUTTON || style==BS_DEFPUSHBUTTON) { SendMessageA(message->hwnd,BM_CLICK,0,0); return TRUE; }
+            }
             SendMessageA(root,WM_COMMAND,!lstrcmpA(kind,SEARCH_OPTIONS_CLASS) ? IDOK : !lstrcmpA(kind,SEARCH_SAVED_CLASS) ? ID_SEARCH_RUN_SAVED : IDCANCEL,0); return TRUE;
         }
         if(message->wParam==VK_TAB && GetKeyState(VK_CONTROL)<0 && !lstrcmpA(kind,SEARCH_OPTIONS_CLASS)) {

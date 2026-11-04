@@ -569,7 +569,6 @@
   "Add folder...": "Добавить папку...",
   "All local hard disks": "Все локальные диски",
   "Exclude folders (names, masks or full paths):": "Исключить папки (имена, маски или пути):",
-  "Examples: TEMP;Cache;C:\\Backup\r\nQuote paths containing semicolons.\r\nUp to 16 locations. Overlapping recursive roots are scanned once.": "Пример: TEMP;Cache;C:\\Backup\r\nПути с точкой с запятой заключайте в кавычки.\r\nДо 16 мест поиска. Пересекающиеся деревья обходятся один раз.",
   "Use the disk index when available": "Использовать индекс на диске",
   "Update index": "Обновить индекс",
   "Delete index": "Удалить индекс",
@@ -612,5 +611,13 @@
   "Saved...": "Запросы...",
   "Index...": "Индекс...",
   "Report...": "Отчёт...",
-  "Modified": "Изменён"
+  "Modified": "Изменён",
+  "%s\r\nFolder scan.": "%s\r\nОбход папок.",
+  "Examples: TEMP;Cache;C:\\Backup\r\nQuote paths containing semicolons.\r\nUp to 32 locations. Overlapping recursive roots are scanned once.": "Пример: TEMP;Cache;C:\\Backup\r\nПути с точкой с запятой заключайте в кавычки.\r\nДо 32 мест поиска. Пересекающиеся деревья обходятся один раз.",
+  "Results": "Результаты",
+  "Size (bytes)": "Размер (байт)",
+  "%lu folder(s) skipped. First %lu problems:": "Пропущено папок: %lu. Первые %lu ошибок:",
+  "Index file is unrecognized. Rename SearchIndex.dat before rebuilding. Normal search still works.": "Файл индекса не распознан. Переименуйте SearchIndex.dat перед созданием индекса. Обычный поиск работает.",
+  "Unrecognized SearchIndex.dat was kept. Rename it before creating a new index.": "Нераспознанный SearchIndex.dat сохранён. Переименуйте его перед созданием индекса.",
+  "Cannot restore the index. Its previous snapshot remains in SearchIndex.dat.bak.": "Не удалось восстановить индекс. Предыдущий снимок сохранён в SearchIndex.dat.bak."
 }

@@ -7,6 +7,8 @@ static void SearchUpgradeBackendTests(const char *directory)
     SearchStore store,snapshot; SearchStoreRecord record,rows[2]; SearchSort *sort;
     char path[MAX_PATH],profile[MAX_PATH],label[64],original[MAX_PATH]; DWORD error,count,i,started; BOOL done;
     SearchOptionsDefault(&options,directory,FALSE); lstrcpyA(options.name,"*.jpg;*.bmp");
+    ZeroMemory(&record,sizeof(record)); record.sizeHigh=record.sizeLow=0xffffffffUL; SearchRecordSizeText(&record,path);
+    Check(!lstrcmpA(path,"18446744073709551615"),"file size formatting preserves the full 64-bit value without CRT arithmetic");
     Check(!SearchQueryPrepare(&query,&options),"prepare several filename masks without executing a command");
     ZeroMemory(&record,sizeof(record)); record.attributes=FILE_ATTRIBUTE_NORMAL; lstrcpyA(record.path,"C:\\photos\\Picture.JPG");
     Check(SearchQueryMatch(&query,&record),"filename masks use case-insensitive Windows ANSI matching");
@@ -44,6 +46,8 @@ static void SearchUpgradeBackendTests(const char *directory)
         "saved searches retain literal quotes, masks and all selected locations across reload");
     Check(SearchQueryWrite(profile,0,NULL,NULL) && !SearchQueryRead(profile,0,label,&restored) && DeleteFileA(profile),
         "deleting a saved query removes only its own section and test profile");
+    Check(WritePrivateProfileStringA("FileSearch0","Unknown","keep",profile) && SearchQuerySlotUsed(profile,0) &&
+        !SearchQuerySlotUsed(profile,1) && DeleteFileA(profile),"an unrecognised saved-query section is occupied rather than silently overwritten");
 
     Check(!SearchStoreCreate(&store,directory),"create only the disk-sort fixture store");
     for(i=1300;i>0;--i) {
@@ -68,6 +72,25 @@ static void SearchUpgradeBackendTests(const char *directory)
     Check(sort && !error && done,"date sorting can reverse the complete disk-backed result set"); SearchSortCancel(sort);
     Check(!SearchStoreReadPage(&store,0,rows,1,&count) && rows[0].modified.dwLowDateTime==1299 && SearchStoreClose(&store),
         "descending date sorting retains the correct record metadata and cleans its files");
+    Check(SUCCEEDED(OleInitialize(NULL)) && !SearchStoreCreate(&store,directory),"create only the native type-sort fixture");
+    for(i=0;i<20;++i) {
+        ZeroMemory(&record,sizeof(record)); record.attributes=FILE_ATTRIBUTE_NORMAL;
+        wsprintfA(record.path,"C:\\sort\\entry%02lu.%s",i,i%2 ? "bmp" : "txt");
+        Check(!SearchStoreAppendRecord(&store,&record),"append the bounded association-sort fixture");
+    }
+    sort=SearchSortBegin(&store,2,FALSE,&error); done=FALSE; started=GetTickCount();
+    while(sort && !error && !done && GetTickCount()-started<10000) error=SearchSortTick(sort,&done);
+    Check(sort && !error && done,"native type sorting cooperatively merges its shorter association runs"); SearchSortCancel(sort);
+    { char previous[80]={0}; BOOL ordered=TRUE;
+      for(i=0;i<20;++i) {
+        SHFILEINFOA type; ZeroMemory(&type,sizeof(type));
+        Check(!SearchStoreReadPage(&store,i,rows,1,&count) && count==1,"read the globally sorted native type record");
+        SHGetFileInfoA(rows[0].path,rows[0].attributes,&type,sizeof(type),SHGFI_USEFILEATTRIBUTES|SHGFI_TYPENAME);
+        if(i && lstrcmpiA(previous,type.szTypeName)>0) ordered=FALSE;
+        lstrcpynA(previous,type.szTypeName,sizeof(previous));
+      }
+      Check(ordered && SearchStoreClose(&store),"type order follows the installed system descriptions rather than guessed extensions"); }
+    OleUninitialize();
 
     SearchOptionsDefault(&options,directory,FALSE); Check(!SearchQueryPrepare(&query,&options),"prepare the private index scope");
     Check(!SearchIndexBegin(directory,&query,&build),"begin a private index transaction");

@@ -89,3 +89,20 @@ void SearchRecordFolder(const SearchStoreRecord *record,char *folder)
     if(length>3) --length;
     folder[length]=0;
 }
+void SearchRecordSizeText(const SearchStoreRecord *record,char *text)
+{
+    DWORD high=record->sizeHigh,low=record->sizeLow; char reverse[21]; int n=0;
+    if(record->folder) { text[0]=0; return; }
+    do {
+        DWORD qh=0,ql=0,remainder=0; int bit;
+        for(bit=63;bit>=0;--bit) {
+            remainder=remainder*2+(bit>=32 ? (high>>(bit-32))&1 : (low>>bit)&1);
+            if(remainder>=10) {
+                remainder-=10;
+                if(bit>=32) qh|=1UL<<(bit-32); else ql|=1UL<<bit;
+            }
+        }
+        reverse[n++]=(char)('0'+remainder); high=qh; low=ql;
+    } while(high || low);
+    { int i; for(i=0;i<n;++i) text[i]=reverse[n-i-1]; text[n]=0; }
+}

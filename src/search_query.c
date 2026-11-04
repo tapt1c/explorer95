@@ -52,6 +52,15 @@ static BOOL Date(const char *text,DWORD *value)
     if(year<1601 || month<1 || month>12 || day<1 || day>days[month-1]+(month==2 && !(year%4) && (year%100 || !(year%400)))) return FALSE;
     *value=year*10000+month*100+day; return TRUE;
 }
+static BOOL ValidMasks(const char *list)
+{
+    const char *p=list; char part[512];
+    while(*p) {
+        if(!Next(&p,part,sizeof(part))) return !*p;
+        if(!part[0]) return FALSE;
+    }
+    return TRUE;
+}
 void SearchOptionsDefault(SearchOptions *options,const char *directory,BOOL hidden)
 {
     ZeroMemory(options,sizeof(*options)); options->recursive=TRUE; options->hidden=options->system=!!hidden;
@@ -62,6 +71,7 @@ DWORD SearchQueryPrepare(SearchQuery *query,const SearchOptions *options)
     const char *p=options->locations; char part[MAX_PATH],full[MAX_PATH]; DWORD n,i,j; BOOL quoted=FALSE;
     ZeroMemory(query,sizeof(*query)); query->options=*options;
     if(options->mode>2 || options->exact>1 || options->recursive>1 || options->hidden>1 || options->system>1 || options->useIndex>1) return ERROR_INVALID_DATA;
+    if(!ValidMasks(options->name) || !ValidMasks(options->types) || !ValidMasks(options->excludeNames)) return ERROR_INVALID_DATA;
     if(!Number(options->minimum,&n) || n>4194303) return ERROR_INVALID_DATA;
     query->hasMinimum=!!options->minimum[0]; query->minimum=n*1024;
     if(!Number(options->maximum,&n) || n>4194303) return ERROR_INVALID_DATA;
@@ -90,8 +100,24 @@ DWORD SearchQueryPrepare(SearchQuery *query,const SearchOptions *options)
     /* Detect a malformed quoted exclusion before any directory enumeration. */
     for(p=options->excludeFolders;*p;++p) if(*p=='"') quoted=!quoted;
     if(quoted || !query->rootCount) return ERROR_BAD_PATHNAME;
-    p=options->excludeFolders;
-    while(*p) if(!Next(&p,part,sizeof(part))) { if(*p) return ERROR_BAD_PATHNAME; break; }
+    p=options->excludeFolders; query->options.excludeFolders[0]=0;
+    while(*p) {
+        if(!Next(&p,part,sizeof(part))) { if(*p) return ERROR_BAD_PATHNAME; break; }
+        if(!part[0]) return ERROR_BAD_PATHNAME;
+        if(SearchAbsolutePath(part)) {
+            n=GetFullPathNameA(part,MAX_PATH,full,NULL);
+            if(!n || n>=MAX_PATH) return ERROR_BAD_PATHNAME;
+            while(n>3 && full[n-1]=='\\') full[--n]=0;
+            lstrcpyA(part,full);
+        }
+        n=lstrlenA(query->options.excludeFolders);
+        if(n+lstrlenA(part)+4>=SEARCH_EXCLUSIONS_SIZE) return ERROR_INSUFFICIENT_BUFFER;
+        wsprintfA(query->options.excludeFolders+n,"%s\"%s\"",n ? ";" : "",part);
+    }
+    /* Canonical root order makes equivalent location lists share one index. */
+    for(i=1;i<query->rootCount;++i) for(j=i;j && lstrcmpiA(query->roots[j-1],query->roots[j])>0;--j) {
+        lstrcpyA(full,query->roots[j]); lstrcpyA(query->roots[j],query->roots[j-1]); lstrcpyA(query->roots[j-1],full);
+    }
     return ERROR_SUCCESS;
 }
 static BOOL Wildcard(const char *pattern,const char *name)
@@ -161,6 +187,12 @@ BOOL SearchQueryMatch(const SearchQuery *query,const SearchStoreRecord *record)
     return TRUE;
 }
 static void Section(int slot,char *section) { wsprintfA(section,"FileSearch%d",slot); }
+BOOL SearchQuerySlotUsed(const char *ini,int slot)
+{
+    char section[32],data[4];
+    if(slot<0 || slot>=SEARCH_SAVED) return TRUE;
+    Section(slot,section); return GetPrivateProfileSectionA(section,data,sizeof(data),ini)>0;
+}
 BOOL SearchQueryWrite(const char *ini,int slot,const char *label,const SearchOptions *o)
 {
     char section[32],text[SEARCH_LOCATIONS_SIZE+2]; BOOL okay=TRUE;

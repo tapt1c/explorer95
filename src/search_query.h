@@ -3,7 +3,7 @@
 #include "search_store.h"
 #define SEARCH_LOCATIONS_SIZE 2048
 #define SEARCH_EXCLUSIONS_SIZE 1024
-#define SEARCH_ROOTS 16
+#define SEARCH_ROOTS 32
 #define SEARCH_SAVED 32
 typedef struct SearchOptions {
     char name[512],locations[SEARCH_LOCATIONS_SIZE],excludeNames[512];
@@ -24,5 +24,6 @@ BOOL SearchPathWithin(const char *path,const char *folder);
 BOOL SearchAbsolutePath(const char *path);
 BOOL SearchQueryWrite(const char *ini,int slot,const char *label,const SearchOptions *options);
 BOOL SearchQueryRead(const char *ini,int slot,char *label,SearchOptions *options);
+BOOL SearchQuerySlotUsed(const char *ini,int slot);
 void SearchOptionsDefault(SearchOptions *options,const char *directory,BOOL hidden);
 #endif

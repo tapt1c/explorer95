@@ -16,6 +16,8 @@ DWORD SearchStoreReadPage(SearchStore *store,DWORD first,SearchStoreRecord *reco
 BOOL SearchStoreClose(SearchStore *store);
 const char *SearchRecordName(const SearchStoreRecord *record);
 void SearchRecordFolder(const SearchStoreRecord *record,char *folder);
+/* At most 20 ASCII decimal digits plus NUL; no CRT 64-bit division. */
+void SearchRecordSizeText(const SearchStoreRecord *record,char *text);
 /* External merge sort: fixed memory, cooperative ticks, original kept on cancel. */
 typedef struct SearchSort SearchSort;
 SearchSort *SearchSortBegin(SearchStore *store,int column,BOOL descending,DWORD *error);

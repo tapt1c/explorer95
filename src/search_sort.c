@@ -1,6 +1,7 @@
 /* Bottom-up external merge sort. Never materialise the whole result set. */
 #define WIN32_LEAN_AND_MEAN
 #include "search_store.h"
+#include <shellapi.h>
 struct SearchSort {
     SearchStore *original,input,output;
     SearchStoreRecord block[SEARCH_PAGE_SIZE],left,right;
@@ -15,6 +16,12 @@ static int Compare(SearchSort *sort,const SearchStoreRecord *a,const SearchStore
         char left[MAX_PATH],right[MAX_PATH]; SearchRecordFolder(a,left); SearchRecordFolder(b,right);
         result=lstrcmpiA(left,right);
     }
+    else if(sort->column==2) {
+        SHFILEINFOA left,right; ZeroMemory(&left,sizeof(left)); ZeroMemory(&right,sizeof(right));
+        SHGetFileInfoA(a->path,a->attributes,&left,sizeof(left),SHGFI_USEFILEATTRIBUTES|SHGFI_TYPENAME);
+        SHGetFileInfoA(b->path,b->attributes,&right,sizeof(right),SHGFI_USEFILEATTRIBUTES|SHGFI_TYPENAME);
+        result=lstrcmpiA(left.szTypeName,right.szTypeName);
+    }
     else if(sort->column==3) {
         if(a->sizeHigh!=b->sizeHigh) result=a->sizeHigh<b->sizeHigh ? -1 : 1;
         else if(a->sizeLow!=b->sizeLow) result=a->sizeLow<b->sizeLow ? -1 : 1;
@@ -27,7 +34,7 @@ SearchSort *SearchSortBegin(SearchStore *store,int column,BOOL descending,DWORD 
 {
     SearchSort *sort;
     *error=ERROR_INVALID_PARAMETER;
-    if(store->persistent || column<0 || column>4 || column==2) return NULL;
+    if(store->persistent || column<0 || column>4) return NULL;
     sort=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,sizeof(*sort));
     if(!sort) { *error=ERROR_NOT_ENOUGH_MEMORY; return NULL; }
     sort->original=store; sort->column=column; sort->descending=descending;
@@ -60,7 +67,10 @@ DWORD SearchSortTick(SearchSort *sort,BOOL *done)
     DWORD error=0,count,i,gap,started=GetTickCount(),batch=0;
     *done=FALSE;
     if(!sort->merging) {
-        error=SearchStoreReadPage(sort->original,sort->offset,sort->block,SEARCH_PAGE_SIZE,&count);
+        /* Native type descriptions may consult Shell32's association cache.
+         * Keep their initial runs short so registry work also yields often. */
+        DWORD run=sort->column==2 ? 16 : SEARCH_PAGE_SIZE;
+        error=SearchStoreReadPage(sort->original,sort->offset,sort->block,run,&count);
         if(error) return error;
         for(gap=count/2;gap;gap/=2) for(i=gap;i<count;++i) {
             SearchStoreRecord value=sort->block[i]; DWORD j=i;
@@ -74,7 +84,7 @@ DWORD SearchSortTick(SearchSort *sort,BOOL *done)
         }
         sort->offset+=count;
         if(sort->offset<sort->original->count) return ERROR_SUCCESS;
-        sort->run=SEARCH_PAGE_SIZE; sort->merging=TRUE;
+        sort->run=run; sort->merging=TRUE;
         if(sort->input.count>sort->run) {
             error=SearchStoreCreate(&sort->output,NULL); if(error) return error;
             Run(sort);

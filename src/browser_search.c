@@ -3,6 +3,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include "browser_search_internal.h"
 #include "shell_commands.h"
+#include "render_trace.h"
 #define EX95_LOCALIZE_UI
 #include "localization.h"
 
@@ -32,9 +33,7 @@ static BOOL AddRow(BrowserSearch *s,const SearchStoreRecord *record)
     index=ListView_InsertItem(s->results,&item); if(index<0) return FALSE;
     s->page[s->shown++]=*record;
     ListView_SetItemText(s->results,index,1,folder); ListView_SetItemText(s->results,index,2,info.szTypeName);
-    if(record->folder) text[0]=0;
-    else if(record->sizeHigh) lstrcpyA(text,UiText("> 4 GB"));
-    else wsprintfA(text,"%lu bytes",record->sizeLow);
+    SearchRecordSizeText(record,text);
     ListView_SetItemText(s->results,index,3,text); DateText(&record->modified,text,sizeof(text));
     ListView_SetItemText(s->results,index,4,text); return TRUE;
 }
@@ -67,9 +66,8 @@ static void Status(BrowserSearch *s,const char *state)
         DateText(&s->indexInfo.updated,date,sizeof(date));
         wsprintfA(note,"%s\r\nIndex snapshot: %s. Refresh after changes.",text,date); UiMarkTranslated(note);
     }
-    if(s->active && !s->indexed && s->scan.current[0]) {
-        int n=lstrlenA(text); if(n+4+lstrlenA(s->scan.current)<(int)sizeof(text)) { lstrcatA(text,"\r\n"); lstrcatA(text,s->scan.current); }
-    }
+    else if(!s->indexing) { wsprintfA(note,"%s\r\nFolder scan.",text); UiMarkTranslated(note); }
+    UiSetLiteralWindowTextA(GetDlgItem(s->window,ID_SEARCH_CURRENT),s->indexed ? "" : s->scan.current);
     SetWindowTextA(s->resultNote,note); SetWindowTextA(s->status,text);
     EnableWindow(s->report,s->skipped>0); Pager(s);
 }
@@ -88,9 +86,11 @@ void BrowserSearchIndexText(BrowserSearch *s,char *text,int capacity)
 {
     SearchStore store; SearchIndexInfo *info=EnvAlloc(sizeof(*info)); char date[64],time[64]; DWORD error; FILETIME local; SYSTEMTIME system;
     (void)s;
-    if(!info) { lstrcpynA(text,UiText("Index unavailable."),capacity); return; }
+    if(!info) { lstrcpynA(text,UiText("Index unavailable."),capacity); UiMarkTranslated(text); return; }
     error=SearchIndexOpen(env.dataDir,NULL,&store,info);
-    if(error) lstrcpynA(text,UiText(error==ERROR_FILE_NOT_FOUND ? "No index yet. Update it to enable faster searches." : "Index unavailable. Use normal search or rebuild the index."),capacity);
+    if(error) lstrcpynA(text,UiText(error==ERROR_FILE_NOT_FOUND ? "No index yet. Update it to enable faster searches." :
+        error==ERROR_INVALID_DATA ? "Index file is unrecognized. Rename SearchIndex.dat before rebuilding. Normal search still works." :
+        "Index unavailable. Use normal search or rebuild the index."),capacity);
     else {
         date[0]=time[0]=0;
         if(FileTimeToLocalFileTime(&info->updated,&local) && FileTimeToSystemTime(&local,&system)) {
@@ -100,7 +100,7 @@ void BrowserSearchIndexText(BrowserSearch *s,char *text,int capacity)
         char note[256]; wsprintfA(note,"Updated: %s %s\r\n%lu entries; %lu folder(s) skipped.\r\nThe snapshot may be out of date.",date,time,info->count,info->skipped);
         UiMarkTranslated(note); lstrcpynA(text,note,capacity); SearchStoreClose(&store);
     }
-    EnvFree(info);
+    UiMarkTranslated(text); EnvFree(info);
 }
 void BrowserSearchStop(Browser *browser,BOOL finished)
 {
@@ -152,6 +152,7 @@ static BOOL OwnFile(BrowserSearch *s,const char *path)
     if(!lstrcmpiA(path,s->store.path) || !lstrcmpiA(path,s->indexBuild.store.path)) return TRUE;
     if(!EnvJoin(index,env.dataDir,"SearchIndex.dat")) return FALSE;
     if(!lstrcmpiA(path,index)) return TRUE;
+    if(lstrlenA(index)+5>=MAX_PATH) return FALSE;
     wsprintfA(backup,"%s.bak",index); if(!lstrcmpiA(path,backup)) return TRUE;
     wsprintfA(backup,"%s.lck",index); return !lstrcmpiA(path,backup);
 }
@@ -191,6 +192,7 @@ void BrowserSearchTick(Browser *browser)
                 s->indexBuild.info.skipped=s->skipped;
                 s->error=SearchIndexCommit(&s->indexBuild);
             }
+            if(s->error) break;
             s->active=FALSE; KillTimer(browser->window,11); SearchScanStop(&s->scan); SearchStoreClose(&s->indexReader);
             Buttons(s); Status(s,s->indexing ? "Index updated" : "Complete"); break;
         }
@@ -206,7 +208,9 @@ void BrowserSearchTick(Browser *browser)
     }
     if(s->error) {
         DWORD error=s->error; s->limited=TRUE; BrowserSearchStop(browser,FALSE);
-        BrowserError(s->window,s->indexing ? "Cannot update the index. The previous snapshot was kept." : "Cannot store search results.",error);
+        BrowserError(s->window,s->indexing ? (error==ERROR_CANNOT_MAKE ?
+            "Cannot restore the index. Its previous snapshot remains in SearchIndex.dat.bak." :
+            "Cannot update the index. The previous snapshot was kept.") : "Cannot store search results.",error);
     } else if(s->active) Status(s,s->indexing ? "Indexing" : "Searching");
 }
 static SearchStoreRecord *Selected(BrowserSearch *s)
@@ -269,8 +273,12 @@ static void Context(BrowserSearch *s,LPARAM coordinates)
     record=*selected; if(!Current(s,&record)) return;
     if(coordinates==(LPARAM)-1) { RECT rect; GetWindowRect(s->results,&rect); point.x=rect.left+20; point.y=rect.top+20; }
     else { point.x=(short)LOWORD(coordinates); point.y=(short)HIWORD(coordinates); }
-    context=ShellPathContext(s->window,record.path); menu=CreatePopupMenu();
-    if(!menu) { if(context) IContextMenu_Release(context); return; }
+    s->busy=TRUE; context=ShellPathContext(s->window,record.path); menu=CreatePopupMenu();
+    if(!menu || !s->browser) {
+        if(context) IContextMenu_Release(context);
+        if(menu) DestroyMenu(menu);
+        BrowserSearchEndBusy(s); return;
+    }
     AppendMenuA(menu,MF_STRING,0x7000,"Open");
     AppendMenuA(menu,MF_STRING,0x7001,"Open containing folder");
     AppendMenuA(menu,MF_STRING,0x7002,"Copy path\tCtrl+Shift+C");
@@ -290,7 +298,8 @@ static void Context(BrowserSearch *s,LPARAM coordinates)
         }
     }
     if(s->context) { IContextMenu2_Release(s->context); s->context=NULL; }
-    DestroyMenu(menu); if(context) IContextMenu_Release(context); s->busy=FALSE;
+    DestroyMenu(menu); if(context) IContextMenu_Release(context);
+    if(!BrowserSearchEndBusy(s)) return;
     if(command==0x7000 || !lstrcmpiA(verb,"open") || !lstrcmpiA(verb,"explore")) OpenResult(s,FALSE);
     else if(command==0x7001 || !lstrcmpiA(verb,"rename")) {
         OpenResult(s,TRUE); if(!lstrcmpiA(verb,"rename")) SendMessageA(s->browser->window,WM_COMMAND,ID_RENAME,0);
@@ -301,8 +310,10 @@ static void Context(BrowserSearch *s,LPARAM coordinates)
 static void SortResults(BrowserSearch *s,int column)
 {
     DWORD error;
-    if(s->active || s->sort || s->busy || column==2 || !s->store.count) return;
+    RenderTraceShell("search.sort.request",0,column,(s->active ? 1 : 0)|(s->sort ? 2 : 0)|(s->busy ? 4 : 0));
+    if(s->active || s->sort || s->busy || !s->store.count) return;
     s->descending=s->sortColumn==column ? !s->descending : FALSE; s->sortColumn=column;
+    RenderTraceShell("search.sort.begin",0,column,s->descending);
     s->sort=SearchSortBegin(&s->store,column,s->descending,&error);
     if(!s->sort) { BrowserError(s->window,"Cannot sort search results.",error); return; }
     s->indexing=FALSE;
@@ -314,7 +325,7 @@ static LRESULT CALLBACK ResultsProc(HWND window,UINT message,WPARAM wp,LPARAM lp
     BrowserSearch *s=(BrowserSearch *)GetWindowLongPtrA(window,GWLP_USERDATA);
     if(message==WM_CREATE) {
         LVCOLUMNA column; SHFILEINFOA info; HIMAGELIST images; int i;
-        const char *names[]={"Name","In folder","Type","Size","Modified"};
+        const char *names[]={"Name","In folder","Type","Size (bytes)","Modified"};
         s=(BrowserSearch *)((CREATESTRUCTA *)lp)->lpCreateParams; SetWindowLongPtrA(window,GWLP_USERDATA,(LONG_PTR)s);
         s->results=BrowserControl(window,WC_LISTVIEWA,"",WS_BORDER|WS_TABSTOP|LVS_REPORT|LVS_SINGLESEL|LVS_SHOWSELALWAYS|LVS_SHAREIMAGELISTS,ID_SEARCH_RESULTS);
         s->resultNote=BrowserControl(window,"STATIC","",0,0);
@@ -324,11 +335,12 @@ static LRESULT CALLBACK ResultsProc(HWND window,UINT message,WPARAM wp,LPARAM lp
         s->nextPage=BrowserControl(window,"BUTTON","Next page",WS_TABSTOP,ID_SEARCH_NEXT);
         s->pageLabel=BrowserControl(window,"STATIC","",0,ID_SEARCH_PAGE);
         if(!s->results || !s->resultNote || !s->open || !s->openFolder || !s->previousPage || !s->nextPage || !s->pageLabel ||
-           !BrowserControl(window,"BUTTON","Copy path",WS_TABSTOP,ID_SEARCH_COPY_PATH)) return -1;
+           !BrowserControl(window,"BUTTON","Copy path",WS_TABSTOP,ID_SEARCH_COPY_PATH) ||
+           !BrowserControl(window,"EDIT","",ES_READONLY|ES_AUTOHSCROLL,ID_SEARCH_CURRENT)) return -1;
         images=(HIMAGELIST)SHGetFileInfoA("file.txt",FILE_ATTRIBUTE_NORMAL,&info,sizeof(info),SHGFI_USEFILEATTRIBUTES|SHGFI_SYSICONINDEX|SHGFI_SMALLICON);
         if(images) ListView_SetImageList(s->results,images,LVSIL_SMALL);
         ZeroMemory(&column,sizeof(column)); column.mask=LVCF_TEXT|LVCF_WIDTH;
-        for(i=0;i<5;++i) { column.pszText=(char *)names[i]; column.cx=i<2 ? 140 : i==3 ? 70 : 90; ListView_InsertColumn(s->results,i,&column); }
+        for(i=0;i<5;++i) { column.pszText=(char *)names[i]; column.cx=i<2 ? 140 : i==3 ? 100 : 90; ListView_InsertColumn(s->results,i,&column); }
         EnableWindow(s->open,FALSE); EnableWindow(s->openFolder,FALSE); EnableWindow(GetDlgItem(window,ID_SEARCH_COPY_PATH),FALSE);
         Pager(s); return 0;
     }
@@ -339,8 +351,9 @@ static LRESULT CALLBACK ResultsProc(HWND window,UINT message,WPARAM wp,LPARAM lp
     switch(message) {
     case WM_SIZE: {
         RECT rect; int pager=s->store.count>SEARCH_PAGE_SIZE ? 32 : 0; GetClientRect(window,&rect);
-        EnvMoveControl(s->results,6,6,rect.right-12,rect.bottom>100+pager ? rect.bottom-100-pager : 1);
-        ListView_SetColumnWidth(s->results,1,rect.right>560 ? rect.right-420 : 130);
+        EnvMoveControl(s->results,6,6,rect.right-12,rect.bottom>124+pager ? rect.bottom-124-pager : 1);
+        EnvMoveControl(GetDlgItem(window,ID_SEARCH_CURRENT),8,rect.bottom-114-pager,rect.right-16,20);
+        ListView_SetColumnWidth(s->results,1,rect.right>580 ? rect.right-450 : 130);
         EnvMoveControl(s->resultNote,8,rect.bottom-88-pager,rect.right-16,50);
         EnvMoveControl(s->previousPage,8,rect.bottom-64,88,24); EnvMoveControl(s->nextPage,104,rect.bottom-64,88,24);
         EnvMoveControl(s->pageLabel,200,rect.bottom-60,rect.right-208,20);
@@ -425,6 +438,13 @@ BOOL BrowserSearchDeferClose(Browser *browser)
     if(!browser->search || !browser->search->busy) return FALSE;
     browser->search->closePending=TRUE; return TRUE;
 }
+BOOL BrowserSearchEndBusy(BrowserSearch *search)
+{
+    search->busy=FALSE;
+    if(!search->browser) { EnvFree(search); return FALSE; }
+    if(search->closePending) { PostMessageA(search->browser->window,WM_CLOSE,0,0); return FALSE; }
+    return TRUE;
+}
 BOOL BrowserSearchCreate(Browser *browser,HWND parent)
 {
     BrowserSearch *s; RECT area; int width,height; char root[MAX_PATH];
@@ -438,7 +458,7 @@ BOOL BrowserSearchCreate(Browser *browser,HWND parent)
     s->browse=BrowserControl(parent,"BUTTON","...",WS_TABSTOP,ID_SEARCH_BROWSE);
     s->recursive=BrowserControl(parent,"BUTTON","Include subfolders",WS_TABSTOP|BS_AUTOCHECKBOX,ID_SEARCH_RECURSIVE);
     s->start=BrowserControl(parent,"BUTTON","Search",WS_TABSTOP,ID_SEARCH_START); s->stop=BrowserControl(parent,"BUTTON","Stop",WS_TABSTOP,ID_SEARCH_STOP);
-    s->pause=BrowserControl(parent,"BUTTON","Pause",WS_TABSTOP,ID_SEARCH_PAUSE); s->show=BrowserControl(parent,"BUTTON","Show results",WS_TABSTOP,ID_SEARCH_SHOW_RESULTS);
+    s->pause=BrowserControl(parent,"BUTTON","Pause",WS_TABSTOP,ID_SEARCH_PAUSE); s->show=BrowserControl(parent,"BUTTON","Results",WS_TABSTOP,ID_SEARCH_SHOW_RESULTS);
     s->advanced=BrowserControl(parent,"BUTTON","Filters...",WS_TABSTOP,ID_SEARCH_ADVANCED); s->saved=BrowserControl(parent,"BUTTON","Saved...",WS_TABSTOP,ID_SEARCH_SAVED);
     s->indexButton=BrowserControl(parent,"BUTTON","Index...",WS_TABSTOP,ID_SEARCH_INDEX); s->report=BrowserControl(parent,"BUTTON","Report...",WS_TABSTOP,ID_SEARCH_REPORT);
     s->status=BrowserControl(parent,"STATIC","Results open in a separate window.\r\nDouble-click a result to open it.",0,ID_SEARCH_STATUS);
@@ -485,7 +505,10 @@ void BrowserSearchDestroy(Browser *browser)
     if(s->window) DestroyWindow(s->window);
     SearchStoreClose(&s->store); count=Controls(s,controls);
     for(i=0;i<count;++i) if(controls[i]) DestroyWindow(controls[i]);
-    EnvFree(s); browser->search=NULL;
+    browser->search=NULL; s->browser=NULL;
+    /* A shell extension or Browse dialog may have dispatched destruction in
+     * its nested loop. Its returning caller owns the last temporary borrow. */
+    if(!s->busy) EnvFree(s);
 }
 HWND BrowserFindInFolder(const char *directory)
 {

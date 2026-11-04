@@ -33,4 +33,5 @@ void BrowserSearchOptionsOpen(BrowserSearch *search,int page);
 void BrowserSearchSavedOpen(BrowserSearch *search);
 void BrowserSearchReportOpen(BrowserSearch *search);
 BOOL BrowserSearchBrowse(BrowserSearch *search,HWND owner,HWND edit,BOOL append);
+BOOL BrowserSearchEndBusy(BrowserSearch *search);
 #endif
