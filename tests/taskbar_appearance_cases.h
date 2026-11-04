@@ -1,7 +1,7 @@
 /* Uses only disposable Wine display metrics and our own windows/profile. */
 static void TaskbarRowHeightCheck(HWND bar,int rows,HWND fixture)
 {
-    RECT start; int id,visible=0,cell; BOOL aligned=TRUE; char title[160]; HWND task=NULL;
+    RECT start; int id,visible=0,cell; BOOL aligned=TRUE; char title[160]={0}; HWND task=NULL;
     GetWindowTextA(fixture,title,sizeof(title));
     for(id=ID_TASK;id<ID_TASK+TASK_LIMIT && title[0];++id) {
         HWND candidate=GetDlgItem(bar,id); char text[160]={0};
