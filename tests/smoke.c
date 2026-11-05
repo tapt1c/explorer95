@@ -1509,9 +1509,8 @@ static void SettingsPaintingTests(HWND window, HWND bar)
 {
     HWND preview, cover; RECT rect; int i, barHeight;
     BOOL large = SendDlgItemMessageA(window, 607, BM_GETCHECK, 0, 0) == BST_CHECKED;
-    SettingsNavigationTests(window);
     barHeight = large ? 40 : 28;
-    Check(DialogBackground(window, 610, 350, FALSE), "Taskbar page erases behind native groupboxes");
+    Check(DialogBackground(window, 540, 350, FALSE), "Taskbar page erases behind native groupboxes");
     preview = GetDlgItem(window, 1018); GetClientRect(preview, &rect);
     Check(PreviewStartMatches(preview, GetDlgItem(bar, 100), 4, (rect.bottom - barHeight) / 2 + 3),
         "Taskbar preview Start matches every pixel of the real Start button at native size");
@@ -1529,7 +1528,7 @@ static void SettingsPaintingTests(HWND window, HWND bar)
     for (i = 0; i < 3; ++i) SettingsPage(window, 1, i);
     SettingsPage(window, 2, -1);
     Check(IsWindowVisible(GetDlgItem(window, 1010)), "Desktop controls are visible after cycling main and Start tabs");
-    Check(DialogBackground(window, 610, 350, TRUE), "Desktop page erases old page contents behind native groupboxes");
+    Check(DialogBackground(window, 540, 350, TRUE), "Desktop page erases old page contents behind native groupboxes");
     preview = GetDlgItem(window, 1020); GetClientRect(preview, &rect);
     Check(PreviewStartMatches(preview, GetDlgItem(bar, 100), 6, rect.bottom - 4 - barHeight + 3),
         "Desktop preview contains the complete native Start button instead of a floating flag");
@@ -1617,6 +1616,9 @@ static HWND StartSettingsTests(HWND bar, HWND menu, const char *settings)
     Check(GetDlgItem(properties, 1000) && !FindWindowA("Explorer95.StartSettings", NULL), "Start and taskbar settings share one window");
     GetWindowRect(properties, &rect);
     Check(rect.left >= 0 && rect.top >= 0 && rect.right <= GetSystemMetrics(SM_CXSCREEN) && rect.bottom <= GetSystemMetrics(SM_CYSCREEN), "environment settings fit the screen");
+    /* Paint fixtures deliberately move this window aside to expose Start.
+     * Check navigation and screen fit at the real initial position instead. */
+    SettingsNavigationTests(properties);
     Check(!IsWindowEnabled(GetDlgItem(properties, 0x3021)), "Apply starts disabled");
     desktop=FindWindowA("Explorer95.Desktop",NULL); desktopView=FindWindowExA(desktop,NULL,NULL,NULL);
     Check(SendDlgItemMessageA(properties,ID_DESKTOPSIZE,CB_GETCOUNT,0,0)==2 &&
