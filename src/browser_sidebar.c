@@ -187,6 +187,7 @@ static void BuildTasks(Browser *browser)
         Header(browser, 0, "Recycle Bin Tasks");
         if (ListView_GetItemCount(NativeViewList(browser->native))) Link(browser, 0, ID_EMPTY_RECYCLE, 7, "Empty the Recycle Bin");
         if (selected.count) {
+            Link(browser, 0, ID_RESTORE_RECYCLE, 5, selected.count == 1 ? "Restore this item" : "Restore the selected items");
             Link(browser, 0, ID_DELETE, 7, "Delete the selected items");
             if (selected.count == 1) Link(browser, 0, ID_FILE_PROPERTIES, 1, "View properties");
         }

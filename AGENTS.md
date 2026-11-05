@@ -2008,6 +2008,18 @@ ArchiveUiTests проверяет EN/RU и отмену выбора места 
   выделения. Для виртуальных объектов остаётся IContextMenu. Cancel не запускает
   запасной путь повторного удаления. Операция завершается до сохранения раскладки;
   успешное обновление desktop проходит через существующий контроллер Refresh.
+- Restore this item / Restore the selected items появляется в левой панели
+  только при выделении в CSIDL_BITBUCKET. NativeRestoreRecycleSelection проверяет
+  тип view и выделение, удерживает operationDepth и вызывает IContextMenu всей
+  группы. NativeShellRestore ищет undelete/restore, затем помеченную native
+  default-команду; без пометки запрашивает CMF_DEFAULTONLY. ShellCommandInvokeId
+  проверяет доступность и преобразует найденный ID в offset. Не угадывайте первый
+  пункт обычного меню, строковый verb или фиксированный номер. Не повторяйте
+  InvokeCommand после отмены или ошибки.
+  Wine 10 не реализует GCS_VERBA и CMF_DEFAULTONLY у RecycleBinMenu и не помечает
+  default. Реальное восстановление кнопкой требует проверки на Win95; тест
+  проверяет отказ и возвращает только собственный fixture штатным меню.
+  Успех, отмена и disabled-пути дополнены отдельными COM-контрактами.
 - Empty Recycle Bin появляется в toolbar самой корзины и в File, отключается
   при пустом содержимом. Не импортируйте SHEmptyRecycleBinA: его нет в исходной
   Win95. Очистка выделяет все объекты текущего NativeView Корзины и вызывает
@@ -2024,6 +2036,11 @@ ArchiveUiTests проверяет EN/RU и отмену выбора места 
   числовой offset, ветку S_OK, S_FALSE и отсутствие повтора после E_ABORT.
   Весь вызов, включая COM-ветки, удерживает operationDepth, чтобы отложенный
   Refresh другого окна не сработал внутри native InvokeCommand/подтверждения.
+  refreshPending и refreshPosted различают ожидаемое обновление и сообщение
+  в очереди. TakeRefresh при busy/operationDepth сохраняет ожидаемую работу;
+  BrowserUpdate после завершения операции возобновляет доставку без busy-loop.
+  Собственное NativeViewSelectionMenu также уведомляет Корзины после выполнения
+  команды: оно обходит исходную процедуру WM_CONTEXTMENU.
   После Empty/Delete оставляйте NativeViewRequestRefresh в очереди. Не вызывайте
   BrowserRefresh синхронно в этих командах: NativeViewRefresh сбросит pending,
   а отложенное сообщение уже не выполнит обновление после native операции.

@@ -34,11 +34,14 @@ IContextMenu *NativeViewSelectionContext(NativeView *view);
 BOOL NativeViewSelectionMenu(NativeView *view,POINT point,HWND owner);
 BOOL NativeViewIsRecycleBin(NativeView *view);
 void NativeViewStateHandled(NativeView *view);
-BOOL NativeViewTakeRefresh(NativeView *view);
+BOOL NativeViewTakeRefresh(NativeView *view,BOOL allowed);
 void NativeViewRequestRefresh(NativeView *view);
+void NativeViewResumeRefresh(NativeView *view);
 HRESULT NativeEmptyRecycleBin(NativeView *view);
+HRESULT NativeRestoreRecycleSelection(NativeView *view);
 /* Legacy shell command dispatch, separate from the host/selection lifetime. */
 HRESULT NativeShellDelete(IShellView *view, HWND owner, HWND list);
+HRESULT NativeShellRestore(IShellView *view, HWND owner);
 void NativeViewSetHost(const EnvironmentHost *host);
 void DesktopBackgroundMenu(NativeView *view, POINT point, HWND owner);
 BOOL NativeViewMenuMessage(NativeView *view, UINT message, WPARAM wp, LPARAM lp);

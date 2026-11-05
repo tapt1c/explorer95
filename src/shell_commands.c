@@ -73,8 +73,15 @@ UINT ShellCommandFind(IContextMenu *context, HMENU menu, const char *verb, BOOL 
 
 HRESULT ShellCommandInvoke(IContextMenu *context, HMENU menu, HWND owner, const char *verb)
 {
-    UINT id=ShellCommandFind(context,menu,verb,TRUE); CMINVOKECOMMANDINFO action;
+    UINT id=ShellCommandFind(context,menu,verb,TRUE);
     if(!id) return S_FALSE;
+    return ShellCommandInvokeId(context,menu,owner,id);
+}
+HRESULT ShellCommandInvokeId(IContextMenu *context,HMENU menu,HWND owner,UINT id)
+{
+    CMINVOKECOMMANDINFO action;
+    if(!context || !menu) return E_INVALIDARG;
+    if(id<1 || id>0x7fff || (GetMenuState(menu,id,MF_BYCOMMAND)&(MF_DISABLED|MF_GRAYED|MF_SEPARATOR))) return E_FAIL;
     ZeroMemory(&action,sizeof(action)); action.cbSize=sizeof(action); action.hwnd=owner;
     action.lpVerb=MAKEINTRESOURCEA(id-1); action.nShow=SW_SHOWNORMAL;
     return IContextMenu_InvokeCommand(context,&action);
@@ -82,18 +89,13 @@ HRESULT ShellCommandInvoke(IContextMenu *context, HMENU menu, HWND owner, const 
 
 HRESULT ShellCommandDefault(IContextMenu *context, HWND owner)
 {
-    HMENU menu=CreatePopupMenu(); HRESULT result; UINT command; CMINVOKECOMMANDINFO action;
+    HMENU menu=CreatePopupMenu(); HRESULT result; UINT command;
     if(!menu) return E_OUTOFMEMORY;
     result=IContextMenu_QueryContextMenu(context,menu,0,1,0x7fff,CMF_DEFAULTONLY);
     if(SUCCEEDED(result)) {
-        command=GetMenuDefaultItem(menu,FALSE,0);
+        command=GetMenuDefaultItem(menu,FALSE,GMDI_USEDISABLED);
         if(command==(UINT)-1) command=GetMenuItemID(menu,0);
-        if(command<1 || command>0x7fff) result=E_FAIL;
-        else {
-            ZeroMemory(&action,sizeof(action)); action.cbSize=sizeof(action); action.hwnd=owner;
-            action.lpVerb=MAKEINTRESOURCEA(command-1); action.nShow=SW_SHOWNORMAL;
-            result=IContextMenu_InvokeCommand(context,&action);
-        }
+        result=ShellCommandInvokeId(context,menu,owner,command);
     }
     DestroyMenu(menu); return result;
 }

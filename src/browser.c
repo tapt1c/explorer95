@@ -93,6 +93,7 @@ void BrowserUpdate(Browser *browser)
 {
     int i, selected;
     if (browser->closing) return;
+    if(!browser->busy) NativeViewResumeRefresh(browser->native);
     selected = browser->native ? ListView_GetSelectedCount(NativeViewList(browser->native)) : ListView_GetSelectedCount(browser->files);
     if (browser->concealed || BrowserControlPanelVisible(browser)) selected = 0;
     HMENU menu = GetMenu(browser->window);
@@ -768,6 +769,16 @@ static void Command(Browser *browser, int command)
             BrowserNavigatePlace(browser,place,selected-1);
         }
     } else if (command == ID_REFRESH) BrowserRefresh(browser);
+    else if (command == ID_RESTORE_RECYCLE) {
+        HRESULT result;
+        if(!browser->recycleBin || !browser->native || browser->busy || !ListView_GetSelectedCount(NativeViewList(browser->native))) return;
+        browser->busy=TRUE; BrowserUpdate(browser);
+        result=NativeRestoreRecycleSelection(browser->native);
+        browser->busy=FALSE;
+        if(FAILED(result) && result!=E_ABORT && result!=HRESULT_FROM_WIN32(ERROR_CANCELLED))
+            MessageBoxA(browser->window,"Windows could not restore the selected items. You can also use their system context menu.","Explorer95",MB_OK|MB_ICONEXCLAMATION);
+        BrowserUpdate(browser); NativeViewRequestRefresh(browser->native);
+    }
     else if (command == ID_EMPTY_RECYCLE) {
         HRESULT result;
         if (!browser->recycleBin || !browser->native || browser->busy || !ListView_GetItemCount(NativeViewList(browser->native))) return;
@@ -912,7 +923,7 @@ static LRESULT CALLBACK BrowserProc(HWND window, UINT message, WPARAM wp, LPARAM
     case WM_BROWSER_ADDRESS: if (browser) BrowserAddressOpen(browser); return 0;
     case WM_BROWSER_REFRESH: if (browser && !browser->busy) BrowserRefresh(browser); return 0;
     case WM_BROWSER_NATIVE_REFRESH:
-        if (browser && NativeViewTakeRefresh(browser->native) && !browser->busy) BrowserRefresh(browser);
+        if (browser && NativeViewTakeRefresh(browser->native,!browser->busy)) BrowserRefresh(browser);
         return 0;
     case WM_NOTIFY:
         if (browser) {

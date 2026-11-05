@@ -666,5 +666,8 @@
   "Folder handler status could not be read.": "Не удалось определить обработчик папок.",
   "Folders, drives, My Computer and Recycle Bin.": "Папки, диски, «Мой компьютер» и «Корзина».",
   "Confirmed changes apply immediately.\r\nUse Restore to undo them; Cancel keeps them.": "Изменения применяются сразу.\r\nДля отмены используйте восстановление.",
-  "Refresh status": "Обновить статус"
+  "Refresh status": "Обновить статус",
+  "Restore this item": "Восстановить элемент",
+  "Restore the selected items": "Восстановить выбранные элементы",
+  "Windows could not restore the selected items. You can also use their system context menu.": "Windows не удалось восстановить выбранные элементы. Можно также воспользоваться их системным контекстным меню."
 }

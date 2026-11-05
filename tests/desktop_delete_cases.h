@@ -40,8 +40,8 @@ static void RecycleFixture(HWND desktop, const char *name, const char *path, BOO
     PostMessageA(desktop,WM_KEYDOWN,VK_DELETE,0); dialog=WaitFor("#32770",NULL);
     Check(dialog && GetDlgItem(dialog,IDYES),"recycle only our selected fixture through native desktop Delete");
     SendMessageA(dialog,WM_COMMAND,IDYES,0); started=GetTickCount();
-    while(Exists(path) && GetTickCount()-started<5000) PumpFor(30);
-    Check(!Exists(path),"confirmed native Delete recycles the own fixture");
+    while((Exists(path) || IsWindow(dialog)) && GetTickCount()-started<5000) PumpFor(30);
+    Check(!Exists(path) && !IsWindow(dialog),"confirmed native Delete recycles the own fixture and closes its dialog");
 }
 static void WaitRecycleItem(HWND browser, const char *name)
 {
@@ -57,9 +57,11 @@ static void WaitRecycleEmpty(HWND browser)
 {
     HWND bin=RecycleList(browser), toolbar=GetDlgItem(browser,470); DWORD started=GetTickCount();
     do { PumpFor(30); } while((SendMessageA(bin,LVM_GETITEMCOUNT,0,0) ||
-        SendMessageA(toolbar,TB_ISBUTTONENABLED,ID_EMPTY_RECYCLE,0) || PaneText(browser,"Empty the Recycle Bin")) && GetTickCount()-started<5000);
+        SendMessageA(toolbar,TB_ISBUTTONENABLED,ID_EMPTY_RECYCLE,0) || PaneText(browser,"Empty the Recycle Bin") ||
+        PaneText(browser,"Restore this item") || PaneText(browser,"Restore the selected items")) && GetTickCount()-started<5000);
     Check(!SendMessageA(bin,LVM_GETITEMCOUNT,0,0) && !SendMessageA(toolbar,TB_ISBUTTONENABLED,ID_EMPTY_RECYCLE,0) &&
-        !PaneText(browser,"Empty the Recycle Bin"),"deletion or restoration updates the native list, toolbar and sidebar without F5");
+        !PaneText(browser,"Empty the Recycle Bin") && !PaneText(browser,"Restore this item") && !PaneText(browser,"Restore the selected items"),
+        "deletion or restoration updates the native list, toolbar and sidebar without F5");
 }
 static void RecycleClick(HWND window)
 {
@@ -107,6 +109,97 @@ static void RecycleRestore(HWND browser, const char *name, const char *path)
     started=GetTickCount(); while(!Exists(path) && GetTickCount()-started<5000) PumpFor(30);
     Check(Exists(path),"the installed shell restores our fixture to its original location"); WaitRecycleEmpty(browser);
 }
+static BOOL CALLBACK RecycleRestoreErrorText(HWND window,LPARAM parameter)
+{
+    char text[256]; GetWindowTextA(window,text,sizeof(text));
+    if(!lstrcmpA(text,"Windows could not restore the selected items. You can also use their system context menu.")) *(BOOL *)parameter=TRUE;
+    return TRUE;
+}
+static BOOL WineRecycleRestoreUnsupported(HWND owner)
+{
+    IShellFolder *desktop=NULL,*bin=NULL; IEnumIDList *items=NULL; IContextMenu *context=NULL;
+    LPITEMIDLIST absolute=NULL,item=NULL; HMENU menu=NULL,defaults=NULL; BOOL unsupported=FALSE;
+    if(!GetProcAddress(GetModuleHandleA("ntdll.dll"),"wine_get_version")) return FALSE;
+    /* Read-only capability probe. Never skip a Restore error merely because
+     * the test runs on Wine; future working handlers must execute the test. */
+    if(FAILED(SHGetSpecialFolderLocation(owner,CSIDL_BITBUCKET,&absolute)) ||
+       FAILED(SHGetDesktopFolder(&desktop)) ||
+       FAILED(IShellFolder_BindToObject(desktop,absolute,NULL,&IID_IShellFolder,(void **)&bin)) ||
+       FAILED(IShellFolder_EnumObjects(bin,owner,SHCONTF_FOLDERS|SHCONTF_NONFOLDERS,&items)) || !items ||
+       IEnumIDList_Next(items,1,&item,NULL)!=S_OK) goto done;
+    { LPCITEMIDLIST selected=item;
+      if(FAILED(IShellFolder_GetUIObjectOf(bin,owner,1,&selected,&IID_IContextMenu,NULL,(void **)&context)) || !context) goto done; }
+    menu=CreatePopupMenu(); defaults=CreatePopupMenu();
+    if(!menu || !defaults || FAILED(ShellCommandMenu(context,menu))) goto done;
+    unsupported=!ShellCommandFind(context,menu,"undelete",FALSE) && !ShellCommandFind(context,menu,"restore",FALSE) &&
+        GetMenuDefaultItem(menu,FALSE,GMDI_USEDISABLED)==(UINT)-1 &&
+        IContextMenu_QueryContextMenu(context,defaults,0,1,0x7fff,CMF_DEFAULTONLY)==E_NOTIMPL;
+done:
+    if(defaults) DestroyMenu(defaults);
+    if(menu) DestroyMenu(menu);
+    if(context) IContextMenu_Release(context);
+    if(item) CoTaskMemFree(item);
+    if(items) IEnumIDList_Release(items);
+    if(bin) IShellFolder_Release(bin);
+    if(desktop) IShellFolder_Release(desktop);
+    if(absolute) CoTaskMemFree(absolute);
+    return unsupported;
+}
+static void RecycleSidebarRestore(HWND desktopList,HWND browser,const char *directory,const char *name,const char *path)
+{
+    char secondName[112],secondPath[MAX_PATH]; HWND bin=RecycleList(browser),restore;
+    HANDLE file; DWORD started;
+    RecycleFixture(desktopList,name,path,FALSE); WaitRecycleItem(browser,name);
+    NativeSelectItem(bin,NativeItemIndex(bin,name)); started=GetTickCount();
+    do { PumpFor(30); restore=PaneText(browser,"Restore this item"); } while(!restore && GetTickCount()-started<5000);
+    Check(restore!=NULL,"a recycled selection exposes the Restore sidebar action"); RecycleClick(restore);
+    {
+        HWND dialog=NULL; started=GetTickCount();
+        do {
+            DWORD owner=0; PumpFor(30); dialog=FindWindowA("#32770",NULL);
+            if(dialog) GetWindowThreadProcessId(dialog,&owner);
+            if(dialog && (owner!=process.dwProcessId || GetWindow(dialog,GW_OWNER)!=browser || !IsWindowVisible(dialog))) dialog=NULL;
+        } while(!Exists(path) && !dialog && GetTickCount()-started<5000);
+        if(dialog && WineRecycleRestoreUnsupported(browser)) {
+            BOOL restoreError=FALSE; DWORD owner=0;
+            GetWindowThreadProcessId(dialog,&owner); EnumChildWindows(dialog,RecycleRestoreErrorText,(LPARAM)&restoreError);
+            Check(owner==process.dwProcessId && GetWindow(dialog,GW_OWNER)==browser && restoreError,
+                "Wine's unsupported native Restore is reported without guessing a command ID");
+            SendMessageA(dialog,WM_COMMAND,IDOK,0);
+            /* Let the modal caller unwind before opening a second native menu. */
+            PumpFor(200); RecycleRestore(browser,name,path); PumpFor(100);
+            Log("SKIP: Wine RecycleBinMenu omits canonical verbs/default and returns E_NOTIMPL for CMF_DEFAULTONLY; direct single/multiple Restore requires Win95. Native dispatch is covered by COM contracts.\r\n");
+            return;
+        }
+    }
+    Check(Exists(path),"sidebar Restore returns one selected item to its original location"); WaitRecycleEmpty(browser);
+    wsprintfA(secondName,"%s second",name); wsprintfA(secondPath,"%s\\%s",directory,secondName);
+    file=CreateFileA(secondPath,GENERIC_WRITE,0,NULL,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL);
+    Check(file!=INVALID_HANDLE_VALUE,"create a second owned restoration fixture"); CloseHandle(file);
+    RecycleFixture(desktopList,name,path,FALSE); WaitRecycleItem(browser,name);
+    RecycleFixture(desktopList,secondName,secondPath,FALSE);
+    started=GetTickCount();
+    while(SendMessageA(bin,LVM_GETITEMCOUNT,0,0)!=2 && GetTickCount()-started<5000) PumpFor(30);
+    Check(SendMessageA(bin,LVM_GETITEMCOUNT,0,0)==2 && NativeItemIndex(bin,name)>=0 && NativeItemIndex(bin,secondName)>=0,
+        "only our two fixtures are recycled before testing selection and multiple Restore");
+    NativeSelectItem(bin,NativeItemIndex(bin,name)); started=GetTickCount();
+    do { PumpFor(30); restore=PaneText(browser,"Restore this item"); } while(!restore && GetTickCount()-started<5000);
+    Check(restore!=NULL,"selecting one recycled item exposes its Restore sidebar button"); RecycleClick(restore);
+    started=GetTickCount(); while((!Exists(path) || SendMessageA(bin,LVM_GETITEMCOUNT,0,0)!=1) && GetTickCount()-started<5000) PumpFor(30);
+    Check(Exists(path) && !Exists(secondPath) && SendMessageA(bin,LVM_GETITEMCOUNT,0,0)==1 && NativeItemIndex(bin,secondName)==0,
+        "sidebar Restore restores only the selected fixture and leaves the other recycled item untouched");
+    RecycleFixture(desktopList,name,path,FALSE); started=GetTickCount();
+    while(SendMessageA(bin,LVM_GETITEMCOUNT,0,0)!=2 && GetTickCount()-started<5000) PumpFor(30);
+    Check(SendMessageA(bin,LVM_GETITEMCOUNT,0,0)==2 && NativeItemIndex(bin,name)>=0 && NativeItemIndex(bin,secondName)>=0,
+        "both owned fixtures are present before selecting all for multiple Restore");
+    SendMessageA(browser,WM_COMMAND,ID_SELECTALL,0); started=GetTickCount();
+    do { PumpFor(30); restore=PaneText(browser,"Restore the selected items"); } while(!restore && GetTickCount()-started<5000);
+    Check(restore!=NULL && SendMessageA(bin,LVM_GETSELECTEDCOUNT,0,0)==2,"multiple selection exposes Restore selected items");
+    RecycleClick(restore); started=GetTickCount();
+    while((!Exists(path) || !Exists(secondPath)) && GetTickCount()-started<5000) PumpFor(30);
+    Check(Exists(path) && Exists(secondPath),"one sidebar action restores both selected items to their original paths");
+    WaitRecycleEmpty(browser); Check(DeleteFileA(secondPath),"remove only the second restored fixture");
+}
 static void DesktopDeleteTests(HWND desktop, HWND browser, const char *returnPath)
 {
     HWND view = FindWindowExA(desktop, NULL, NULL, NULL), list = FindWindowExA(view, NULL, WC_LISTVIEWA, NULL);
@@ -141,6 +234,7 @@ static void DesktopDeleteTests(HWND desktop, HWND browser, const char *returnPat
         SendMessageA(dialog,WM_COMMAND,IDNO,0); PumpFor(150);
         Check(SendMessageA(bin,LVM_GETITEMCOUNT,0,0)==1,"cancelling from File preserves the own recycled fixture");
         RecycleRestore(browser,name,path);
+        RecycleSidebarRestore(list,browser,directory,name,path);
         RecycleFixture(list,name,path,FALSE); WaitRecycleItem(browser,name);
         NativeSelectItem(bin,NativeItemIndex(bin,name)); PumpFor(80);
         Check(!PaneText(browser,"Move this file") && !PaneText(browser,"Rename this file"),

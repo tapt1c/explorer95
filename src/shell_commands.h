@@ -7,6 +7,8 @@ HRESULT ShellBackgroundContext(IShellView *view, IShellFolder *folder, HWND owne
 HRESULT ShellCommandMenu(IContextMenu *context, HMENU menu);
 UINT ShellCommandFind(IContextMenu *context, HMENU menu, const char *verb, BOOL enabledOnly);
 HRESULT ShellCommandInvoke(IContextMenu *context, HMENU menu, HWND owner, const char *verb);
+/* command is an ID discovered in this context's menu, not a guessed offset. */
+HRESULT ShellCommandInvokeId(IContextMenu *context, HMENU menu, HWND owner, UINT command);
 HRESULT ShellCommandDefault(IContextMenu *context, HWND owner);
 /* Invoke through the item's owner; ShellExecute may apply folder associations
  * to Win95 Control Panel applets, which are namespace actions rather than paths. */

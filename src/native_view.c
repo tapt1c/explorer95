@@ -32,7 +32,7 @@ struct NativeView {
     IContextMenu2 *context;
     ShellNew *newMenu;
     LPITEMIDLIST absolute;
-    BOOL desktop, deleting, recycleBin, controlPanel, statePending, refreshPending;
+    BOOL desktop, deleting, recycleBin, controlPanel, statePending, refreshPending, refreshPosted;
     int operationDepth;
     BOOL fileDragging, layoutHover, layoutDropped; int fileDragCallDepth, fileHover; BOOL fileHoverTarget; char fileHoverPath[MAX_PATH];
     FileDrop *fileDrop; int dropIndex;
@@ -259,19 +259,31 @@ static void NotifyState(NativeView *view)
         view->statePending = TRUE; PostMessageA(view->parent, WM_APP + 32, 0, 0);
     }
 }
+void NativeViewResumeRefresh(NativeView *view)
+{
+    if(view && view->recycleBin && view->refreshPending && !view->refreshPosted && !view->operationDepth) {
+        view->refreshPosted=PostMessageA(view->parent,WM_APP+34,0,0);
+        RenderTraceShell("recycle.refresh.post",S_OK,view->operationDepth,view->refreshPosted);
+    }
+}
 void NativeViewRequestRefresh(NativeView *view)
 {
-    if (view && view->recycleBin && !view->refreshPending) {
-        view->refreshPending = TRUE; PostMessageA(view->parent, WM_APP + 34, 0, 0);
+    if(view && view->recycleBin) {
+        /* Native modal loops can consume an earlier posted notification.
+         * A completed shell action must schedule a fresh delivery. Pending
+         * still coalesces the actual enumeration when messages accumulate. */
+        view->refreshPending=TRUE; view->refreshPosted=FALSE; NativeViewResumeRefresh(view);
     }
 }
 void NativeViewStateHandled(NativeView *view) { if (view) view->statePending = FALSE; }
 BOOL NativeViewIsRecycleBin(NativeView *view) { return view && view->recycleBin; }
-BOOL NativeViewTakeRefresh(NativeView *view)
+BOOL NativeViewTakeRefresh(NativeView *view,BOOL allowed)
 {
-    BOOL pending = view && view->refreshPending;
-    if (view) view->refreshPending = FALSE;
-    return pending && !view->operationDepth;
+    if(!view) return FALSE;
+    view->refreshPosted=FALSE;
+    RenderTraceShell("recycle.refresh.take",S_OK,allowed,((DWORD)view->operationDepth<<1)|!!view->refreshPending);
+    if(!allowed || view->operationDepth || !view->refreshPending) return FALSE;
+    view->refreshPending=FALSE; return TRUE;
 }
 
 static BOOL SameGuid(REFIID a, REFIID b)
@@ -737,6 +749,7 @@ static void DeleteDesktopSelection(NativeView *view)
         operation.wFunc = FO_DELETE; operation.pFrom = paths;
         operation.fFlags = (GetKeyState(VK_SHIFT) & 0x8000) ? 0 : FOF_ALLOWUNDO;
         result = SHFileOperationA(&operation);
+        RenderTraceShell("desktop.delete.return",HRESULT_FROM_WIN32(result),operation.fFlags,operation.fAnyOperationsAborted);
         /* Cancel must not fall through to a second deletion attempt. */
         if (!result && !operation.fAnyOperationsAborted) NativeViewRefresh(view);
         /* Some old views (and Wine) do not notify an already open bin when
@@ -968,6 +981,9 @@ BOOL NativeViewSelectionMenu(NativeView *view,POINT point,HWND owner)
             --view->operationDepth; EndDesktopCall(view);
         }
     }
+    /* This hosted menu bypasses the original view's WM_CONTEXTMENU path.
+     * Restore and other native commands still need the deferred bin refresh. */
+    if(command && view->recycleBin) BrowserRecycleBinsChanged();
     IContextMenu_Release(context); Release(&view->browser); return TRUE;
 }
 static void RenameCreated(NativeView *view,const char *path)
@@ -1423,6 +1439,57 @@ HRESULT NativeShellDelete(IShellView *shellView, HWND owner, HWND list)
     SendMessageA(list, WM_KEYDOWN, VK_DELETE, 1);
     RenderTraceShell("recycle.list-delete", S_OK, ListView_GetItemCount(list), ListView_GetSelectedCount(list));
     return S_OK;
+}
+static HRESULT RestoreDefault(IContextMenu *context,HMENU menu,HWND owner,BOOL defaultOnly)
+{
+    char verb[128]={0}; UINT id=GetMenuDefaultItem(menu,FALSE,GMDI_USEDISABLED);
+    if(id==(UINT)-1 && defaultOnly) id=GetMenuItemID(menu,0);
+    if(id<1 || id>0x7fff) return E_FAIL;
+    if(SUCCEEDED(IContextMenu_GetCommandString(context,id-1,GCS_VERBA,NULL,verb,sizeof(verb)-1)) && verb[0] &&
+       lstrcmpiA(verb,"undelete") && lstrcmpiA(verb,"restore")) return E_FAIL;
+    return ShellCommandInvokeId(context,menu,owner,id);
+}
+HRESULT NativeShellRestore(IShellView *view,HWND owner)
+{
+    IContextMenu *context=NULL; HMENU menu; HRESULT result; const char *verb="undelete";
+    if(!view) return E_INVALIDARG;
+    result=IShellView_GetItemObject(view,SVGIO_SELECTION,&IID_IContextMenu,(void **)&context);
+    if(FAILED(result) || !context) return FAILED(result) ? result : E_NOINTERFACE;
+    menu=CreatePopupMenu();
+    if(!menu) { IContextMenu_Release(context); return E_OUTOFMEMORY; }
+    result=ShellCommandMenu(context,menu);
+    if(SUCCEEDED(result)) {
+        UINT id=ShellCommandFind(context,menu,verb,FALSE);
+        if(!id) { verb="restore"; id=ShellCommandFind(context,menu,verb,FALSE); }
+        /* The verified Recycle Bin's native default restores the selection.
+         * Prefer its marked command before asking for a default-only menu.
+         * No guessed ID, string invocation or retry after cancellation. */
+        if(id) result=ShellCommandInvoke(context,menu,owner,verb);
+        else {
+            id=GetMenuDefaultItem(menu,FALSE,GMDI_USEDISABLED);
+            if(id!=(UINT)-1) result=RestoreDefault(context,menu,owner,FALSE);
+            else {
+                HMENU defaults=CreatePopupMenu();
+                result=defaults ? IContextMenu_QueryContextMenu(context,defaults,0,1,0x7fff,CMF_DEFAULTONLY) : E_OUTOFMEMORY;
+                if(SUCCEEDED(result)) result=RestoreDefault(context,defaults,owner,TRUE);
+                if(defaults) DestroyMenu(defaults);
+            }
+        }
+    }
+    DestroyMenu(menu); IContextMenu_Release(context); return result;
+}
+HRESULT NativeRestoreRecycleSelection(NativeView *view)
+{
+    HRESULT result; HWND focus;
+    if(!view || !view->recycleBin || !view->list) return E_INVALIDARG;
+    if(view->deleting || view->operationDepth) return HRESULT_FROM_WIN32(ERROR_BUSY);
+    if(!ListView_GetSelectedCount(view->list)) return S_FALSE;
+    ++view->operationDepth; focus=GetFocus(); SetFocus(view->list);
+    result=NativeShellRestore(view->view,view->parent);
+    if(IsWindow(focus)) SetFocus(focus);
+    --view->operationDepth;
+    RenderTraceShell("recycle.restore-return",result,ListView_GetItemCount(view->list),ListView_GetSelectedCount(view->list));
+    BrowserRecycleBinsChanged(); return result;
 }
 static HRESULT DeleteRecycleSelection(NativeView *view)
 {
