@@ -1,20 +1,26 @@
 #include "../src/shell_launch.h"
 
-static int launchCalls;
-static DWORD launchFailure, chooserFailure;
+static int launchCalls,chooserCalls;
+static DWORD launchFailure,chooserFailure;
+static UINT_PTR launchInstance;
 static char launchExpected[MAX_PATH];
 static BOOL WINAPI LaunchProbe(SHELLEXECUTEINFOA *info)
 {
     ++launchCalls;
-    Check(info->cbSize==sizeof(*info) && (info->fMask&SEE_MASK_FLAG_NO_UI) && !lstrcmpA(info->lpFile,launchExpected),
-        "execution preserves literal paths and suppresses duplicate shell errors");
-    if (launchCalls==1) {
-        Check(!lstrcmpA(info->lpVerb,"open") && !(info->fMask&SEE_MASK_CLASSNAME),"opening uses the existing association first");
-        SetLastError(launchFailure); return !launchFailure;
-    }
-    Check(launchCalls==2 && (info->fMask&SEE_MASK_CLASSNAME) && !lstrcmpA(info->lpClass,"Unknown") &&
-        !lstrcmpA(info->lpVerb,"openas") && !info->lpParameters,"unknown files use native Open With exactly once");
-    SetLastError(chooserFailure); return !chooserFailure;
+    Check(info->cbSize==sizeof(*info) && (info->fMask&SEE_MASK_FLAG_NO_UI) && !lstrcmpA(info->lpFile,launchExpected) &&
+        !lstrcmpA(info->lpVerb,"open"),"execution preserves literal paths and suppresses duplicate shell errors");
+    info->hInstApp=(HINSTANCE)launchInstance; SetLastError(launchFailure); return !launchFailure;
+}
+static DWORD ChooserProbe(HWND owner,const char *path)
+{
+    (void)owner; ++chooserCalls;
+    Check(!lstrcmpA(path,launchExpected),"the native chooser receives the original file path");
+    return chooserFailure;
+}
+static DWORD LaunchCase(const char *arguments,const char *directory)
+{
+    launchCalls=chooserCalls=0;
+    return ShellLaunch(NULL,launchExpected,arguments,directory,LaunchProbe,ChooserProbe);
 }
 static void ShellLaunchTests(const char *directory)
 {
@@ -22,22 +28,24 @@ static void ShellLaunchTests(const char *directory)
     wsprintfA(launchExpected,"%s\\unknown file.ex95-no-association",directory);
     file=CreateFileA(launchExpected,GENERIC_WRITE,0,NULL,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL);
     Check(file!=INVALID_HANDLE_VALUE,"create only our unassociated file with spaces"); CloseHandle(file);
-    launchCalls=0; launchFailure=0;
-    Check(!ShellLaunch(NULL,launchExpected,NULL,directory,LaunchProbe) && launchCalls==1,"associated files launch once");
-    launchCalls=0; launchFailure=ERROR_NO_ASSOCIATION; chooserFailure=0;
-    Check(!ShellLaunch(NULL,launchExpected,NULL,directory,LaunchProbe) && launchCalls==2,"unknown files reach Shell32 Open With");
-    launchCalls=0; chooserFailure=ERROR_CANCELLED;
-    Check(ShellLaunch(NULL,launchExpected,NULL,directory,LaunchProbe)==ERROR_CANCELLED && launchCalls==2,"native cancellation remains distinct from failure");
-    launchCalls=0; chooserFailure=ERROR_ACCESS_DENIED;
-    Check(ShellLaunch(NULL,launchExpected,NULL,directory,LaunchProbe)==ERROR_ACCESS_DENIED && launchCalls==2,"chooser failure propagates without retries");
-    launchCalls=0; launchFailure=ERROR_ACCESS_DENIED;
-    Check(ShellLaunch(NULL,launchExpected,NULL,directory,LaunchProbe)==ERROR_ACCESS_DENIED && launchCalls==1,"access failures never offer association changes");
-    launchCalls=0; launchFailure=ERROR_NO_ASSOCIATION;
-    Check(ShellLaunch(NULL,launchExpected,"--argument",directory,LaunchProbe)==ERROR_NO_ASSOCIATION && launchCalls==1,"commands with arguments never fall back to a file chooser");
-    DeleteFileA(launchExpected); launchCalls=0;
-    Check(ShellLaunch(NULL,launchExpected,NULL,directory,LaunchProbe)==ERROR_NO_ASSOCIATION && launchCalls==1,"missing files never open the chooser");
-    lstrcpyA(launchExpected,directory); launchCalls=0;
-    Check(ShellLaunch(NULL,launchExpected,NULL,NULL,LaunchProbe)==ERROR_NO_ASSOCIATION && launchCalls==1,"directories never enter the association fallback");
+    launchFailure=0;
+    Check(!LaunchCase(NULL,directory) && launchCalls==1 && !chooserCalls,"associated files launch once");
+    launchFailure=ERROR_NO_ASSOCIATION; chooserFailure=0;
+    Check(!LaunchCase(NULL,directory) && launchCalls==1 && chooserCalls==1,"unknown files reach Shell32 Open With exactly once");
+    launchFailure=ERROR_INVALID_HANDLE; launchInstance=SE_ERR_NOASSOC;
+    Check(!LaunchCase(NULL,directory) && chooserCalls==1,"explicit shell no-association result overrides stale last-error state");
+    launchFailure=ERROR_CANCELLED;
+    Check(LaunchCase(NULL,directory)==ERROR_CANCELLED && !chooserCalls,"cancelled shell execution never launches a chooser even with a stale instance result");
+    launchInstance=0; launchFailure=ERROR_NO_ASSOCIATION; chooserFailure=ERROR_CALL_NOT_IMPLEMENTED;
+    Check(LaunchCase(NULL,directory)==ERROR_CALL_NOT_IMPLEMENTED && chooserCalls==1,"an unavailable native chooser reports its failure without retries");
+    chooserFailure=0; launchFailure=ERROR_ACCESS_DENIED;
+    Check(LaunchCase(NULL,directory)==ERROR_ACCESS_DENIED && !chooserCalls,"access failures never offer association changes");
+    launchFailure=ERROR_NO_ASSOCIATION;
+    Check(LaunchCase("--argument",directory)==ERROR_NO_ASSOCIATION && !chooserCalls,"commands with arguments never fall back to a file chooser");
+    DeleteFileA(launchExpected);
+    Check(LaunchCase(NULL,directory)==ERROR_NO_ASSOCIATION && !chooserCalls,"missing files never open the chooser");
+    lstrcpyA(launchExpected,directory);
+    Check(LaunchCase(NULL,NULL)==ERROR_NO_ASSOCIATION && !chooserCalls,"directories never enter the association fallback");
 }
 static void LabelShadowSettingsTests(HWND bar,const char *settings)
 {

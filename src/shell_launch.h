@@ -2,8 +2,8 @@
 #define EX95_SHELL_LAUNCH_H
 #include <windows.h>
 #include <shellapi.h>
-/* Returns a Win32 error; cancellation remains distinct from launch failure.
- * The supplied native executor also permits inert regression tests. */
+/* Returns a Win32 error. Native callbacks permit inert regression tests. */
+DWORD ShellOpenWith(HWND owner, const char *path);
 DWORD ShellLaunch(HWND owner, const char *path, const char *arguments, const char *directory,
-                  BOOL (WINAPI *execute)(SHELLEXECUTEINFOA *));
+                  BOOL (WINAPI *execute)(SHELLEXECUTEINFOA *), DWORD (*choose)(HWND,const char *));
 #endif

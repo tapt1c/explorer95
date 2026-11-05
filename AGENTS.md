@@ -67,7 +67,7 @@ Explorer95 — любительская нативная оболочка для
 | `src/browser_history.c` | До 32 сохраняемых посещений на профиль; отключение и очистка отдельно от Back/Forward окна. |
 | `src/environment.h` | Интерфейс `EnvironmentHost`, публичные функции окружения и файловый backend установки shell. |
 | `src/environment.c` | Общее состояние, панель задач, группировка окон, Quick Launch, часы, appbar, горячие клавиши и выполнение команд. |
-| `src/shell_launch.c/.h` | Исполнение ассоциации через ShellExecuteExA; только ERROR_NO_ASSOCIATION существующего файла без аргументов вызывает штатный Unknown/openas из Shell32. Архивы перехватываются раньше в EnvironmentLaunch. |
+| `src/shell_launch.c/.h` | Исполнение ассоциации через ShellExecuteExA; только отсутствие ассоциации существующего файла без аргументов вызывает динамический ANSI OpenAs_RunDLL из Shell32. Явный hInstApp=SE_ERR_NOASSOC учитывается при устаревшем GetLastError. Архивы перехватываются раньше в EnvironmentLaunch. |
 | `src/tray_language.c/.h` | Значок клавиатуры MAIN.CPL и код языка foreground thread; native меню установленных HKL и WM_INPUTLANGCHANGEREQUEST исходному приложению. |
 | `src/appbar.c/.h`, `tests/appbar_cases.h` | Broker основной оболочки для сторонних панелей Win95: ограниченный список, четыре края, autohide, уведомления и исходный 44-байтовый IPC. |
 | `src/shell_applet.c/.h`, `src/shell_applet_cpl.c`, `src/shell_applet.rc`, `tests/shell_applet_cases.h` | Встроенный native CPL, атомарная запись установки, безопасное снятие регистрации и отдельная команда `--properties`. |
@@ -907,7 +907,7 @@ explorer95.exe --settings="C:\EX95TEST\Explorer95.ini"
   под прозрачными пикселями composite не должно оставаться ни одного её пикселя.
   Одной проверки сходства более 90% недостаточно — она пропускала второй силуэт.
   ImageList_Remove/GetIconSize/ReplaceIcon — API исходной Comctl32 4.0/Win95.
-- Подписи desktop остаются текстом системного ListView. Desktop WM_ERASEBKGND
+- Подписи desktop остаются текстом системного ListView.
   `[Desktop] LabelShadows` по умолчанию TRUE; NativeViewSetLabelShadows меняет
   только режим подписи без перечитывания папки. FALSE использует штатный
   COLOR_DESKTOP для TextBkColor; TRUE — CLR_NONE и собственную тень. Образ

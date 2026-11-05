@@ -240,7 +240,7 @@ BOOL EnvironmentLaunch(HWND owner, const char *path, const char *arguments, cons
         shortcut=EnvAlloc(sizeof(*shortcut));
         if(shortcut && (!TaskbarLinkRead(path,shortcut) || !TaskbarLinkExists(shortcut))) { EnvFree(shortcut); shortcut=NULL; }
     }
-    error = ShellLaunch(owner,path,arguments,directory,ShellExecuteExA);
+    error = ShellLaunch(owner,path,arguments,directory,ShellExecuteExA,ShellOpenWith);
     if (error) {
         EnvFree(shortcut);
         if (error != ERROR_CANCELLED) EnvError(owner,"Windows could not open the selected item.",error);
