@@ -2011,10 +2011,17 @@ ArchiveUiTests проверяет EN/RU и отмену выбора места 
 - Restore this item / Restore the selected items появляется в левой панели
   только при выделении в CSIDL_BITBUCKET. NativeRestoreRecycleSelection проверяет
   тип view и выделение, удерживает operationDepth и вызывает IContextMenu всей
-  группы. NativeShellRestore ищет undelete/restore, затем помеченную native
-  default-команду; без пометки запрашивает CMF_DEFAULTONLY. ShellCommandInvokeId
-  проверяет доступность и преобразует найденный ID в offset. Не угадывайте первый
-  пункт обычного меню, строковый verb или фиксированный номер. Не повторяйте
+  группы. NativeShellRestore сначала ищет undelete/restore. Win95 без canonical
+  verbs использует локализованную подпись установленной Shell32: проверенный
+  MENU 226 содержит один popup с единственным resource item 112. Эти номера
+  определяют ресурс, не dispatch: совпадение подписи должно быть единственным
+  верхнеуровневым текстовым пунктом IContextMenu выделения; вызывается только
+  его динамический ID. Accelerator/shortcut удаляются, && и DBCS сохраняются.
+  Отсутствие/дубликат/обрезка подписи, disabled и известный иной canonical verb
+  запрещают вызов и fallback. Без проверенного Win95-ресурса остаются помеченная
+  native default-команда и CMF_DEFAULTONLY. ShellCommandInvokeId проверяет
+  доступность и преобразует найденный ID в offset. Не угадывайте первый пункт
+  обычного меню, строковый verb или фиксированный dispatch-номер. Не повторяйте
   InvokeCommand после отмены или ошибки.
   Wine 10 не реализует GCS_VERBA и CMF_DEFAULTONLY у RecycleBinMenu и не помечает
   default. Реальное восстановление кнопкой требует проверки на Win95; тест

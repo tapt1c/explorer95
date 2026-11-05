@@ -58,7 +58,8 @@ static LRESULT CALLBACK NativePositionProc(HWND window, UINT message, WPARAM wp,
 static struct {
     HRESULT object, name, invoke, accelerator;
     int refs, invoked, translated, keys, queried;
-    BOOL valid, disabled, noDefault, wrongDefault;
+    BOOL valid, disabled, noDefault, wrongDefault, duplicateCaption;
+    const char *caption;
 } deleteProbe;
 static IContextMenu deleteContext;
 static WNDPROC deleteListOriginal;
@@ -129,6 +130,15 @@ static HRESULT STDMETHODCALLTYPE RestoreProbeMenu(IContextMenu *self,HMENU menu,
         SetMenuDefaultItem(menu,first+(flags==CMF_DEFAULTONLY || FAILED(deleteProbe.name) || deleteProbe.wrongDefault ? 23 : 3),FALSE);
     return MAKE_HRESULT(SEVERITY_SUCCESS,0,24);
 }
+static HRESULT STDMETHODCALLTYPE RestoreCaptionProbeMenu(IContextMenu *self,HMENU menu,UINT index,UINT first,UINT last,UINT flags)
+{
+    (void)self; (void)index; (void)last; ++deleteProbe.queried;
+    deleteProbe.valid &= flags==CMF_NORMAL;
+    AppendMenuA(menu,MF_STRING,first+3,deleteProbe.duplicateCaption ? deleteProbe.caption : "Other action");
+    AppendMenuA(menu,MF_STRING|(deleteProbe.disabled ? MF_GRAYED : 0),first+23,deleteProbe.caption);
+    SetMenuDefaultItem(menu,first+3,FALSE); /* wrong default must not override the caption */
+    return MAKE_HRESULT(SEVERITY_SUCCESS,0,24);
+}
 static HRESULT STDMETHODCALLTYPE RestoreProbeName(IContextMenu *self,UINT_PTR id,UINT flags,UINT *reserved,LPSTR text,UINT size)
 {
     (void)self; (void)reserved;
@@ -172,39 +182,81 @@ static void NativeShellCommandTests(HWND parent)
     DeleteProbeReset(S_FALSE,S_OK,S_OK,S_OK); result=ShellCommandDefault(&deleteContext,parent);
     Check(FAILED(result) && !deleteProbe.invoked,"an empty native menu cannot fall through to a guessed Open verb");
     contextTable.QueryContextMenu=RestoreProbeMenu; contextTable.GetCommandString=RestoreProbeName;
-    DeleteProbeReset(S_OK,S_OK,S_OK,S_OK); result=NativeShellRestore(&view,parent);
+    DeleteProbeReset(S_OK,S_OK,S_OK,S_OK); result=NativeShellRestore(&view,parent,NULL);
     Check(result==S_OK && deleteProbe.valid && !deleteProbe.refs && deleteProbe.invoked==1 && deleteProbe.queried==1,
         "Restore resolves the selected object's numeric undelete command instead of its first or default menu row");
-    DeleteProbeReset(S_OK,S_OK,E_ABORT,S_OK); result=NativeShellRestore(&view,parent);
+    DeleteProbeReset(S_OK,S_OK,E_ABORT,S_OK); result=NativeShellRestore(&view,parent,NULL);
     Check(result==E_ABORT && deleteProbe.valid && deleteProbe.invoked==1 && deleteProbe.queried==1,
         "cancelled canonical Restore is never retried through the default menu");
-    DeleteProbeReset(S_OK,S_OK,S_OK,S_OK); deleteProbe.disabled=TRUE; result=NativeShellRestore(&view,parent);
+    DeleteProbeReset(S_OK,S_OK,S_OK,S_OK); deleteProbe.disabled=TRUE; result=NativeShellRestore(&view,parent,NULL);
     Check(result==S_FALSE && deleteProbe.valid && !deleteProbe.invoked && deleteProbe.queried==1,
         "a disabled canonical Restore does not fall through to another command");
-    DeleteProbeReset(S_OK,E_NOTIMPL,S_OK,S_OK); result=NativeShellRestore(&view,parent);
+    DeleteProbeReset(S_OK,E_NOTIMPL,S_OK,S_OK); result=NativeShellRestore(&view,parent,NULL);
     Check(result==S_OK && deleteProbe.valid && !deleteProbe.refs && deleteProbe.invoked==1 && deleteProbe.queried==1,
         "legacy Restore uses the marked numeric native default when canonical verbs are unavailable");
-    DeleteProbeReset(S_OK,E_NOTIMPL,E_ABORT,S_OK); result=NativeShellRestore(&view,parent);
+    DeleteProbeReset(S_OK,E_NOTIMPL,E_ABORT,S_OK); result=NativeShellRestore(&view,parent,NULL);
     Check(result==E_ABORT && deleteProbe.valid && deleteProbe.invoked==1 && deleteProbe.queried==1,
         "cancelled marked-default Restore is never retried");
-    DeleteProbeReset(S_OK,E_NOTIMPL,E_ABORT,S_OK); deleteProbe.noDefault=TRUE; result=NativeShellRestore(&view,parent);
+    DeleteProbeReset(S_OK,E_NOTIMPL,E_ABORT,S_OK); deleteProbe.noDefault=TRUE; result=NativeShellRestore(&view,parent,NULL);
     Check(result==E_ABORT && deleteProbe.valid && deleteProbe.invoked==1 && deleteProbe.queried==2,
         "cancelled legacy Restore is invoked once without a string or keyboard retry");
-    DeleteProbeReset(S_OK,E_NOTIMPL,S_OK,S_OK); deleteProbe.disabled=TRUE; result=NativeShellRestore(&view,parent);
+    DeleteProbeReset(S_OK,E_NOTIMPL,S_OK,S_OK); deleteProbe.disabled=TRUE; result=NativeShellRestore(&view,parent,NULL);
     Check(FAILED(result) && deleteProbe.valid && !deleteProbe.invoked && deleteProbe.queried==1,
         "a disabled marked Restore is never retried through another menu");
-    DeleteProbeReset(S_OK,E_NOTIMPL,S_OK,S_OK); deleteProbe.disabled=TRUE; deleteProbe.noDefault=TRUE; result=NativeShellRestore(&view,parent);
+    DeleteProbeReset(S_OK,E_NOTIMPL,S_OK,S_OK); deleteProbe.disabled=TRUE; deleteProbe.noDefault=TRUE; result=NativeShellRestore(&view,parent,NULL);
     Check(FAILED(result) && deleteProbe.valid && !deleteProbe.invoked && deleteProbe.queried==2,
         "a disabled native default cannot restore or invoke the unrelated first command");
-    DeleteProbeReset(S_OK,S_OK,S_OK,S_OK); deleteProbe.wrongDefault=TRUE; result=NativeShellRestore(&view,parent);
+    DeleteProbeReset(S_OK,S_OK,S_OK,S_OK); deleteProbe.wrongDefault=TRUE; result=NativeShellRestore(&view,parent,NULL);
     Check(FAILED(result) && deleteProbe.valid && !deleteProbe.invoked && deleteProbe.queried==1,
         "Restore never invokes a marked default known to be Delete");
-    DeleteProbeReset(S_OK,S_OK,S_OK,S_OK); deleteProbe.wrongDefault=TRUE; deleteProbe.noDefault=TRUE; result=NativeShellRestore(&view,parent);
+    DeleteProbeReset(S_OK,S_OK,S_OK,S_OK); deleteProbe.wrongDefault=TRUE; deleteProbe.noDefault=TRUE; result=NativeShellRestore(&view,parent,NULL);
     Check(FAILED(result) && deleteProbe.valid && !deleteProbe.invoked && deleteProbe.queried==2,
         "a default-only menu known to describe Delete is rejected instead of restoring");
-    DeleteProbeReset(E_NOINTERFACE,S_OK,S_OK,S_OK); result=NativeShellRestore(&view,parent);
+    DeleteProbeReset(E_NOINTERFACE,S_OK,S_OK,S_OK); result=NativeShellRestore(&view,parent,NULL);
     Check(result==E_NOINTERFACE && deleteProbe.valid && !deleteProbe.refs && !deleteProbe.invoked && !deleteProbe.queried,
         "missing selected-item context cannot trigger Restore");
+    contextTable.QueryContextMenu=RestoreCaptionProbeMenu;
+    DeleteProbeReset(S_OK,E_NOTIMPL,S_OK,S_OK); deleteProbe.caption="R&estore\tCtrl+R";
+    result=NativeShellRestore(&view,parent,"Restore");
+    Check(result==S_OK && deleteProbe.valid && !deleteProbe.refs && deleteProbe.invoked==1 && deleteProbe.queried==1,
+        "Win95 resource caption finds numeric Restore without verbs or a default, ignoring accelerator and shortcut text");
+    DeleteProbeReset(S_OK,E_NOTIMPL,E_ABORT,S_OK); deleteProbe.caption="&Restore";
+    result=NativeShellRestore(&view,parent,"Restore");
+    Check(result==E_ABORT && deleteProbe.valid && !deleteProbe.refs && deleteProbe.invoked==1 && deleteProbe.queried==1,
+        "caption Restore cancellation never retries a marked default or default-only menu");
+    DeleteProbeReset(S_OK,E_NOTIMPL,S_OK,S_OK); deleteProbe.caption="Restore"; deleteProbe.disabled=TRUE;
+    result=NativeShellRestore(&view,parent,"Restore");
+    Check(FAILED(result) && deleteProbe.valid && !deleteProbe.invoked && deleteProbe.queried==1,
+        "disabled caption Restore never invokes another menu command");
+    DeleteProbeReset(S_OK,E_NOTIMPL,S_OK,S_OK); deleteProbe.caption="Restore"; deleteProbe.duplicateCaption=TRUE;
+    result=NativeShellRestore(&view,parent,"Restore");
+    Check(FAILED(result) && deleteProbe.valid && !deleteProbe.invoked && deleteProbe.queried==1,
+        "ambiguous resource captions reject both matches and the unrelated marked default");
+    DeleteProbeReset(S_OK,E_NOTIMPL,S_OK,S_OK); deleteProbe.caption="Unrelated";
+    result=NativeShellRestore(&view,parent,"Restore");
+    Check(FAILED(result) && deleteProbe.valid && !deleteProbe.invoked && deleteProbe.queried==1,
+        "missing resource caption does not fall back to an unrelated marked default");
+    DeleteProbeReset(S_OK,S_OK,S_OK,S_OK); deleteProbe.caption="Restore"; deleteProbe.wrongDefault=TRUE;
+    result=NativeShellRestore(&view,parent,"Restore");
+    Check(FAILED(result) && deleteProbe.valid && !deleteProbe.invoked && deleteProbe.queried==1,
+        "a matching caption with canonical Delete is rejected");
+    DeleteProbeReset(S_OK,S_OK,S_OK,S_OK); deleteProbe.caption="Other caption";
+    result=NativeShellRestore(&view,parent,"Restore");
+    Check(result==S_OK && deleteProbe.valid && deleteProbe.invoked==1 && deleteProbe.queried==1,
+        "canonical undelete takes precedence over resource captions");
+    DeleteProbeReset(S_OK,E_NOTIMPL,S_OK,S_OK); deleteProbe.caption="&Native && restore";
+    result=NativeShellRestore(&view,parent,"Native & restore");
+    Check(result==S_OK && deleteProbe.valid && deleteProbe.invoked==1 && deleteProbe.queried==1,
+        "caption matching preserves literal escaped ampersands");
+    {
+        char longCaption[300]; ZeroMemory(longCaption,sizeof(longCaption));
+        FillMemory(longCaption,sizeof(longCaption)-1,'R');
+        DeleteProbeReset(S_OK,E_NOTIMPL,S_OK,S_OK); deleteProbe.caption=longCaption;
+        longCaption[255]=0;
+        result=NativeShellRestore(&view,parent,longCaption);
+        Check(FAILED(result) && deleteProbe.valid && !deleteProbe.invoked && deleteProbe.queried==1,
+            "a potentially truncated menu caption never identifies Restore");
+    }
     DestroyWindow(list);
 }
 

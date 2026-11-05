@@ -41,7 +41,8 @@ HRESULT NativeEmptyRecycleBin(NativeView *view);
 HRESULT NativeRestoreRecycleSelection(NativeView *view);
 /* Legacy shell command dispatch, separate from the host/selection lifetime. */
 HRESULT NativeShellDelete(IShellView *view, HWND owner, HWND list);
-HRESULT NativeShellRestore(IShellView *view, HWND owner);
+/* Optional normalized caption from the verified Win95 Shell32 menu resource. */
+HRESULT NativeShellRestore(IShellView *view, HWND owner, const char *legacyCaption);
 void NativeViewSetHost(const EnvironmentHost *host);
 void DesktopBackgroundMenu(NativeView *view, POINT point, HWND owner);
 BOOL NativeViewMenuMessage(NativeView *view, UINT message, WPARAM wp, LPARAM lp);

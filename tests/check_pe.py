@@ -76,8 +76,9 @@ ALLOWED = {
     # EqualRect is a classic USER rectangle helper, present before Win95.
     # GetKeyboardLayout/List and WM_INPUTLANGCHANGEREQUEST are stock Win95.
     # GetIconInfo predates Win95; inspect actual XOR/AND dimensions before resizing.
+    # LoadMenuA reads the installed Win95 Shell32 Restore menu in its OS language.
     "user32.dll": set("""
-        CharNextA EqualRect GetIconInfo
+        CharNextA EqualRect GetIconInfo LoadMenuA
         GetKeyboardLayout GetKeyboardLayoutList
         CreateIconIndirect
         SetWindowsHookExA CallNextHookEx UnhookWindowsHookEx

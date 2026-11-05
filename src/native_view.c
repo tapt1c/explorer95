@@ -1440,16 +1440,68 @@ HRESULT NativeShellDelete(IShellView *shellView, HWND owner, HWND list)
     RenderTraceShell("recycle.list-delete", S_OK, ListView_GetItemCount(list), ListView_GetSelectedCount(list));
     return S_OK;
 }
-static HRESULT RestoreDefault(IContextMenu *context,HMENU menu,HWND owner,BOOL defaultOnly)
+static BOOL RestoreMenuCaption(HMENU menu,int position,char *text,int capacity)
 {
-    char verb[128]={0}; UINT id=GetMenuDefaultItem(menu,FALSE,GMDI_USEDISABLED);
-    if(id==(UINT)-1 && defaultOnly) id=GetMenuItemID(menu,0);
+    char *read,*write; int length=GetMenuStringA(menu,position,text,capacity,MF_BYPOSITION);
+    if(length<=0 || length>=capacity-1) { text[0]=0; return FALSE; }
+    /* Compare installed Shell32 text, not the application's UI language.
+     * Skip accelerators/shortcuts, preserving escaped ampersands and DBCS. */
+    read=write=text;
+    while(*read && *read!='\t') {
+        char *next=CharNextA(read);
+        if(next==read+1 && *read=='&') {
+            ++read; if(*read!='&') continue;
+            *write++=*read++;
+        } else { while(read<next) *write++=*read++; }
+    }
+    *write=0; return write!=text;
+}
+static BOOL Win95RestoreCaption(char *text,int capacity)
+{
+    DWORD version=GetVersion(); HMODULE shell; HMENU menu,popup; BOOL valid=FALSE;
+    text[0]=0;
+    if(!(version&0x80000000UL) || LOBYTE(LOWORD(version))!=4 || HIBYTE(LOWORD(version))!=0) return FALSE;
+    shell=GetModuleHandleA("shell32.dll");
+    if(!shell) return FALSE;
+    /* Verified stock Win95 Shell32 resource identity, not a context-command
+     * offset. MENU 226 contains one popup and Restore resource item 112. */
+    menu=LoadMenuA(shell,MAKEINTRESOURCEA(226));
+    if(!menu) return FALSE;
+    popup=GetSubMenu(menu,0);
+    if(GetMenuItemCount(menu)==1 && popup && GetMenuItemCount(popup)==1 &&
+       !GetSubMenu(popup,0) && GetMenuItemID(popup,0)==112 &&
+       !(GetMenuState(popup,0,MF_BYPOSITION)&(MF_SEPARATOR|MF_OWNERDRAW)))
+        valid=RestoreMenuCaption(popup,0,text,capacity);
+    DestroyMenu(menu); return valid;
+}
+static UINT RestoreCaptionCommand(HMENU menu,const char *caption)
+{
+    UINT match=0; int i;
+    for(i=0;i<GetMenuItemCount(menu);++i) {
+        UINT id=GetMenuItemID(menu,i),state=GetMenuState(menu,i,MF_BYPOSITION); char text[256];
+        if(id<1 || id>0x6fff || GetSubMenu(menu,i) || (state&(MF_SEPARATOR|MF_OWNERDRAW))) continue;
+        if(RestoreMenuCaption(menu,i,text,sizeof(text)) && !lstrcmpiA(text,caption)) {
+            if(match) return 0;
+            match=id;
+        }
+    }
+    return match;
+}
+static HRESULT RestoreCommand(IContextMenu *context,HMENU menu,HWND owner,UINT id)
+{
+    char verb[128]={0};
     if(id<1 || id>0x7fff) return E_FAIL;
     if(SUCCEEDED(IContextMenu_GetCommandString(context,id-1,GCS_VERBA,NULL,verb,sizeof(verb)-1)) && verb[0] &&
        lstrcmpiA(verb,"undelete") && lstrcmpiA(verb,"restore")) return E_FAIL;
     return ShellCommandInvokeId(context,menu,owner,id);
 }
-HRESULT NativeShellRestore(IShellView *view,HWND owner)
+static HRESULT RestoreDefault(IContextMenu *context,HMENU menu,HWND owner,BOOL defaultOnly)
+{
+    UINT id=GetMenuDefaultItem(menu,FALSE,GMDI_USEDISABLED);
+    if(id==(UINT)-1 && defaultOnly) id=GetMenuItemID(menu,0);
+    return RestoreCommand(context,menu,owner,id);
+}
+HRESULT NativeShellRestore(IShellView *view,HWND owner,const char *legacyCaption)
 {
     IContextMenu *context=NULL; HMENU menu; HRESULT result; const char *verb="undelete";
     if(!view) return E_INVALIDARG;
@@ -1461,10 +1513,15 @@ HRESULT NativeShellRestore(IShellView *view,HWND owner)
     if(SUCCEEDED(result)) {
         UINT id=ShellCommandFind(context,menu,verb,FALSE);
         if(!id) { verb="restore"; id=ShellCommandFind(context,menu,verb,FALSE); }
-        /* The verified Recycle Bin's native default restores the selection.
-         * Prefer its marked command before asking for a default-only menu.
-         * No guessed ID, string invocation or retry after cancellation. */
+        /* Win95 may expose neither canonical verbs nor a marked default.
+         * Its validated system resource identifies the localized menu caption;
+         * only the actual selected object's discovered ID is dispatched. */
         if(id) result=ShellCommandInvoke(context,menu,owner,verb);
+        else if(legacyCaption && legacyCaption[0]) {
+            id=RestoreCaptionCommand(menu,legacyCaption);
+            RenderTraceShell("recycle.restore-caption",id ? S_OK : E_FAIL,id,0);
+            result=RestoreCommand(context,menu,owner,id);
+        }
         else {
             id=GetMenuDefaultItem(menu,FALSE,GMDI_USEDISABLED);
             if(id!=(UINT)-1) result=RestoreDefault(context,menu,owner,FALSE);
@@ -1480,12 +1537,12 @@ HRESULT NativeShellRestore(IShellView *view,HWND owner)
 }
 HRESULT NativeRestoreRecycleSelection(NativeView *view)
 {
-    HRESULT result; HWND focus;
+    HRESULT result; HWND focus; char caption[256];
     if(!view || !view->recycleBin || !view->list) return E_INVALIDARG;
     if(view->deleting || view->operationDepth) return HRESULT_FROM_WIN32(ERROR_BUSY);
     if(!ListView_GetSelectedCount(view->list)) return S_FALSE;
     ++view->operationDepth; focus=GetFocus(); SetFocus(view->list);
-    result=NativeShellRestore(view->view,view->parent);
+    result=NativeShellRestore(view->view,view->parent,Win95RestoreCaption(caption,sizeof(caption)) ? caption : NULL);
     if(IsWindow(focus)) SetFocus(focus);
     --view->operationDepth;
     RenderTraceShell("recycle.restore-return",result,ListView_GetItemCount(view->list),ListView_GetSelectedCount(view->list));
