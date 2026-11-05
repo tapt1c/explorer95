@@ -513,7 +513,7 @@ static HIMAGELIST CreateGhost(DesktopIcons *icons, POINT *origin)
     if (!BitBlt(colorDC,0,0,width,height,maskDC,0,0,SRCAND)) goto done;
     /* ImageList_Add copies both bitmaps; deselect them before handing them off. */
     SelectObject(colorDC,oldColor); oldColor = NULL; SelectObject(maskDC,oldMask); oldMask = NULL;
-    image = ImageList_Create(width,height,ILC_COLOR | ILC_MASK,1,1);
+    image = ImageList_Create(width,height,ILC_COLOR24 | ILC_MASK,1,1);
     if (image && ImageList_Add(image,color,mask) >= 0) okay = TRUE;
  done:
     if (oldFont) SelectObject(colorDC,oldFont);

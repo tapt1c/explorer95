@@ -345,7 +345,7 @@ static LRESULT CALLBACK NativePaddedIconProc(HWND window,UINT message,WPARAM wp,
 }
 static void NativeDesktopOverlay48Test(HWND list,HIMAGELIST original,BOOL padded)
 {
-    HIMAGELIST source=ImageList_Create(32,32,ILC_COLOR|ILC_MASK,2,1);
+    HIMAGELIST source=ImageList_Create(32,32,ILC_COLOR24|ILC_MASK,2,1);
     LVITEMA item; UINT state; RECT area={0,0,48,48},bounds; PaintBuffer expected={0};
     HDC screen,dc; HICON composite; int x,y,matches=0,ghosts=0;
     Check(source && ImageList_AddIcon(source,LoadIconA(NULL,IDI_APPLICATION))==0 &&
@@ -404,6 +404,54 @@ static void NativeDesktopOverlay48Test(HWND list,HIMAGELIST original,BOOL padded
     ImageList_Destroy(source);
     Check(matches>48*48*9/10,"48px buffered desktop icons retain the real overlay artwork and transparent corners");
 }
+static void NativeDesktopColor48Test(NativeView *view,HIMAGELIST original)
+{
+    HWND list=NativeViewList(view); HDC screen=GetDC(list),colorDC=CreateCompatibleDC(screen),maskDC=CreateCompatibleDC(screen);
+    HBITMAP color=CreateCompatibleBitmap(screen,32,32),mask=CreateBitmap(32,32,1,1,NULL);
+    HGDIOBJ oldColor=SelectObject(colorDC,color),oldMask=SelectObject(maskDC,mask);
+    RECT area={0,0,32,32},right={16,0,32,32},stripe={0,24,32,25},bounds;
+    HBRUSH yellow=CreateSolidBrush(RGB(255,255,160)),blue=CreateSolidBrush(RGB(35,137,219)),orange=CreateSolidBrush(RGB(241,93,17));
+    ICONINFO info; HICON icon; HIMAGELIST source; LVITEMA item,replacement; int x,y,wrong=0;
+    FillRect(colorDC,&area,yellow); FillRect(colorDC,&right,blue); FillRect(colorDC,&stripe,orange);
+    FillRect(maskDC,&area,(HBRUSH)GetStockObject(BLACK_BRUSH));
+    SelectObject(colorDC,oldColor); SelectObject(maskDC,oldMask); ZeroMemory(&info,sizeof(info));
+    info.fIcon=TRUE; info.hbmColor=color; info.hbmMask=mask; icon=CreateIconIndirect(&info);
+    source=ImageList_Create(32,32,ILC_COLOR24|ILC_MASK,1,1);
+    Check(icon && source && ImageList_AddIcon(source,icon)==0,"create an isolated yellow folder-like icon with non-VGA colors and a one-pixel stripe");
+    ZeroMemory(&item,sizeof(item)); item.mask=LVIF_IMAGE|LVIF_STATE; item.stateMask=LVIS_OVERLAYMASK|LVIS_SELECTED|LVIS_DROPHILITED|LVIS_CUT;
+    Check(ListView_GetItem(list,&item),"retain the native desktop item's artwork and selection");
+    replacement=item; replacement.iImage=0; replacement.state=0;
+    SendMessageA(list,WM_SETREDRAW,FALSE,0); ListView_SetItem(list,&replacement); ListView_SetImageList(list,source,LVSIL_NORMAL);
+    SendMessageA(list,WM_SETREDRAW,TRUE,0); RedrawWindow(list,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_UPDATENOW);
+    Check(PaintListIconRect(list,0,&bounds) && bounds.right-bounds.left==48,"the color regression exercises the real private 48px desktop image list");
+    for(y=0;y<48;++y) for(x=0;x<48;++x) {
+        COLORREF expected=y*32/48==24 ? RGB(241,93,17) : x*32/48<16 ? RGB(255,255,160) : RGB(35,137,219);
+        if(GetPixel(screen,bounds.left+x,bounds.top+y)!=expected) ++wrong;
+    }
+    if(wrong) { char note[96]; wsprintfA(note,"48px RGB mismatch pixels: %d\r\n",wrong); Log(note); }
+    ListView_SetItemState(list,0,LVIS_SELECTED,LVIS_SELECTED); DesktopBegin(NativeViewWindow(view),list,0);
+    { HIMAGELIST ghost=ImageList_GetDragImage(NULL,NULL); int width,height,yellowPixels=0,bluePixels=0,orangePixels=0;
+      HDC dc=CreateCompatibleDC(screen); HBITMAP canvas; HGDIOBJ old; RECT rect;
+      Check(ghost && ImageList_GetIconSize(ghost,&width,&height) && width>0 && width<=256 && height>0 && height<=512,
+          "create the actual drag image from the full-color desktop fixture");
+      canvas=CreateCompatibleBitmap(screen,width,height); old=SelectObject(dc,canvas); SetRect(&rect,0,0,width,height);
+      FillRect(dc,&rect,(HBRUSH)GetStockObject(BLACK_BRUSH));
+      Check(ImageList_Draw(ghost,0,dc,0,0,ILD_TRANSPARENT),"render the public drag image without accessing its selected internal bitmaps");
+      for(y=0;y<height;++y) for(x=0;x<width;++x) {
+          COLORREF pixel=GetPixel(dc,x,y);
+          if(pixel==RGB(255,255,160)) ++yellowPixels;
+          if(pixel==RGB(35,137,219)) ++bluePixels;
+          if(pixel==RGB(241,93,17)) ++orangePixels;
+      }
+      SelectObject(dc,old); DeleteObject(canvas); DeleteDC(dc);
+      Check(yellowPixels>32 && bluePixels>32 && orangePixels>8 && DesktopGhostIsTransparent(list),
+          "drag artwork keeps original RGB colors and thin details alongside its transparent checker mask"); }
+    SendMessageA(list,WM_KEYDOWN,VK_ESCAPE,0);
+    ListView_SetImageList(list,original,LVSIL_NORMAL); ListView_SetItem(list,&item);
+    ImageList_Destroy(source); DestroyIcon(icon); DeleteObject(color); DeleteObject(mask);
+    DeleteObject(yellow); DeleteObject(blue); DeleteObject(orange); DeleteDC(colorDC); DeleteDC(maskDC); ReleaseDC(list,screen);
+    Check(!wrong,"48px desktop artwork preserves yellow, non-VGA RGB colors and thin details without palette dithering");
+}
 static void NativeDesktopIconSizeTests(void)
 {
     HRESULT ole=OleInitialize(NULL); NativeView *view; HWND parent,list; RECT area={0,0,400,300};
@@ -429,6 +477,7 @@ static void NativeDesktopIconSizeTests(void)
         "F5 retains the selected desktop icon size and the same namespace objects");
     NativeDesktopOverlay48Test(list,large,FALSE);
     NativeDesktopOverlay48Test(list,large,TRUE);
+    NativeDesktopColor48Test(view,large);
     ListView_SetItemState(list,0,LVIS_SELECTED,LVIS_SELECTED);
     DesktopBegin(NativeViewWindow(view),list,0);
     Check(ImageList_GetDragImage(NULL,NULL) && DesktopGhostIsTransparent(list),

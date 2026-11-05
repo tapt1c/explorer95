@@ -172,7 +172,9 @@ static BOOL DesktopImages48(NativeView *view)
     count=ImageList_GetImageCount(view->desktopLargeImages);
     if(count<0 || count>4096) return FALSE;
     if(!view->desktopScaledImages)
-        view->desktopScaledImages=ImageList_Create(48,48,ILC_COLOR|ILC_MASK,count,16);
+        /* ILC_COLOR defaults to a 4-bit list: Win95 remaps pale folder colors
+         * and dithers true-color artwork even on a 32-bit display. */
+        view->desktopScaledImages=ImageList_Create(48,48,ILC_COLOR24|ILC_MASK,count,16);
     if(!view->desktopScaledImages) return FALSE;
     if(view->desktopImagesDirty) { ImageList_RemoveAll(view->desktopScaledImages); view->desktopImagesDirty=FALSE; }
     for(i=ImageList_GetImageCount(view->desktopScaledImages);i<count;++i) {
@@ -205,7 +207,7 @@ static void PaintDesktopOverlays(NativeView *view,HDC dc)
         if(!icon) continue;
         sized=PaintScaleIcon(icon,width,height,48,48); DestroyIcon(icon); icon=sized;
         if(!icon) continue;
-        if(!view->desktopOverlayImages) view->desktopOverlayImages=ImageList_Create(48,48,ILC_COLOR|ILC_MASK,1,1);
+        if(!view->desktopOverlayImages) view->desktopOverlayImages=ImageList_Create(48,48,ILC_COLOR24|ILC_MASK,1,1);
         if(view->desktopOverlayImages && ImageList_ReplaceIcon(view->desktopOverlayImages,ImageList_GetImageCount(view->desktopOverlayImages) ? 0 : -1,icon)>=0) {
             int saved=SaveDC(dc);
             if(saved) {
