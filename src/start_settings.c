@@ -142,6 +142,16 @@ static void UpdateStyle(HWND window)
     for (i = 0; i < 6; ++i) EnableWindow(GetDlgItem(window, onlyTwoColumn[i]), enabled);
 }
 void StartSettingsScreenChanged(HWND window) { RecentLimitHint(window); }
+void StartSettingsPreview(HWND window,HDC dc,const RECT *bounds)
+{
+    ShellOptions options=env.options; int i;
+    options.classicStart=SendDlgItemMessageA(window,ID_STARTSTYLE,CB_GETCURSEL,0,0)==1;
+    options.largeStartIcons=SendDlgItemMessageA(window,ID_STARTLARGE,BM_GETCHECK,0,0)==BST_CHECKED;
+    options.recentCount=clearPrograms ? 0 : GetDlgItemInt(window,ID_RECENTCOUNT,NULL,FALSE);
+    options.startItems=0; options.startMenus=draftMenus;
+    for(i=0;i<START_OPTION_COUNT;++i) if(SendDlgItemMessageA(window,ID_VISIBLE+i,BM_GETCHECK,0,0)==BST_CHECKED) options.startItems|=1U<<i;
+    StartPaintPreview(dc,bounds,&options,draft,draftCount);
+}
 static void AddClientChoice(HWND window, int control, const char *path)
 {
     int index = SendDlgItemMessageA(window, control, CB_FINDSTRINGEXACT, (WPARAM)-1, (LPARAM)path);
@@ -171,7 +181,7 @@ static void CreateClientControls(HWND window)
 {
     HWND box; int client;
     for (client = 1; client <= 2; ++client) {
-        int y = client == 1 ? 294 : 326, choice = client == 1 ? ID_INTERNETAPP : ID_EMAILAPP, index = ClientIndex(client);
+        int y = client == 1 ? 260 : 288, choice = client == 1 ? ID_INTERNETAPP : ID_EMAILAPP, index = ClientIndex(client);
         box = Control(window, START_PINNED, "BUTTON", client == 1 ? "Internet:" : "E-mail:", WS_TABSTOP | BS_AUTOCHECKBOX,
             client == 1 ? ID_INTERNET : ID_EMAIL, 30, y, 106, 22);
         SendMessageA(box, BM_SETCHECK, index >= 0, 0);
@@ -214,63 +224,63 @@ static BOOL ClientCommand(HWND window, WPARAM command)
         for (i = existing; i + 1 < draftCount; ++i) draft[i] = draft[i + 1];
         --draftCount; ZeroMemory(&draft[draftCount], sizeof(draft[0])); RefreshList(window, 0);
     }
-    SettingsChanged(window); return TRUE;
+    SettingsPreviewChanged(window); return TRUE;
 }
 void StartSettingsCreate(HWND window)
 {
     HWND control; int i;
-    Control(window,START_GENERAL,"STATIC","",SS_OWNERDRAW,ID_PREVIEW_START,30,78,160,116);
-    Control(window,START_GENERAL,"STATIC","Start menu style:",0,0,214,80,270,20);
-    control=Control(window,START_GENERAL,"COMBOBOX","",WS_TABSTOP|CBS_DROPDOWNLIST,ID_STARTSTYLE,214,102,270,100);
+    Control(window,START_GENERAL,"STATIC","",SS_OWNERDRAW,ID_PREVIEW_START,30,70,284,152);
+    Control(window,START_GENERAL,"STATIC","Start menu style:",0,0,328,72,156,20);
+    control=Control(window,START_GENERAL,"COMBOBOX","",WS_TABSTOP|CBS_DROPDOWNLIST,ID_STARTSTYLE,328,94,156,100);
     SendMessageA(control,CB_ADDSTRING,0,(LPARAM)"Two-column Start menu"); SendMessageA(control,CB_ADDSTRING,0,(LPARAM)"Classic Start menu");
     SendMessageA(control,CB_SETCURSEL,env.options.classicStart,0);
-    control=Control(window,START_GENERAL,"BUTTON","Large icons (32 x 32)",WS_TABSTOP|BS_AUTORADIOBUTTON|WS_GROUP,ID_STARTLARGE,214,137,270,22);
+    control=Control(window,START_GENERAL,"BUTTON","Large icons (32 x 32)",WS_TABSTOP|BS_AUTORADIOBUTTON|WS_GROUP,ID_STARTLARGE,328,128,156,22);
     SendMessageA(control,BM_SETCHECK,env.options.largeStartIcons,0);
-    control=Control(window,START_GENERAL,"BUTTON","Small icons (16 x 16)",WS_TABSTOP|BS_AUTORADIOBUTTON,ID_STARTSMALL,214,164,270,22);
+    control=Control(window,START_GENERAL,"BUTTON","Small icons (16 x 16)",WS_TABSTOP|BS_AUTORADIOBUTTON,ID_STARTSMALL,328,154,156,22);
     SendMessageA(control,BM_SETCHECK,!env.options.largeStartIcons,0);
-    Control(window,START_GENERAL,"STATIC","Start text (optional):",0,0,30,210,110,20);
-    control=Control(window,START_GENERAL,"EDIT",env.options.startLabel,WS_BORDER|WS_TABSTOP|ES_AUTOHSCROLL,ID_STARTLABEL,144,204,340,23);
+    Control(window,START_GENERAL,"STATIC","Start text (optional):",0,0,328,184,156,20);
+    control=Control(window,START_GENERAL,"EDIT",env.options.startLabel,WS_BORDER|WS_TABSTOP|ES_AUTOHSCROLL,ID_STARTLABEL,328,204,156,23);
     SendMessageA(control,EM_LIMITTEXT,31,0);
-    Control(window,START_GENERAL,"STATIC","Recent programs:",0,0,30,245,110,20);
-    control=Control(window,START_GENERAL,"EDIT","",WS_BORDER|WS_TABSTOP|ES_NUMBER,ID_RECENTCOUNT,144,238,48,23);
+    Control(window,START_GENERAL,"STATIC","Recent programs:",0,0,30,242,110,20);
+    control=Control(window,START_GENERAL,"EDIT","",WS_BORDER|WS_TABSTOP|ES_NUMBER,ID_RECENTCOUNT,144,236,48,23);
     SendMessageA(control,EM_LIMITTEXT,2,0); SetDlgItemInt(window,ID_RECENTCOUNT,env.options.recentCount,FALSE);
-    { HWND spin=Control(window,START_GENERAL,UPDOWN_CLASSA,"",UDS_SETBUDDYINT|UDS_ARROWKEYS,ID_RECENTSPIN,192,238,17,23);
+    { HWND spin=Control(window,START_GENERAL,UPDOWN_CLASSA,"",UDS_SETBUDDYINT|UDS_ARROWKEYS,ID_RECENTSPIN,192,236,17,23);
       SendMessageA(spin,UDM_SETBUDDY,(WPARAM)control,0); SendMessageA(spin,UDM_SETRANGE,0,MAKELPARAM(RECENT_LIMIT,0)); }
-    Control(window,START_GENERAL,"STATIC","",0,ID_RECENTLIMIT,216,245,166,20);
-    Control(window,START_GENERAL,"BUTTON","Clear list",WS_TABSTOP,ID_CLEARRECENT,382,238,102,25);
-    control=Control(window,START_GENERAL,"BUTTON","Open submenus on hover",WS_TABSTOP|BS_AUTOCHECKBOX,ID_STARTHOVER,30,280,226,22);
+    Control(window,START_GENERAL,"STATIC","",0,ID_RECENTLIMIT,216,242,166,20);
+    Control(window,START_GENERAL,"BUTTON","Clear list",WS_TABSTOP,ID_CLEARRECENT,382,236,102,25);
+    control=Control(window,START_GENERAL,"BUTTON","Open submenus on hover",WS_TABSTOP|BS_AUTOCHECKBOX,ID_STARTHOVER,30,268,226,22);
     SendMessageA(control,BM_SETCHECK,env.options.hoverMenus,0);
-    control=Control(window,START_GENERAL,"BUTTON","Highlight new shortcuts",WS_TABSTOP|BS_AUTOCHECKBOX,ID_HIGHLIGHTNEW,266,280,218,22);
+    control=Control(window,START_GENERAL,"BUTTON","Highlight new shortcuts",WS_TABSTOP|BS_AUTOCHECKBOX,ID_HIGHLIGHTNEW,266,268,218,22);
     SendMessageA(control,BM_SETCHECK,env.options.highlightNew,0);
-    control=Control(window,START_GENERAL,"BUTTON","Allow dropping programs",WS_TABSTOP|BS_AUTOCHECKBOX,ID_STARTDROP,30,314,454,22);
+    control=Control(window,START_GENERAL,"BUTTON","Allow dropping programs",WS_TABSTOP|BS_AUTOCHECKBOX,ID_STARTDROP,30,294,454,22);
     SendMessageA(control,BM_SETCHECK,env.options.allowDrop,0);
-    Control(window,START_ADVANCED,"BUTTON","Start menu items",BS_GROUPBOX,0,24,74,472,172);
+    Control(window,START_ADVANCED,"BUTTON","Start menu items",BS_GROUPBOX,0,24,74,472,164);
     for(i=0;i<START_OPTION_COUNT;++i) {
         control=Control(window,START_ADVANCED,"BUTTON",visibleNames[i],WS_TABSTOP|BS_AUTOCHECKBOX,ID_VISIBLE+i,36+(i/7)*230,94+(i%7)*20,218,20);
         SendMessageA(control,BM_SETCHECK,env.options.startItems&(1U<<i),0);
     }
-    Control(window,START_ADVANCED,"STATIC","Folder command:",0,0,30,262,220,20);
-    Control(window,START_ADVANCED,"STATIC","Display as:",0,0,266,262,218,20);
-    control=Control(window,START_ADVANCED,"COMBOBOX","",WS_TABSTOP|CBS_DROPDOWNLIST,ID_FOLDERITEM,30,282,220,150);
+    Control(window,START_ADVANCED,"STATIC","Folder command:",0,0,30,244,220,20);
+    Control(window,START_ADVANCED,"STATIC","Display as:",0,0,266,244,218,20);
+    control=Control(window,START_ADVANCED,"COMBOBOX","",WS_TABSTOP|CBS_DROPDOWNLIST,ID_FOLDERITEM,30,264,220,150);
     for(i=0;i<7;++i) SendMessageA(control,CB_ADDSTRING,0,(LPARAM)visibleNames[folderItems[i]]);
     SendMessageA(control,CB_SETCURSEL,4,0);
-    control=Control(window,START_ADVANCED,"COMBOBOX","",WS_TABSTOP|CBS_DROPDOWNLIST,ID_FOLDERMODE,266,282,218,100);
+    control=Control(window,START_ADVANCED,"COMBOBOX","",WS_TABSTOP|CBS_DROPDOWNLIST,ID_FOLDERMODE,266,264,218,100);
     SendMessageA(control,CB_ADDSTRING,0,(LPARAM)"Link (open a window)"); SendMessageA(control,CB_ADDSTRING,0,(LPARAM)"Menu");
     SendMessageA(control,CB_ADDSTRING,0,(LPARAM)"Hidden"); FolderMode(window);
-    Control(window,START_ADVANCED,"BUTTON","Clear recent documents",WS_TABSTOP,ID_CLEARDOCS,30,324,454,26);
+    Control(window,START_ADVANCED,"BUTTON","Clear recent documents",WS_TABSTOP,ID_CLEARDOCS,30,292,454,24);
     Control(window,START_PINNED,"STATIC","Pinned programs are separate from recent programs (up to six).",0,0,30,72,454,20);
-    Control(window,START_PINNED,"LISTBOX","",WS_BORDER|WS_VSCROLL|WS_TABSTOP|LBS_NOTIFY|LBS_NOINTEGRALHEIGHT,ID_PINLIST,30,94,338,88);
-    Control(window,START_PINNED,"BUTTON","Remove",WS_TABSTOP,ID_PINREMOVE,382,94,102,24);
-    Control(window,START_PINNED,"BUTTON","Move up",WS_TABSTOP,ID_PINUP,382,126,102,24);
-    Control(window,START_PINNED,"BUTTON","Move down",WS_TABSTOP,ID_PINDOWN,382,158,102,24);
-    Control(window,START_PINNED,"STATIC","Program:",0,0,30,202,66,20);
-    control=Control(window,START_PINNED,"EDIT","",WS_BORDER|WS_TABSTOP|ES_AUTOHSCROLL,ID_PINPATH,100,196,338,23); SendMessageA(control,EM_LIMITTEXT,MAX_PATH-1,0);
-    Control(window,START_PINNED,"BUTTON","...",WS_TABSTOP,638,450,196,34,24);
-    Control(window,START_PINNED,"STATIC","Name:",0,0,30,232,66,20);
-    control=Control(window,START_PINNED,"EDIT","",WS_BORDER|WS_TABSTOP|ES_AUTOHSCROLL,ID_PINLABEL,100,226,384,23); SendMessageA(control,EM_LIMITTEXT,79,0);
-    Control(window,START_PINNED,"STATIC","Arguments:",0,0,30,262,66,20);
-    control=Control(window,START_PINNED,"EDIT","",WS_BORDER|WS_TABSTOP|ES_AUTOHSCROLL,ID_PINARGS,100,256,268,23); SendMessageA(control,EM_LIMITTEXT,511,0);
-    Control(window,START_PINNED,"BUTTON","Add",WS_TABSTOP,ID_PINADD,382,256,102,24);
+    Control(window,START_PINNED,"LISTBOX","",WS_BORDER|WS_VSCROLL|WS_TABSTOP|LBS_NOTIFY|LBS_NOINTEGRALHEIGHT,ID_PINLIST,30,94,338,70);
+    Control(window,START_PINNED,"BUTTON","Remove",WS_TABSTOP,ID_PINREMOVE,382,94,102,22);
+    Control(window,START_PINNED,"BUTTON","Move up",WS_TABSTOP,ID_PINUP,382,118,102,22);
+    Control(window,START_PINNED,"BUTTON","Move down",WS_TABSTOP,ID_PINDOWN,382,142,102,22);
+    Control(window,START_PINNED,"STATIC","Program:",0,0,30,178,66,20);
+    control=Control(window,START_PINNED,"EDIT","",WS_BORDER|WS_TABSTOP|ES_AUTOHSCROLL,ID_PINPATH,100,172,338,23); SendMessageA(control,EM_LIMITTEXT,MAX_PATH-1,0);
+    Control(window,START_PINNED,"BUTTON","...",WS_TABSTOP,638,450,172,34,24);
+    Control(window,START_PINNED,"STATIC","Name:",0,0,30,206,66,20);
+    control=Control(window,START_PINNED,"EDIT","",WS_BORDER|WS_TABSTOP|ES_AUTOHSCROLL,ID_PINLABEL,100,200,384,23); SendMessageA(control,EM_LIMITTEXT,79,0);
+    Control(window,START_PINNED,"STATIC","Arguments:",0,0,30,234,66,20);
+    control=Control(window,START_PINNED,"EDIT","",WS_BORDER|WS_TABSTOP|ES_AUTOHSCROLL,ID_PINARGS,100,228,268,23); SendMessageA(control,EM_LIMITTEXT,511,0);
+    Control(window,START_PINNED,"BUTTON","Add",WS_TABSTOP,ID_PINADD,382,228,102,24);
     CreateClientControls(window); RefreshList(window,0); UpdateStyle(window);
 }
 BOOL StartSettingsCommand(HWND window, WPARAM command)
@@ -292,15 +302,15 @@ BOOL StartSettingsCommand(HWND window, WPARAM command)
                 UINT bit = 1U << folderItems[index];
                 draftMenus = mode == 1 ? draftMenus | bit : draftMenus & ~bit;
                 SendDlgItemMessageA(window, ID_VISIBLE + folderItems[index], BM_SETCHECK, mode == 2 ? BST_UNCHECKED : BST_CHECKED, 0);
-                SettingsChanged(window);
+                SettingsPreviewChanged(window);
             }
         }
         return TRUE;
     }
-    if (id >= ID_VISIBLE && id < ID_VISIBLE + START_OPTION_COUNT) { FolderMode(window); SettingsChanged(window); return TRUE; }
+    if (id >= ID_VISIBLE && id < ID_VISIBLE + START_OPTION_COUNT) { FolderMode(window); SettingsPreviewChanged(window); return TRUE; }
     if (id == ID_CLEARRECENT || id == ID_CLEARDOCS) {
         if (id == ID_CLEARRECENT) clearPrograms = TRUE; else clearDocuments = TRUE;
-        SetDlgItemTextA(window, id, "Clear on Apply"); SettingsChanged(window); return TRUE;
+        SetDlgItemTextA(window, id, "Clear on Apply"); SettingsPreviewChanged(window); return TRUE;
     }
     if (id == 638) { Browse(window); return TRUE; }
     if (id == ID_PINADD) {
@@ -312,15 +322,15 @@ BOOL StartSettingsCommand(HWND window, WPARAM command)
         if (!pin.label[0] || attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_DIRECTORY)) {
             MessageBoxA(window, "Choose an existing program or shortcut and enter its name.", "Start Menu", MB_OK | MB_ICONEXCLAMATION); return TRUE;
         }
-        draft[draftCount++] = pin; RefreshList(window, draftCount - 1); SettingsChanged(window); return TRUE;
+        draft[draftCount++] = pin; RefreshList(window, draftCount - 1); SettingsPreviewChanged(window); return TRUE;
     }
     if (id == ID_PINREMOVE && selected >= 0 && selected < draftCount) {
         for (i = selected; i + 1 < draftCount; ++i) draft[i] = draft[i + 1];
-        --draftCount; ZeroMemory(&draft[draftCount], sizeof(draft[0])); RefreshList(window, selected ? selected - 1 : 0); SettingsChanged(window); return TRUE;
+        --draftCount; ZeroMemory(&draft[draftCount], sizeof(draft[0])); RefreshList(window, selected ? selected - 1 : 0); SettingsPreviewChanged(window); return TRUE;
     }
     if ((id == ID_PINUP || id == ID_PINDOWN) && selected >= 0 && selected < draftCount) {
         int next = selected + (id == ID_PINUP ? -1 : 1);
-        if (next >= 0 && next < draftCount) { PinnedProgram swap = draft[selected]; draft[selected] = draft[next]; draft[next] = swap; RefreshList(window, next); SettingsChanged(window); }
+        if (next >= 0 && next < draftCount) { PinnedProgram swap = draft[selected]; draft[selected] = draft[next]; draft[next] = swap; RefreshList(window, next); SettingsPreviewChanged(window); }
         return TRUE;
     }
     return FALSE;

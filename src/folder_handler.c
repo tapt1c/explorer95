@@ -20,6 +20,12 @@ static DWORD OpenKey(HKEY root, const char *name, HKEY *key)
 }
 static DWORD CreateKey(HKEY root, const char *name, HKEY *key)
 { return RegCreateKeyExA(root,name,0,NULL,0,KEY_READ | KEY_WRITE,NULL,key,NULL); }
+static DWORD ReadKey(HKEY root, const char *name, HKEY *key)
+{
+    DWORD error; *key=NULL;
+    error=RegOpenKeyExA(root,name,0,KEY_READ,key);
+    return error==ERROR_FILE_NOT_FOUND ? ERROR_SUCCESS : error;
+}
 static DWORD Number(HKEY key, const char *name, DWORD value)
 { return RegSetValueExA(key,name,0,REG_DWORD,(BYTE *)&value,sizeof(value)); }
 static DWORD ReadNumber(HKEY key, const char *name, DWORD *value)
@@ -106,8 +112,8 @@ static DWORD SameTree(HKEY a, HKEY b, UINT depth, BOOL *same)
     for (index = 0; index < ac; ++index) {
         HKEY left = NULL, right = NULL; DWORD length = sizeof(name);
         error = RegEnumKeyExA(a,index,name,&length,NULL,NULL,NULL,NULL);
-        if (!error) error = OpenKey(a,name,&left);
-        if (!error) error = OpenKey(b,name,&right);
+        if (!error) error = ReadKey(a,name,&left);
+        if (!error) error = ReadKey(b,name,&right);
         if (!error) error = SameTree(left,right,depth+1,same);
         if (left) RegCloseKey(left);
         if (right) RegCloseKey(right);
@@ -134,13 +140,36 @@ static DWORD MatchShell(HKEY live, HKEY snapshot, BOOL *same)
     error = SameValue(live,snapshot,"",same); if (error || !*same) return error;
     for (i = 0; i < 2; ++i) {
         HKEY a = NULL, b = NULL;
-        error = OpenKey(live,verbs[i],&a); if (!error) error = OpenKey(snapshot,verbs[i],&b);
+        error = ReadKey(live,verbs[i],&a); if (!error) error = ReadKey(snapshot,verbs[i],&b);
         if (!error) error = SameTree(a,b,0,same);
         if (a) RegCloseKey(a);
         if (b) RegCloseKey(b);
         if (error || !*same) return error;
     }
     return ERROR_SUCCESS;
+}
+DWORD QueryFolderHandler(HKEY classes,HKEY storage)
+{
+    HKEY journal=NULL; DWORD error,version,state; int i;
+    error=RegOpenKeyExA(storage,"FolderHandler",0,KEY_READ,&journal);
+    if(error) return error;
+    error=ReadNumber(journal,"Version",&version);
+    if(!error) error=ReadNumber(journal,"State",&state);
+    if(!error && (version!=1 || state!=1)) error=ERROR_INVALID_DATA;
+    if(error==ERROR_FILE_NOT_FOUND) error=ERROR_INVALID_DATA;
+    for(i=0;i<TARGET_COUNT && !error;++i) {
+        HKEY live=NULL,snapshot=NULL; char name[32],path[128]; BOOL same=FALSE;
+        wsprintfA(name,"%d\\After",i); wsprintfA(path,"%s\\shell",targets[i]);
+        error=RegOpenKeyExA(journal,name,0,KEY_READ,&snapshot);
+        if(!error) error=ReadKey(classes,path,&live);
+        if(!error && live) error=MatchShell(live,snapshot,&same);
+        if(live) RegCloseKey(live);
+        if(snapshot) RegCloseKey(snapshot);
+        if(!error && !same) error=ERROR_ALREADY_EXISTS;
+        /* A missing snapshot is damaged recovery, not an absent registration. */
+        if(error==ERROR_FILE_NOT_FOUND) error=ERROR_INVALID_DATA;
+    }
+    RegCloseKey(journal); return error;
 }
 static DWORD ApplyShell(HKEY live, HKEY snapshot)
 {

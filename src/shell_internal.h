@@ -154,6 +154,7 @@ void StartClearRecent(void);
 void StartDestroy(void);
 void StartRefresh(void);
 void StartSettingsOpen(void);
+void StartPaintPreview(HDC dc,const RECT *bounds,const ShellOptions *options,const PinnedProgram *pins,int count);
 void StartReloadRecent(void);
 HICON EnvPathIcon(const char *path);
 HICON EnvSystemIcon(int index);

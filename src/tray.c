@@ -494,23 +494,23 @@ void TraySettingsCreate(HWND w)
 #define CTRL(kind,text,style,id,x,y,width,height) SettingsControl(w,SETTINGS_TRAY,-1,kind,text,style,id,x,y,width,height)
     control = CTRL("BUTTON", "Show the clock", WS_TABSTOP | BS_AUTOCHECKBOX, ID_CLOCK, 30, 70, 226, 23); SendMessageA(control, BM_SETCHECK, env.options.clock, 0);
     control = CTRL("BUTTON", "Hide inactive icons", WS_TABSTOP | BS_AUTOCHECKBOX, ID_INACTIVE, 266, 70, 220, 23); SendMessageA(control, BM_SETCHECK, env.options.hideInactive, 0);
-    CTRL("STATIC", "Inactive timeout (seconds):", 0, 0, 30, 106, 250, 20);
-    CTRL("EDIT", "", WS_BORDER | WS_TABSTOP | ES_NUMBER, ID_TRAYSECONDS, 292, 102, 70, 23); SetDlgItemInt(w, ID_TRAYSECONDS, env.options.traySeconds, FALSE);
-    CTRL("STATIC", "5 - 3600", 0, 0, 374, 106, 110, 20);
-    control = CTRL("BUTTON", "Show keyboard icon next to input language", WS_TABSTOP | BS_AUTOCHECKBOX, ID_KEYBOARDICON, 30, 128, 454, 23);
+    CTRL("STATIC", "Inactive timeout (seconds):", 0, 0, 30, 100, 250, 20);
+    CTRL("EDIT", "", WS_BORDER | WS_TABSTOP | ES_NUMBER, ID_TRAYSECONDS, 292, 96, 70, 23); SetDlgItemInt(w, ID_TRAYSECONDS, env.options.traySeconds, FALSE);
+    CTRL("STATIC", "5 - 3600", 0, 0, 374, 100, 110, 20);
+    control = CTRL("BUTTON", "Show keyboard icon next to input language", WS_TABSTOP | BS_AUTOCHECKBOX, ID_KEYBOARDICON, 30, 122, 454, 23);
     SendMessageA(control,BM_SETCHECK,env.options.trayKeyboardIcon ? BST_CHECKED : BST_UNCHECKED,0);
-    CTRL("STATIC", "Current and remembered notifications:", 0, 0, 30, 156, 454, 20);
-    control = CTRL("LISTBOX", "", WS_BORDER | WS_VSCROLL | WS_TABSTOP | LBS_NOTIFY | LBS_NOINTEGRALHEIGHT, ID_NOTIFYLIST, 30, 178, 454, 106);
+    CTRL("STATIC", "Current and remembered notifications:", 0, 0, 30, 150, 454, 20);
+    control = CTRL("LISTBOX", "", WS_BORDER | WS_VSCROLL | WS_TABSTOP | LBS_NOTIFY | LBS_NOINTEGRALHEIGHT, ID_NOTIFYLIST, 30, 170, 454, 82);
     for (i = 0; i < draftCount; ++i) {
         wsprintfA(label, "%s  (%s, %u)", draftPolicies[i].label[0] ? draftPolicies[i].label : "Notification", draftPolicies[i].module, draftPolicies[i].id);
         SendMessageA(control, LB_ADDSTRING, 0, (LPARAM)label);
     }
     if (draftCount) SendMessageA(control, LB_SETCURSEL, 0, 0);
-    CTRL("STATIC", "Behavior:", 0, 0, 30, 302, 100, 20);
-    control = CTRL("COMBOBOX", "", WS_TABSTOP | CBS_DROPDOWNLIST, ID_NOTIFYMODE, 142, 298, 342, 100);
+    CTRL("STATIC", "Behavior:", 0, 0, 30, 268, 100, 20);
+    control = CTRL("COMBOBOX", "", WS_TABSTOP | CBS_DROPDOWNLIST, ID_NOTIFYMODE, 142, 262, 342, 100);
     SendMessageA(control, CB_ADDSTRING, 0, (LPARAM)"Hide when inactive"); SendMessageA(control, CB_ADDSTRING, 0, (LPARAM)"Always show"); SendMessageA(control, CB_ADDSTRING, 0, (LPARAM)"Always hide");
-    CTRL("BUTTON", "Restore defaults", WS_TABSTOP, ID_TRAYDEFAULTS, 310, 328, 174, 24);
-    CTRL("STATIC", "Hidden icons stay available through the arrow button.", 0, 0, 30, 328, 270, 26);
+    CTRL("BUTTON", "Restore defaults", WS_TABSTOP, ID_TRAYDEFAULTS, 310, 292, 174, 24);
+    CTRL("STATIC", "Hidden icons stay available through the arrow button.", 0, 0, 30, 292, 270, 24);
     PolicySelection(w);
 #undef CTRL
 }

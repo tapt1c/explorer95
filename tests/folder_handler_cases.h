@@ -73,6 +73,8 @@ static void FolderHandlerTests(const char *module, const char *settings)
     Check(!RegCreateKeyExA(HKEY_CURRENT_USER,path,0,NULL,0,KEY_READ | KEY_WRITE,NULL,&sandbox,&disposition) &&
         disposition == REG_CREATED_NEW_KEY,"folder registration uses a fresh isolated registry sandbox");
     root = FolderTestKey(sandbox,"Classes"); storage = FolderTestKey(sandbox,"Recovery");
+    Check(QueryFolderHandler(root,storage)==ERROR_FILE_NOT_FOUND && FolderTestMissing(storage,"FolderHandler"),
+        "reading absent folder-handler status creates no recovery data");
     for (i = 0; i < 4; ++i) { key = FolderTestKey(root,classes[i]); RegCloseKey(key); }
     FolderTestString(root,"Folder\\shell\\open\\command","namespace-extension-handler.exe");
     FolderTestString(root,"Directory\\shell","explore");
@@ -92,6 +94,14 @@ static void FolderHandlerTests(const char *module, const char *settings)
     Check(FolderTestMissing(storage,"FolderHandler"),"incomplete recovery preparation is cleaned up before any live changes");
     key = FolderTestKey(root,classes[3]); RegCloseKey(key);
     Check(!ConfigureFolderHandler(root,storage,module,settings,FALSE),"install folder handler into isolated classes");
+    Check(!QueryFolderHandler(root,storage),"folder-handler status verifies every registered class against its snapshot");
+    {
+        HKEY readClasses=NULL,readRecovery=NULL;
+        Check(!RegOpenKeyExA(sandbox,"Classes",0,KEY_READ,&readClasses) &&
+            !RegOpenKeyExA(sandbox,"Recovery",0,KEY_READ,&readRecovery) && !QueryFolderHandler(readClasses,readRecovery),
+            "integration status accepts read-only registry roots");
+        RegCloseKey(readClasses); RegCloseKey(readRecovery);
+    }
     Check(FolderTestRead(root,"Directory\\shell\\open\\command",installed,sizeof(installed)) &&
         lstrlenA(installed) > lstrlenA(module) && FolderTestMissing(root,"Directory\\shell\\open\\ddeexec"),
         "installed folder command replaces stale Explorer DDE without losing its backup");
@@ -101,6 +111,7 @@ static void FolderHandlerTests(const char *module, const char *settings)
     Check(FolderTestRead(root,"Folder\\shell\\open\\command",value,sizeof(value)) && !lstrcmpA(value,"namespace-extension-handler.exe"),
         "generic namespace-extension handlers remain untouched");
     FolderTestString(root,"Directory\\shell\\open\\command","another-manager.exe \"%1\"");
+    Check(QueryFolderHandler(root,storage)==ERROR_ALREADY_EXISTS,"folder-handler status detects a changed command without restoring it");
     Check(ConfigureFolderHandler(root,storage,NULL,NULL,TRUE) == ERROR_ALREADY_EXISTS &&
         FolderTestRead(root,"Drive\\shell\\open\\command",value,sizeof(value)),"restore preflight detects another file manager before changing any class");
     FolderTestString(root,"Directory\\shell\\open\\command",installed);
@@ -118,9 +129,11 @@ static void FolderHandlerTests(const char *module, const char *settings)
         "restore returns the old default verb while preserving unrelated later edits");
     Check(FolderTestMissing(root,"Drive\\shell") && FolderTestMissing(storage,"FolderHandler"),
         "restore removes newly created shell keys and completed recovery data");
+    Check(QueryFolderHandler(root,storage)==ERROR_FILE_NOT_FOUND,"restored folder-handler status has no registration");
     Check(FolderTestRead(root,"CLSID\\{20D04FE0-3AEA-1069-A2D8-08002B30309D}\\shell",value,sizeof(value)) && !value[0],
         "restore distinguishes an originally empty default value from an absent shell key");
     key = FolderTestKey(storage,"FolderHandler"); RegCloseKey(key);
+    Check(QueryFolderHandler(root,storage)==ERROR_INVALID_DATA,"damaged recovery is distinct from an absent registration");
     Check(ConfigureFolderHandler(root,storage,module,settings,FALSE) != ERROR_SUCCESS,"unknown recovery data cannot be replaced");
     RegCloseKey(root); RegCloseKey(storage); RegCloseKey(sandbox); FolderTestDelete(HKEY_CURRENT_USER,path);
 }

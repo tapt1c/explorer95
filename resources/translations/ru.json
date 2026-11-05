@@ -652,5 +652,19 @@
   "Startup and shutdown": "Запуск и завершение работы",
   "Interface language": "Язык интерфейса",
   "Start menu items": "Элементы меню «Пуск»",
-  "Open folders, drives, My Computer and Recycle Bin in Explorer95.": "Открывать папки, диски, «Мой компьютер» и «Корзину» в Explorer95."
+  "Open folders, drives, My Computer and Recycle Bin in Explorer95.": "Открывать папки, диски, «Мой компьютер» и «Корзину» в Explorer95.",
+  "At startup: %s": "При запуске Windows: %s",
+  "Startup shell could not be read.": "Не удалось прочитать текущую оболочку.",
+  "Explorer95 is the current shell.": "Explorer95 уже работает как основная оболочка.",
+  "Explorer95 will become the shell after restarting Windows.": "Explorer95 станет основной оболочкой после перезапуска Windows.",
+  "Select Explorer95 for the next Windows startup.": "Можно выбрать Explorer95 для следующего запуска Windows.",
+  "Available on Windows 95.": "Доступно в Windows 95.",
+  "Boot settings stay unchanged on this operating system.": "В этой системе параметры загрузки не меняются.",
+  "Folders open in Explorer95.": "Папки открываются в Explorer95.",
+  "System folder handler is unchanged.": "Используется системный обработчик папок.",
+  "Folder commands differ from the saved registration.": "Команды открытия отличаются от сохранённых.",
+  "Folder handler status could not be read.": "Не удалось определить обработчик папок.",
+  "Folders, drives, My Computer and Recycle Bin.": "Папки, диски, «Мой компьютер» и «Корзина».",
+  "Confirmed changes apply immediately.\r\nUse Restore to undo them; Cancel keeps them.": "Изменения применяются сразу.\r\nДля отмены используйте восстановление.",
+  "Refresh status": "Обновить статус"
 }

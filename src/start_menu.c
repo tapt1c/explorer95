@@ -57,6 +57,11 @@ static const char *BaseName(const char *path)
     for (; *path; ++path) if (*path == '\\' || *path == '/') name = path + 1;
     return name;
 }
+static BOOL BuiltinPin(const PinnedProgram *pin)
+{
+    return (!lstrcmpA(pin->path,"@explorer") && !lstrcmpA(pin->label,"Windows Explorer")) ||
+        (!lstrcmpA(pin->path,"@command") && !lstrcmpA(pin->label,"MS-DOS Prompt"));
+}
 
 static void Caption(const char *path, char *label, int size)
 {
@@ -232,15 +237,16 @@ static int RightGaps(UINT items)
     }
     return groups>0 ? (groups-1)*6 : 0;
 }
-static HICON RightSmallIcon(int index)
+static HICON RightPreviewIcon(int index,BOOL large)
 {
     static const int folders[] = {CSIDL_PERSONAL, CSIDL_RECENT, CSIDL_DRIVES, CSIDL_NETWORK, CSIDL_CONTROLS, CSIDL_PRINTERS};
     static const int resources[] = {24,23,25};
-    if(index==10) return DosIcon(FALSE);
-    if(index==9) return SpecialIcon(CSIDL_FAVORITES,FALSE);
-    if(index==0) return SystemIcon(4,FALSE);
-    return index<6 ? SpecialIcon(folders[index],FALSE) : SystemIcon(resources[index-6],FALSE);
+    if(index==10) return DosIcon(large);
+    if(index==9) return SpecialIcon(CSIDL_FAVORITES,large);
+    if(index==0) return SystemIcon(4,large);
+    return index<6 ? SpecialIcon(folders[index],large) : SystemIcon(resources[index-6],large);
 }
+static HICON RightSmallIcon(int index) { return RightPreviewIcon(index,FALSE); }
 static int FolderIndex(int id)
 {
     int i; for (i = 0; i < RIGHT_COUNT; ++i) if (rightCommands[i] == id) return i;
@@ -614,8 +620,7 @@ void StartRefresh(void)
     for (i = 0; i < PIN_LIMIT; ++i) {
         if (pinIcons[i]) DestroyIcon(pinIcons[i]);
         pinIcons[i] = NULL;
-        BOOL builtin=(!lstrcmpA(startPins[i].path,"@explorer") && !lstrcmpA(startPins[i].label,"Windows Explorer")) ||
-            (!lstrcmpA(startPins[i].path,"@command") && !lstrcmpA(startPins[i].label,"MS-DOS Prompt"));
+        BOOL builtin=BuiltinPin(&startPins[i]);
         if(builtin) SetWindowTextA(GetDlgItem(env.start,ID_PINNED+i),startPins[i].label);
         else UiSetLiteralWindowTextA(GetDlgItem(env.start,ID_PINNED+i),startPins[i].label);
         if (i < startPinCount) pinIcons[i] = startPins[i].path[0] == '@' ? (!lstrcmpA(startPins[i].path, "@explorer") ? MenuSystemIcon(5) : DosIcon(env.options.largeStartIcons)) : MenuPathIcon(startPins[i].path);
@@ -824,6 +829,112 @@ static void LoadItemIcons(void)
     itemIcons[13] = DosIcon(env.options.largeStartIcons);
 }
 
+/* Real Start buttons and the settings example share text, icon and arrow paint. */
+static void PaintStartEntry(HDC dc,const RECT *bounds,const char *label,HICON icon,int size,
+    BOOL selected,BOOL left,BOOL arrow,BOOL literal)
+{
+    RECT text=*bounds;
+    if(!icon) icon=LoadIconA(NULL,IDI_APPLICATION);
+    FillRect(dc,&text,(HBRUSH)(INT_PTR)((selected ? COLOR_HIGHLIGHT : left ? COLOR_MENU : COLOR_BTNFACE)+1));
+    SetBkMode(dc,TRANSPARENT); SelectObject(dc,env.host.font);
+    SetTextColor(dc,GetSysColor(selected ? COLOR_HIGHLIGHTTEXT : COLOR_MENUTEXT));
+    if(icon) DrawIconEx(dc,text.left+5,text.top+(text.bottom-text.top-size)/2,icon,size,size,0,NULL,DI_NORMAL);
+    text.left+=icon ? size+12 : 8;
+    if(arrow) {
+        RECT glyph=*bounds; glyph.left=glyph.right-16; glyph.right-=2;
+        PaintArrow(dc,&glyph,DFCS_SCROLLRIGHT,GetSysColor(selected ? COLOR_HIGHLIGHTTEXT : COLOR_MENUTEXT),TRUE);
+        text.right-=16;
+    }
+    if(literal) UiDrawNativeTextA(dc,label,-1,&text,DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS|DT_NOPREFIX);
+    else DrawTextA(dc,label,-1,&text,DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS|DT_NOPREFIX);
+}
+static void PaintPreviewPin(HDC dc,const RECT *bounds,const PinnedProgram *pin,int size,BOOL selected)
+{
+    HICON icon=NULL; int j;
+    if(!lstrcmpA(pin->path,"@explorer")) icon=SystemIcon(5,size==32);
+    else if(!lstrcmpA(pin->path,"@command")) icon=DosIcon(size==32);
+    else {
+        for(j=0;j<startPinCount;++j) if(!lstrcmpiA(pin->path,startPins[j].path)) { icon=pinIcons[j] ? CopyIcon(pinIcons[j]) : NULL; break; }
+        if(!icon) icon=PathIcon(pin->path,size==32);
+    }
+    PaintStartEntry(dc,bounds,pin->label[0] ? pin->label : BaseName(pin->path),icon,size,selected,TRUE,FALSE,!BuiltinPin(pin));
+    if(icon) DestroyIcon(icon);
+}
+void StartPaintPreview(HDC dc,const RECT *bounds,const ShellOptions *options,const PinnedProgram *pins,int count)
+{
+    RECT frame=*bounds,part,left; int saved=SaveDC(dc),i,y,rows,used=0;
+    BOOL classic=options->classicStart; int size=!classic && options->largeStartIcons ? 32 : 16;
+    int row=size+8,footer,half; UINT visible=options->startItems&env.availableStartItems;
+    InflateRect(&frame,-4,-4); FillRect(dc,&frame,(HBRUSH)(COLOR_MENU+1)); DrawEdge(dc,&frame,EDGE_RAISED,BF_RECT);
+    InflateRect(&frame,-2,-2); footer=frame.bottom-24; half=(frame.left+frame.right)/2;
+    SetBkMode(dc,TRANSPARENT);
+    if(classic) {
+        part=frame; part.right=part.left+CLASSIC_STRIP;
+        FillRect(dc,&part,(HBRUSH)(COLOR_ACTIVECAPTION+1));
+        if(classicUserFont) {
+            SelectObject(dc,classicUserFont); SetTextColor(dc,GetSysColor(COLOR_CAPTIONTEXT));
+            ExtTextOutA(dc,part.left+6,part.bottom-6,ETO_CLIPPED,&part,user,lstrlenA(user),NULL);
+        }
+        frame.left+=CLASSIC_STRIP; y=frame.top;
+        for(i=0;i<count && i<2 && y+66<=footer;++i) {
+            SetRect(&part,frame.left,y,frame.right,y+22);
+            PaintPreviewPin(dc,&part,&pins[i],16,i==0); y+=22;
+        }
+        if(i) {
+            SetRect(&part,frame.left+3,y+1,frame.right-3,y+3); DrawEdge(dc,&part,EDGE_ETCHED,BF_TOP); y+=4;
+        }
+        SetRect(&part,frame.left,y,frame.right,y+22);
+        PaintStartEntry(dc,&part,"All Programs",StartIcon(ID_PROGRAMS),16,count==0,TRUE,TRUE,FALSE); y+=26;
+        for(i=0;i<RIGHT_COUNT && y+22<=footer;++i) {
+            int index=rightOrder[i]; HICON icon;
+            if(!(visible&RightBit(index))) continue;
+            icon=RightSmallIcon(index); SetRect(&part,frame.left,y,frame.right,y+22);
+            PaintStartEntry(dc,&part,rightLabels[index],icon,16,FALSE,TRUE,(index<6 || index==9) && (options->startMenus&RightBit(index)),FALSE);
+            if(icon) DestroyIcon(icon);
+            y+=22;
+        }
+    } else {
+        SetRect(&part,frame.left,frame.top,frame.right,frame.top+24);
+        FillRect(dc,&part,(HBRUSH)(COLOR_ACTIVECAPTION+1)); part.left+=8;
+        SelectObject(dc,userFont ? userFont : env.host.font); SetTextColor(dc,GetSysColor(COLOR_CAPTIONTEXT));
+        UiDrawNativeTextA(dc,user,-1,&part,DT_SINGLELINE|DT_VCENTER|DT_END_ELLIPSIS|DT_NOPREFIX);
+        y=frame.top+26; rows=(footer-22-y)/row;
+        SetRect(&part,half,y,frame.right,footer); FillRect(dc,&part,(HBRUSH)(COLOR_BTNFACE+1));
+        for(i=0;i<count && used<rows;++i,++used) {
+            SetRect(&left,frame.left,y+used*row,half,y+(used+1)*row);
+            PaintPreviewPin(dc,&left,&pins[i],size,used==0);
+        }
+        for(i=0;i<(int)options->recentCount && i<RECENT_LIMIT && used<rows;++i) {
+            char label[MAX_PATH]; HWND button=GetDlgItem(env.start,ID_RECENT+i);
+            if(!recentShortcuts[i][0] || !GetWindowTextA(button,label,sizeof(label))) continue;
+            SetRect(&left,frame.left,y+used*row,half,y+(used+1)*row);
+            PaintStartEntry(dc,&left,label,StartIcon(ID_RECENT+i),size,used==0,TRUE,FALSE,TRUE); ++used;
+        }
+        SetRect(&part,frame.left+4,footer-24,half-4,footer-22); DrawEdge(dc,&part,EDGE_ETCHED,BF_TOP);
+        SetRect(&part,frame.left,footer-22,half,footer);
+        PaintStartEntry(dc,&part,"All Programs",StartIcon(ID_PROGRAMS),16,FALSE,TRUE,TRUE,FALSE);
+        for(i=0,used=0;i<RIGHT_COUNT && used<rows;++i) {
+            int index=rightOrder[i]; HICON icon;
+            if(!(visible&RightBit(index))) continue;
+            icon=RightPreviewIcon(index,size==32);
+            SetRect(&part,half+2,y+used*row,frame.right,y+(used+1)*row);
+            PaintStartEntry(dc,&part,rightLabels[index],icon,size,FALSE,FALSE,(index<6 || index==9) && (options->startMenus&RightBit(index)),FALSE);
+            if(icon) DestroyIcon(icon);
+            ++used;
+        }
+        SetRect(&part,half,y,half+2,footer); DrawEdge(dc,&part,EDGE_ETCHED,BF_LEFT);
+    }
+    SetRect(&part,frame.left+3,footer,frame.right-3,footer+2); DrawEdge(dc,&part,EDGE_ETCHED,BF_TOP);
+    if(visible&(1U<<11)) {
+        SetRect(&part,classic ? frame.left : half,footer+2,frame.right,frame.bottom);
+        PaintStartEntry(dc,&part,"Shut Down...",StartIcon(ID_SHUTDOWN),16,FALSE,classic,FALSE,FALSE);
+    }
+    if(!classic && (visible&START_ITEM_LOGOFF)) {
+        SetRect(&part,frame.left,footer+2,half,frame.bottom);
+        PaintStartEntry(dc,&part,"Log Off...",StartIcon(ID_LOGOFF),16,FALSE,FALSE,FALSE,FALSE);
+    }
+    RestoreDC(dc,saved);
+}
 static LRESULT CALLBACK StartProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
 {
     if(applicationContext && (message==WM_INITMENUPOPUP ||
@@ -910,29 +1021,17 @@ static LRESULT CALLBACK StartProc(HWND window, UINT message, WPARAM wp, LPARAM l
         if (item->CtlType == ODT_MENU) return OwnProgramItem(item->itemData) ? DrawProgramItem(item) : FALSE;
         DRAWITEMSTRUCT buffered = *item; HDC target = item->hDC;
         int iconSize = (item->CtlID == ID_EXIT || item->CtlID == ID_LOGOFF || item->CtlID == ID_SHUTDOWN) ? 16 : IconSize();
-        RECT text = item->rcItem; char label[MAX_PATH]; HICON icon = NULL;
+        char label[MAX_PATH]; HICON icon = NULL; int index;
         buffered.hDC = PaintBufferBegin(&itemBuffer, target, &item->rcItem); item = &buffered;
         BOOL selected = (item->itemState & (ODS_SELECTED | ODS_FOCUS)) || item->hwndItem == hovered;
         BOOL left = (item->CtlID >= ID_PINNED && item->CtlID < ID_PINNED + PIN_LIMIT) || item->CtlID == ID_PROGRAMS || item->CtlID == ID_MOREPINS ||
                     (item->CtlID >= ID_RECENT && item->CtlID < ID_RECENT + RECENT_LIMIT);
-        FillRect(item->hDC, &text, (HBRUSH)(INT_PTR)((selected ? COLOR_HIGHLIGHT : left ? COLOR_MENU : COLOR_BTNFACE) + 1));
-        SetBkMode(item->hDC, TRANSPARENT); SelectObject(item->hDC, env.host.font);
-        SetTextColor(item->hDC, GetSysColor(selected ? COLOR_HIGHLIGHTTEXT : COLOR_MENUTEXT));
-        icon = StartIcon(item->CtlID);
-        if (!icon) icon = LoadIconA(NULL, IDI_APPLICATION);
-        if (icon) DrawIconEx(item->hDC, text.left + 5, text.top + (text.bottom - text.top - iconSize) / 2, icon, iconSize, iconSize, 0, NULL, DI_NORMAL);
-        text.left += icon ? iconSize + 12 : 8;
-        { int index=FolderIndex(item->CtlID);
-          if(item->CtlID==ID_PROGRAMS || item->CtlID==ID_MOREPINS || item->CtlID==ID_MORECOMMANDS ||
-             (index>=0 && (index<6 || index==9) && (env.options.startMenus & RightBit(index)))) {
-              RECT arrow=item->rcItem; arrow.left=arrow.right-16; arrow.right-=2;
-              PaintArrow(item->hDC,&arrow,DFCS_SCROLLRIGHT,GetSysColor(selected ? COLOR_HIGHLIGHTTEXT : COLOR_MENUTEXT),TRUE);
-              text.right-=16;
-          }
-        }
-        GetWindowTextA(item->hwndItem, label, sizeof(label));
-        if(GetPropA(item->hwndItem,"Explorer95.UiLiteral")) UiDrawNativeTextA(item->hDC,label,-1,&text,DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS|DT_NOPREFIX);
-        else DrawTextA(item->hDC,label,-1,&text,DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS|DT_NOPREFIX);
+        icon=StartIcon(item->CtlID); index=FolderIndex(item->CtlID);
+        GetWindowTextA(item->hwndItem,label,sizeof(label));
+        PaintStartEntry(item->hDC,&item->rcItem,label,icon,iconSize,selected,left,
+            item->CtlID==ID_PROGRAMS || item->CtlID==ID_MOREPINS || item->CtlID==ID_MORECOMMANDS ||
+            (index>=0 && (index<6 || index==9) && (env.options.startMenus&RightBit(index))),
+            GetPropA(item->hwndItem,"Explorer95.UiLiteral")!=NULL);
         PaintBufferEnd(&itemBuffer, target, &item->rcItem); return TRUE;
     }
     case WM_TIMER: {

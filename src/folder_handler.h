@@ -5,4 +5,7 @@
  * Recovery stays under storage\FolderHandler until a complete restoration. */
 DWORD ConfigureFolderHandler(HKEY classes, HKEY storage, const char *executable,
                              const char *settings, BOOL restore);
+/* Read-only status: SUCCESS installed, FILE_NOT_FOUND no recovery journal,
+ * ALREADY_EXISTS commands changed; other errors mean status is unknown. */
+DWORD QueryFolderHandler(HKEY classes, HKEY storage);
 #endif

@@ -1176,6 +1176,10 @@ static void FolderSettingsTests(HWND bar)
 {
     HWND properties = OpenSettings(bar), install, restore; RECT area, first, second;
     SettingsPage(properties,4,-1); install = GetDlgItem(properties,ID_INSTALLFOLDERS); restore = GetDlgItem(properties,ID_RESTOREFOLDERS);
+    Check(GetWindowTextLengthA(GetDlgItem(properties,ID_SHELLSTATUS))>0 && GetWindowTextLengthA(GetDlgItem(properties,ID_FOLDERSTATUS))>0,
+        "integration displays the current shell and folder-handler status");
+    SendMessageA(GetDlgItem(properties,ID_INTEGRATION_REFRESH),BM_CLICK,0,0);
+    Check(!IsWindowEnabled(GetDlgItem(properties,0x3021)),"refreshing integration status leaves the shared settings draft unchanged");
     DesktopPump();
     GetClientRect(properties,&area); GetWindowRect(install,&first); GetWindowRect(restore,&second);
     MapWindowPoints(NULL,properties,(POINT *)&first,2); MapWindowPoints(NULL,properties,(POINT *)&second,2);
@@ -1183,8 +1187,16 @@ static void FolderSettingsTests(HWND bar)
         first.bottom < 344 && second.bottom < 344 && first.right <= second.left,
         "System Shell page contains separate nonoverlapping folder install/restore controls at 640x480");
     PostMessageA(properties,WM_COMMAND,ID_INSTALLFOLDERS,0);
-    { HWND dialog = WaitFor("#32770","Explorer95 Folders");
-      Check(dialog != NULL,"folder registration is guarded on systems other than Windows 95"); SendMessageA(dialog,WM_COMMAND,IDOK,0); }
+    { HWND dialog=NULL; DWORD owner=0,started=GetTickCount();
+      do {
+          dialog=FindWindowA("#32770",NULL);
+          if(!dialog) dialog=FindWindowA("Explorer95.Message",NULL);
+          if(!dialog) Sleep(20);
+      } while(!dialog && GetTickCount()-started<5000);
+      if(dialog) GetWindowThreadProcessId(dialog,&owner);
+      Check(dialog && owner==process.dwProcessId && GetWindow(dialog,GW_OWNER)==properties,
+          "folder registration is guarded on systems other than Windows 95 in either UI language");
+      SendMessageA(dialog,WM_COMMAND,IDOK,0); }
     SendMessageA(properties,WM_COMMAND,IDCANCEL,0);
 }
 static void PumpFor(DWORD duration)
@@ -1510,7 +1522,7 @@ static void SettingsPaintingTests(HWND window, HWND bar)
     HWND preview, cover; RECT rect; int i, barHeight;
     BOOL large = SendDlgItemMessageA(window, 607, BM_GETCHECK, 0, 0) == BST_CHECKED;
     barHeight = large ? 40 : 28;
-    Check(DialogBackground(window, 540, 350, FALSE), "Taskbar page erases behind native groupboxes");
+    Check(DialogBackground(window, 510, 310, FALSE), "Taskbar page erases behind native groupboxes");
     preview = GetDlgItem(window, 1018); GetClientRect(preview, &rect);
     Check(PreviewStartMatches(preview, GetDlgItem(bar, 100), 4, (rect.bottom - barHeight) / 2 + 3),
         "Taskbar preview Start matches every pixel of the real Start button at native size");
@@ -1528,7 +1540,7 @@ static void SettingsPaintingTests(HWND window, HWND bar)
     for (i = 0; i < 3; ++i) SettingsPage(window, 1, i);
     SettingsPage(window, 2, -1);
     Check(IsWindowVisible(GetDlgItem(window, 1010)), "Desktop controls are visible after cycling main and Start tabs");
-    Check(DialogBackground(window, 540, 350, TRUE), "Desktop page erases old page contents behind native groupboxes");
+    Check(DialogBackground(window, 510, 310, TRUE), "Desktop page erases old page contents behind native groupboxes");
     preview = GetDlgItem(window, 1020); GetClientRect(preview, &rect);
     Check(PreviewStartMatches(preview, GetDlgItem(bar, 100), 6, rect.bottom - 4 - barHeight + 3),
         "Desktop preview contains the complete native Start button instead of a floating flag");

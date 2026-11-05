@@ -125,12 +125,48 @@ static SettingsLocation locations[] = {
     {SETTINGS_SHELL,0,18,"Integration","Windows integration","Choose the startup shell and folder-opening commands.",NULL}
 };
 #define LOCATION_COUNT ((int)(sizeof(locations)/sizeof(locations[0])))
+static void IntegrationRefresh(HWND window)
+{
+    DWORD version=GetVersion(),error; HKEY storage=NULL;
+    BOOL supported=(version&0x80000000UL) && LOBYTE(LOWORD(version))==4 && HIBYTE(LOWORD(version))==0;
+    BOOL shellInstalled=FALSE,canRestore=FALSE; char directory[MAX_PATH],ini[MAX_PATH],recovery[MAX_PATH];
+    char selected[32],current[MAX_PATH+32],original[MAX_PATH+34],label[MAX_PATH+96];
+    if(supported && GetWindowsDirectoryA(directory,MAX_PATH) && EnvJoin(ini,directory,"SYSTEM.INI") && EnvJoin(recovery,directory,"EX95REC.INI")) {
+        error=ReadBootShell(ini,current,sizeof(current));
+        GetPrivateProfileStringA("Recovery","SelectedShell","",selected,sizeof(selected),recovery);
+        GetPrivateProfileStringA("Recovery","OriginalShell","",original,sizeof(original),recovery);
+        canRestore=original[0] && lstrcmpA(original,"!");
+        shellInstalled=!error && selected[0] && !lstrcmpiA(current,selected);
+        if(!error) {
+            wsprintfA(label,"At startup: %s",shellInstalled ? UiText("Explorer95") : current);
+            SetDlgItemTextA(window,ID_SHELLSTATUS,label);
+        } else SetDlgItemTextA(window,ID_SHELLSTATUS,"Startup shell could not be read.");
+        SetDlgItemTextA(window,ID_SHELLDETAIL,shellInstalled ?
+            (env.primary ? "Explorer95 is the current shell." : "Explorer95 will become the shell after restarting Windows.") :
+            "Select Explorer95 for the next Windows startup.");
+    } else {
+        SetDlgItemTextA(window,ID_SHELLSTATUS,"Available on Windows 95.");
+        SetDlgItemTextA(window,ID_SHELLDETAIL,"Boot settings stay unchanged on this operating system.");
+    }
+    EnableWindow(GetDlgItem(window,ID_INSTALLSHELL),supported && !shellInstalled);
+    EnableWindow(GetDlgItem(window,ID_RESTORESHELL),supported && canRestore);
+    error=ERROR_FILE_NOT_FOUND;
+    if(supported) {
+        error=RegOpenKeyExA(HKEY_LOCAL_MACHINE,"Software\\Explorer95",0,KEY_READ,&storage);
+        if(!error) { error=QueryFolderHandler(HKEY_CLASSES_ROOT,storage); RegCloseKey(storage); }
+    }
+    SetDlgItemTextA(window,ID_FOLDERSTATUS,!supported ? "Available on Windows 95." :
+        !error ? "Folders open in Explorer95." : error==ERROR_FILE_NOT_FOUND ? "System folder handler is unchanged." :
+        error==ERROR_ALREADY_EXISTS ? "Folder commands differ from the saved registration." : "Folder handler status could not be read.");
+    EnableWindow(GetDlgItem(window,ID_INSTALLFOLDERS),supported && error==ERROR_FILE_NOT_FOUND);
+    EnableWindow(GetDlgItem(window,ID_RESTOREFOLDERS),supported && (error==ERROR_SUCCESS || error==ERROR_ALREADY_EXISTS));
+}
 static void SelectLocation(HWND window,int selectedPage,int selectedSubpage);
 static void CreateNavigation(HWND window)
 {
     HWND tree; TVINSERTSTRUCTA item; HTREEITEM bar=NULL,start=NULL; int i; LOGFONTA font;
     tree=EnvControl(window,WC_TREEVIEWA,"",WS_TABSTOP|WS_BORDER|TVS_HASBUTTONS|TVS_HASLINES|TVS_LINESATROOT|TVS_SHOWSELALWAYS,ID_SETTINGS_TREE);
-    MoveWindow(tree,8,12,132,344,FALSE); TreeView_SetIndent(tree,10);
+    MoveWindow(tree,8,12,132,304,FALSE); TreeView_SetIndent(tree,10);
     navigationImages=ImageList_Create(16,16,ILC_COLOR24|ILC_MASK,LOCATION_COUNT,1);
     TreeView_SetImageList(tree,navigationImages,TVSIL_NORMAL);
     ZeroMemory(&item,sizeof(item)); item.hInsertAfter=TVI_LAST;
@@ -227,6 +263,7 @@ static void ShowPage(HWND window)
             ShowWindow(controls[i].window, show ? SW_SHOWNA : SW_HIDE);
     }
     if (page == SETTINGS_START) StartSettingsScreenChanged(window);
+    if (page == SETTINGS_SHELL) IntegrationRefresh(window);
     for(i=0;i<LOCATION_COUNT;++i) if(locations[i].page==page && locations[i].subpage==subpage) {
         SetDlgItemTextA(window,ID_SETTINGS_HEADING,locations[i].heading);
         SetDlgItemTextA(window,ID_SETTINGS_DESCRIPTION,locations[i].description); break;
@@ -357,7 +394,7 @@ static void PreviewTaskbar(HDC dc, const RECT *bounds, BOOL sampleTasks)
 static void Preview(const DRAWITEMSTRUCT *item)
 {
     RECT rect = item->rcItem, part; HDC dc = PaintBufferBegin(&previewBuffer, item->hDC, &rect);
-    int width = rect.right - rect.left, height = rect.bottom - rect.top, i;
+    int width = rect.right - rect.left, height = rect.bottom - rect.top;
     FillRect(dc, &rect, (HBRUSH)(COLOR_BTNFACE + 1)); DrawEdge(dc, &rect, EDGE_SUNKEN, BF_RECT);
     SelectObject(dc, env.host.font); SetBkMode(dc, TRANSPARENT); SetTextColor(dc, GetSysColor(COLOR_BTNTEXT));
     if (item->CtlID == ID_PREVIEW_TASKBAR) {
@@ -365,20 +402,7 @@ static void Preview(const DRAWITEMSTRUCT *item)
         SetRect(&part, 2, (height - barHeight) / 2, width - 2, (height + barHeight) / 2);
         PreviewTaskbar(dc, &part, TRUE);
     } else if (item->CtlID == ID_PREVIEW_START) {
-        BOOL classic = SendDlgItemMessageA(env.properties, ID_STARTSTYLE, CB_GETCURSEL, 0, 0) == 1;
-        BOOL large = Checked(env.properties, ID_STARTLARGE); int iconSize = large ? 24 : 16;
-        int menuWidth = classic ? width / 2 + 16 : width - 12;
-        SetRect(&part, 5, 5, menuWidth, 25); FillRect(dc, &part, (HBRUSH)(COLOR_ACTIVECAPTION + 1));
-        SetTextColor(dc, GetSysColor(COLOR_CAPTIONTEXT)); part.left += 5; DrawTextA(dc, "Explorer95", -1, &part, DT_SINGLELINE | DT_VCENTER);
-        SetTextColor(dc, GetSysColor(COLOR_BTNTEXT));
-        for (i = 0; i < (large ? 3 : 4); ++i) {
-            HICON icon = EnvSystemIcon(i ? 4 : 5);
-            int y = 31 + i * (large ? 28 : 19);
-            DrawIconEx(dc, 10, y, icon, iconSize, iconSize, 0, NULL, DI_NORMAL);
-            if (!classic) { DrawIconEx(dc, menuWidth / 2 + 5, y, icon, iconSize, iconSize, 0, NULL, DI_NORMAL); MoveToEx(dc, menuWidth / 2 + iconSize + 10, y + iconSize / 2, NULL); LineTo(dc, menuWidth - 8, y + iconSize / 2); }
-            MoveToEx(dc, 10 + iconSize + 6, y + iconSize / 2, NULL); LineTo(dc, classic ? menuWidth - 8 : menuWidth / 2 - 5, y + iconSize / 2);
-            if (icon) DestroyIcon(icon);
-        }
+        StartSettingsPreview(env.properties,dc,&rect);
     } else {
         SetRect(&part, 4, 4, width - 4, height - 4); FillRect(dc, &part, (HBRUSH)(COLOR_DESKTOP + 1));
         if (Checked(env.properties, ID_DESKTOPICONS)) {
@@ -471,84 +495,87 @@ static LRESULT CALLBACK PropertiesProc(HWND window, UINT message, WPARAM wp, LPA
 #define TASK(kind,text,style,id,x,y,w,h,part) SettingsControl(window,SETTINGS_TASKBAR,part,kind,text,style,id,x,y,w,h)
 #define TASKCHECK(text,id,value,x,y,w,part) do { control=TASK("BUTTON",text,WS_TABSTOP|BS_AUTOCHECKBOX,id,x,y,w,23,part); SendMessageA(control,BM_SETCHECK,value,0); } while(0)
         TASK("STATIC","",SS_OWNERDRAW,ID_PREVIEW_TASKBAR,24,68,472,48,-1);
-        TASK("BUTTON","Placement",BS_GROUPBOX,0,24,128,472,74,TASKBAR_POSITION);
-        TASK("STATIC","Dock:",0,0,36,153,45,20,TASKBAR_POSITION);
-        control=TASK("COMBOBOX","",WS_TABSTOP|CBS_DROPDOWNLIST,ID_EDGE,86,148,130,130,TASKBAR_POSITION);
+        TASK("BUTTON","Placement",BS_GROUPBOX,0,24,120,472,62,TASKBAR_POSITION);
+        TASK("STATIC","Dock:",0,0,36,144,45,20,TASKBAR_POSITION);
+        control=TASK("COMBOBOX","",WS_TABSTOP|CBS_DROPDOWNLIST,ID_EDGE,86,139,130,130,TASKBAR_POSITION);
         for(i=0;i<4;++i) SendMessageA(control,CB_ADDSTRING,0,(LPARAM)edges[i]);
         SendMessageA(control,CB_SETCURSEL,env.options.edge,0);
-        TASK("STATIC","Rows:",0,0,270,153,60,20,TASKBAR_POSITION);
-        control=TASK("COMBOBOX","",WS_TABSTOP|CBS_DROPDOWNLIST,ID_ROWS,344,148,70,100,TASKBAR_POSITION);
+        TASK("STATIC","Rows:",0,0,270,144,60,20,TASKBAR_POSITION);
+        control=TASK("COMBOBOX","",WS_TABSTOP|CBS_DROPDOWNLIST,ID_ROWS,344,139,70,100,TASKBAR_POSITION);
         for(i=1;i<=3;++i) { char value[4]; wsprintfA(value,"%d",i); SendMessageA(control,CB_ADDSTRING,0,(LPARAM)value); }
         SendMessageA(control,CB_SETCURSEL,env.options.rows-1,0);
-        TASK("BUTTON","Behavior",BS_GROUPBOX,0,24,218,472,126,TASKBAR_POSITION);
-        TASKCHECK("Lock the taskbar",ID_LOCK,env.options.locked,36,240,442,TASKBAR_POSITION);
-        TASKCHECK("Auto-hide the taskbar",ID_AUTOHIDE,env.options.autoHide,36,270,442,TASKBAR_POSITION);
-        TASKCHECK("Keep taskbar on top",ID_TOPMOST,env.options.topmost,36,300,442,TASKBAR_POSITION);
-        TASK("BUTTON","Task buttons",BS_GROUPBOX,0,24,128,472,214,TASKBAR_BUTTONS);
-        TASKCHECK("Group similar windows",ID_GROUP,env.options.group,36,151,442,TASKBAR_BUTTONS);
-        TASKCHECK("Windows 7-style task tiles",ID_TASKTILES,env.options.taskTiles,36,185,442,TASKBAR_BUTTONS);
-        TASKCHECK("Hide task labels (icons only)",ID_HIDETASKLABELS,env.options.hideTaskLabels,36,219,442,TASKBAR_BUTTONS);
-        TASK("STATIC","Button width:",0,0,36,265,110,20,TASKBAR_BUTTONS);
-        TASK("EDIT","",WS_BORDER|WS_TABSTOP|ES_NUMBER,ID_WIDTH,154,260,70,23,TASKBAR_BUTTONS);
+        TASK("BUTTON","Behavior",BS_GROUPBOX,0,24,190,472,112,TASKBAR_POSITION);
+        TASKCHECK("Lock the taskbar",ID_LOCK,env.options.locked,36,210,442,TASKBAR_POSITION);
+        TASKCHECK("Auto-hide the taskbar",ID_AUTOHIDE,env.options.autoHide,36,237,442,TASKBAR_POSITION);
+        TASKCHECK("Keep taskbar on top",ID_TOPMOST,env.options.topmost,36,264,442,TASKBAR_POSITION);
+        TASK("BUTTON","Task buttons",BS_GROUPBOX,0,24,120,472,182,TASKBAR_BUTTONS);
+        TASKCHECK("Group similar windows",ID_GROUP,env.options.group,36,140,442,TASKBAR_BUTTONS);
+        TASKCHECK("Windows 7-style task tiles",ID_TASKTILES,env.options.taskTiles,36,168,442,TASKBAR_BUTTONS);
+        TASKCHECK("Hide task labels (icons only)",ID_HIDETASKLABELS,env.options.hideTaskLabels,36,196,442,TASKBAR_BUTTONS);
+        TASK("STATIC","Button width:",0,0,36,238,110,20,TASKBAR_BUTTONS);
+        TASK("EDIT","",WS_BORDER|WS_TABSTOP|ES_NUMBER,ID_WIDTH,154,233,70,23,TASKBAR_BUTTONS);
         SetDlgItemInt(window,ID_WIDTH,env.options.taskWidth,FALSE);
         EnableWindow(GetDlgItem(window,ID_WIDTH),!env.options.taskTiles && !env.options.hideTaskLabels);
-        TASK("STATIC","80 - 300 pixels",0,0,238,265,240,20,TASKBAR_BUTTONS);
-        TASK("BUTTON","Quick Launch",BS_GROUPBOX,0,24,128,472,112,TASKBAR_COMPONENTS);
-        TASKCHECK("Show Quick Launch",ID_QUICK,env.options.quick,36,150,214,TASKBAR_COMPONENTS);
-        TASKCHECK("Large Quick Launch icons",ID_LARGE,env.options.largeIcons,266,150,218,TASKBAR_COMPONENTS);
-        TASK("BUTTON","Open Quick Launch folder",WS_TABSTOP,ID_QUICKFOLDER,36,187,320,26,TASKBAR_COMPONENTS);
-        TASK("BUTTON","Additional elements",BS_GROUPBOX,0,24,252,472,92,TASKBAR_COMPONENTS);
-        TASKCHECK("Show search and run box",ID_SEARCHBAR,env.options.searchBox,36,274,442,TASKBAR_COMPONENTS);
-        TASKCHECK("Show desktop button",ID_SHOWDESKTOP_EDGE,env.options.showDesktopButton,36,305,442,TASKBAR_COMPONENTS);
+        TASK("STATIC","80 - 300 pixels",0,0,238,238,240,20,TASKBAR_BUTTONS);
+        TASK("BUTTON","Quick Launch",BS_GROUPBOX,0,24,120,472,88,TASKBAR_COMPONENTS);
+        TASKCHECK("Show Quick Launch",ID_QUICK,env.options.quick,36,140,214,TASKBAR_COMPONENTS);
+        TASKCHECK("Large Quick Launch icons",ID_LARGE,env.options.largeIcons,266,140,218,TASKBAR_COMPONENTS);
+        TASK("BUTTON","Open Quick Launch folder",WS_TABSTOP,ID_QUICKFOLDER,36,173,320,26,TASKBAR_COMPONENTS);
+        TASK("BUTTON","Additional elements",BS_GROUPBOX,0,24,218,472,84,TASKBAR_COMPONENTS);
+        TASKCHECK("Show search and run box",ID_SEARCHBAR,env.options.searchBox,36,238,442,TASKBAR_COMPONENTS);
+        TASKCHECK("Show desktop button",ID_SHOWDESKTOP_EDGE,env.options.showDesktopButton,36,266,442,TASKBAR_COMPONENTS);
 #undef TASKCHECK
 #undef TASK
         StartSettingsBegin(); StartSettingsCreate(window);
-        Control(window,SETTINGS_DESKTOP,"STATIC","",SS_OWNERDRAW,ID_PREVIEW_DESKTOP,30,66,454,104);
-        Checkbox(window,SETTINGS_DESKTOP,"Show desktop icons",ID_DESKTOPICONS,env.options.desktopIcons,30,176,220);
-        Checkbox(window,SETTINGS_DESKTOP,"Use drop shadows for icon labels",ID_LABELSHADOWS,env.options.desktopLabelShadows,260,176,224);
-        Control(window,SETTINGS_DESKTOP,"STATIC","Icon size:",0,0,30,207,110,20);
-        control=Control(window,SETTINGS_DESKTOP,"COMBOBOX","",WS_TABSTOP|CBS_DROPDOWNLIST,ID_DESKTOPSIZE,150,202,144,100);
+        Control(window,SETTINGS_DESKTOP,"STATIC","",SS_OWNERDRAW,ID_PREVIEW_DESKTOP,30,66,454,100);
+        Checkbox(window,SETTINGS_DESKTOP,"Show desktop icons",ID_DESKTOPICONS,env.options.desktopIcons,30,172,220);
+        Checkbox(window,SETTINGS_DESKTOP,"Use drop shadows for icon labels",ID_LABELSHADOWS,env.options.desktopLabelShadows,260,172,224);
+        Control(window,SETTINGS_DESKTOP,"STATIC","Icon size:",0,0,30,204,110,20);
+        control=Control(window,SETTINGS_DESKTOP,"COMBOBOX","",WS_TABSTOP|CBS_DROPDOWNLIST,ID_DESKTOPSIZE,150,198,144,100);
         SendMessageA(control,CB_ADDSTRING,0,(LPARAM)"Normal (32 x 32)"); SendMessageA(control,CB_ADDSTRING,0,(LPARAM)"Large (48 x 48)");
         SendMessageA(control,CB_SETCURSEL,env.options.desktopIconSize==48 ? 1 : 0,0);
-        Control(window,SETTINGS_DESKTOP,"BUTTON","Display settings...",WS_TABSTOP,ID_BACKGROUND,310,201,174,26);
-        Control(window,SETTINGS_DESKTOP,"BUTTON","Icon positions",BS_GROUPBOX,0,24,236,472,120);
-        Checkbox(window,SETTINGS_DESKTOP,"Auto-arrange icons",ID_AUTOARRANGE,env.options.autoArrange,36,255,214);
-        Checkbox(window,SETTINGS_DESKTOP,"Snap to grid",ID_SNAPICONS,env.options.snapDesktopIcons,266,255,218);
-        Checkbox(window,SETTINGS_DESKTOP,"Lock icon positions",ID_LOCKICONS,env.options.lockDesktopIcons,36,283,214);
-        Control(window,SETTINGS_DESKTOP,"BUTTON","Line up icons now",WS_TABSTOP,ID_LINEUP,266,280,218,25);
-        Control(window,SETTINGS_DESKTOP,"STATIC","Horizontal grid:",0,0,36,324,110,20);
-        Control(window,SETTINGS_DESKTOP,"EDIT","",WS_BORDER|WS_TABSTOP|ES_NUMBER,ID_GRIDX,150,319,62,23);
+        Control(window,SETTINGS_DESKTOP,"BUTTON","Display settings...",WS_TABSTOP,ID_BACKGROUND,310,197,174,26);
+        Control(window,SETTINGS_DESKTOP,"BUTTON","Icon positions",BS_GROUPBOX,0,24,224,472,92);
+        Checkbox(window,SETTINGS_DESKTOP,"Auto-arrange icons",ID_AUTOARRANGE,env.options.autoArrange,36,242,214);
+        Checkbox(window,SETTINGS_DESKTOP,"Snap to grid",ID_SNAPICONS,env.options.snapDesktopIcons,266,242,218);
+        Checkbox(window,SETTINGS_DESKTOP,"Lock icon positions",ID_LOCKICONS,env.options.lockDesktopIcons,36,266,214);
+        Control(window,SETTINGS_DESKTOP,"BUTTON","Line up icons now",WS_TABSTOP,ID_LINEUP,266,264,218,25);
+        Control(window,SETTINGS_DESKTOP,"STATIC","Horizontal grid:",0,0,36,295,110,20);
+        Control(window,SETTINGS_DESKTOP,"EDIT","",WS_BORDER|WS_TABSTOP|ES_NUMBER,ID_GRIDX,150,290,62,23);
         SetDlgItemInt(window,ID_GRIDX,env.options.desktopGridX,FALSE);
-        Control(window,SETTINGS_DESKTOP,"STATIC","Vertical grid:",0,0,266,324,114,20);
-        Control(window,SETTINGS_DESKTOP,"EDIT","",WS_BORDER|WS_TABSTOP|ES_NUMBER,ID_GRIDY,400,319,62,23);
+        Control(window,SETTINGS_DESKTOP,"STATIC","Vertical grid:",0,0,266,295,114,20);
+        Control(window,SETTINGS_DESKTOP,"EDIT","",WS_BORDER|WS_TABSTOP|ES_NUMBER,ID_GRIDY,400,290,62,23);
         SetDlgItemInt(window,ID_GRIDY,env.options.desktopGridY,FALSE);
         TraySettingsBegin(); TraySettingsCreate(window);
-        Control(window,SETTINGS_SHELL,"BUTTON","Windows 95 startup shell",BS_GROUPBOX,0,24,74,472,122);
-        Control(window,SETTINGS_SHELL,"STATIC","Select which shell starts with Windows.\r\nThe change takes effect after restart.",0,0,38,96,442,34);
-        Control(window,SETTINGS_SHELL,"BUTTON","Use Explorer95 as shell...",WS_TABSTOP,ID_INSTALLSHELL,38,146,214,28);
-        Control(window,SETTINGS_SHELL,"BUTTON","Restore previous shell...",WS_TABSTOP,ID_RESTORESHELL,266,146,214,28);
-        Control(window,SETTINGS_SHELL,"BUTTON","Windows 95 folder opening",BS_GROUPBOX,0,24,210,472,106);
-        Control(window,SETTINGS_SHELL,"STATIC","Open folders, drives, My Computer and Recycle Bin in Explorer95.",0,0,38,232,442,32);
-        Control(window,SETTINGS_SHELL,"BUTTON","Use Explorer95 for folders...",WS_TABSTOP,ID_INSTALLFOLDERS,38,275,214,28);
-        Control(window,SETTINGS_SHELL,"BUTTON","Restore folder handler...",WS_TABSTOP,ID_RESTOREFOLDERS,266,275,214,28);
-        Control(window,SETTINGS_SHELL,"STATIC","These actions apply immediately after confirmation.\r\nCancel does not undo them; use the corresponding Restore button.",0,0,38,325,442,32);
-        Control(window,SETTINGS_LANGUAGE,"BUTTON","Interface language",BS_GROUPBOX,0,24,74,472,102);
+        Control(window,SETTINGS_SHELL,"BUTTON","Windows 95 startup shell",BS_GROUPBOX,0,24,74,472,112);
+        Control(window,SETTINGS_SHELL,"STATIC","",0,ID_SHELLSTATUS,38,94,442,20);
+        Control(window,SETTINGS_SHELL,"STATIC","",0,ID_SHELLDETAIL,38,116,442,28);
+        Control(window,SETTINGS_SHELL,"BUTTON","Use Explorer95 as shell...",WS_TABSTOP,ID_INSTALLSHELL,38,148,214,26);
+        Control(window,SETTINGS_SHELL,"BUTTON","Restore previous shell...",WS_TABSTOP,ID_RESTORESHELL,266,148,214,26);
+        Control(window,SETTINGS_SHELL,"BUTTON","Windows 95 folder opening",BS_GROUPBOX,0,24,190,472,98);
+        Control(window,SETTINGS_SHELL,"STATIC","",0,ID_FOLDERSTATUS,38,210,442,20);
+        Control(window,SETTINGS_SHELL,"STATIC","Folders, drives, My Computer and Recycle Bin.",0,0,38,230,442,18);
+        Control(window,SETTINGS_SHELL,"BUTTON","Use Explorer95 for folders...",WS_TABSTOP,ID_INSTALLFOLDERS,38,250,214,26);
+        Control(window,SETTINGS_SHELL,"BUTTON","Restore folder handler...",WS_TABSTOP,ID_RESTOREFOLDERS,266,250,214,26);
+        Control(window,SETTINGS_SHELL,"STATIC","Confirmed changes apply immediately.\r\nUse Restore to undo them; Cancel keeps them.",0,0,38,294,300,26);
+        Control(window,SETTINGS_SHELL,"BUTTON","Refresh status",WS_TABSTOP,ID_INTEGRATION_REFRESH,346,294,134,24);
+        Control(window,SETTINGS_LANGUAGE,"BUTTON","Interface language",BS_GROUPBOX,0,24,74,472,88);
         control=Control(window,SETTINGS_LANGUAGE,"COMBOBOX","",WS_TABSTOP|CBS_DROPDOWNLIST,ID_LANGUAGE,38,96,260,100);
         SendMessageA(control,CB_ADDSTRING,0,(LPARAM)"English"); SendMessageA(control,CB_ADDSTRING,0,(LPARAM)"Russian");
         SendMessageA(control,CB_SETCURSEL,env.options.language,0);
-        Control(window,SETTINGS_LANGUAGE,"STATIC","Restart Explorer95 to apply the selected language.",0,0,38,133,442,32);
-        Control(window,SETTINGS_LANGUAGE,"BUTTON","Startup and shutdown",BS_GROUPBOX,0,24,192,472,112);
-        Checkbox(window,SETTINGS_LANGUAGE,"Show welcome banner at startup",ID_WELCOME,env.options.showWelcome,38,214,442);
-        Control(window,SETTINGS_LANGUAGE,"STATIC","Shutdown dialog style:",0,0,38,257,170,20);
-        control=Control(window,SETTINGS_LANGUAGE,"COMBOBOX","",WS_TABSTOP|CBS_DROPDOWNLIST,ID_SHUTDOWNSTYLE,218,251,266,100);
+        Control(window,SETTINGS_LANGUAGE,"STATIC","Restart Explorer95 to apply the selected language.",0,0,38,129,442,28);
+        Control(window,SETTINGS_LANGUAGE,"BUTTON","Startup and shutdown",BS_GROUPBOX,0,24,174,472,102);
+        Checkbox(window,SETTINGS_LANGUAGE,"Show welcome banner at startup",ID_WELCOME,env.options.showWelcome,38,194,442);
+        Control(window,SETTINGS_LANGUAGE,"STATIC","Shutdown dialog style:",0,0,38,239,170,20);
+        control=Control(window,SETTINGS_LANGUAGE,"COMBOBOX","",WS_TABSTOP|CBS_DROPDOWNLIST,ID_SHUTDOWNSTYLE,218,233,266,100);
         SendMessageA(control,CB_ADDSTRING,0,(LPARAM)"Windows XP"); SendMessageA(control,CB_ADDSTRING,0,(LPARAM)"Windows 95");
         SendMessageA(control,CB_SETCURSEL,env.options.classicShutdown ? 1 : 0,0);
-        Control(window,SETTINGS_LANGUAGE,"STATIC","Explorer95 " EXPLORER95_VERSION,0,0,30,326,240,20);
-        Control(window,SETTINGS_LANGUAGE,"BUTTON","Font license...",WS_TABSTOP,ID_FONTLICENSE,310,318,174,26);
-        MoveWindow(EnvControl(window,"STATIC","",SS_ETCHEDHORZ,0),8,362,606,2,FALSE);
-        MoveWindow(EnvControl(window,"BUTTON","OK",WS_TABSTOP|BS_DEFPUSHBUTTON,IDOK),350,372,80,26,FALSE);
-        MoveWindow(EnvControl(window,"BUTTON","Cancel",WS_TABSTOP,IDCANCEL),438,372,80,26,FALSE);
-        MoveWindow(EnvControl(window,"BUTTON","Apply",WS_TABSTOP,ID_APPLY_NOW),526,372,80,26,FALSE);
+        Control(window,SETTINGS_LANGUAGE,"STATIC","Explorer95 " EXPLORER95_VERSION,0,0,30,294,240,20);
+        Control(window,SETTINGS_LANGUAGE,"BUTTON","Font license...",WS_TABSTOP,ID_FONTLICENSE,310,286,174,26);
+        MoveWindow(EnvControl(window,"STATIC","",SS_ETCHEDHORZ,0),8,320,606,2,FALSE);
+        MoveWindow(EnvControl(window,"BUTTON","OK",WS_TABSTOP|BS_DEFPUSHBUTTON,IDOK),350,330,80,26,FALSE);
+        MoveWindow(EnvControl(window,"BUTTON","Cancel",WS_TABSTOP,IDCANCEL),438,330,80,26,FALSE);
+        MoveWindow(EnvControl(window,"BUTTON","Apply",WS_TABSTOP,ID_APPLY_NOW),526,330,80,26,FALSE);
         for(i=0;i<controlCount;++i) {
             char kind[20]; GetClassNameA(controls[i].window,kind,sizeof(kind));
             if(!lstrcmpiA(kind,"BUTTON") && (GetWindowLongA(controls[i].window,GWL_STYLE)&BS_TYPEMASK)==BS_GROUPBOX)
@@ -576,8 +603,9 @@ static LRESULT CALLBACK PropertiesProc(HWND window, UINT message, WPARAM wp, LPA
         if (LOWORD(wp) == ID_QUICKFOLDER) { env.host.openFolder(env.quickDir); return 0; }
         if (LOWORD(wp) == ID_BACKGROUND) { EnvironmentLaunch(window, "control.exe", "desk.cpl", NULL); return 0; }
         if (LOWORD(wp) == ID_LINEUP) { NativeViewLineUp(env.desktopView); return 0; }
-        if (LOWORD(wp) == ID_INSTALLSHELL || LOWORD(wp) == ID_RESTORESHELL) { ShellSelection(window, LOWORD(wp) == ID_RESTORESHELL); return 0; }
-        if (LOWORD(wp) == ID_INSTALLFOLDERS || LOWORD(wp) == ID_RESTOREFOLDERS) { FolderSelection(window,LOWORD(wp) == ID_RESTOREFOLDERS); return 0; }
+        if (LOWORD(wp) == ID_INSTALLSHELL || LOWORD(wp) == ID_RESTORESHELL) { ShellSelection(window, LOWORD(wp) == ID_RESTORESHELL); IntegrationRefresh(window); return 0; }
+        if (LOWORD(wp) == ID_INSTALLFOLDERS || LOWORD(wp) == ID_RESTOREFOLDERS) { FolderSelection(window,LOWORD(wp) == ID_RESTOREFOLDERS); IntegrationRefresh(window); return 0; }
+        if (LOWORD(wp) == ID_INTEGRATION_REFRESH) { IntegrationRefresh(window); return 0; }
         if (LOWORD(wp) == ID_EDGE || LOWORD(wp) == ID_ROWS || LOWORD(wp) == ID_LARGE) StartSettingsScreenChanged(window);
         if (StartSettingsCommand(window, wp) || TraySettingsCommand(window, wp)) return 0;
         if (HIWORD(wp) == BN_CLICKED || HIWORD(wp) == EN_CHANGE || HIWORD(wp) == CBN_SELCHANGE) SettingsPreviewChanged(window);
@@ -594,6 +622,9 @@ static LRESULT CALLBACK PropertiesProc(HWND window, UINT message, WPARAM wp, LPA
         SetWindowPos(window, NULL, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
         RedrawWindow(window, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN); return 0;
     }
+    case WM_ACTIVATE:
+        if(LOWORD(wp)!=WA_INACTIVE && !loading && page==SETTINGS_SHELL) IntegrationRefresh(window);
+        break;
     case WM_CLOSE: DestroyWindow(window); return 0;
     case WM_DESTROY:
         TreeView_SetImageList(GetDlgItem(window,ID_SETTINGS_TREE),NULL,TVSIL_NORMAL);
@@ -610,7 +641,7 @@ void PropertiesOpen(void)
     if (!env.properties) {
         /* Native Win95 tab/groupbox interiors are transparent: the dialog must
          * be allowed to erase behind these sibling controls. */
-        RECT rect = {0,0,620,404}, area; int x, y, width, height; DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU;
+        RECT rect = {0,0,620,364}, area; int x, y, width, height; DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU;
         AdjustWindowRectEx(&rect, style, FALSE, WS_EX_DLGMODALFRAME);
         SystemParametersInfoA(SPI_GETWORKAREA, 0, &area, 0);
         width = rect.right - rect.left; height = rect.bottom - rect.top;
