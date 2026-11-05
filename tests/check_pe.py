@@ -75,8 +75,9 @@ ALLOWED = {
     # GetSubMenu / ModifyMenuA are base Win95 menu APIs for native edit commands.
     # EqualRect is a classic USER rectangle helper, present before Win95.
     # GetKeyboardLayout/List and WM_INPUTLANGCHANGEREQUEST are stock Win95.
+    # GetIconInfo predates Win95; inspect actual XOR/AND dimensions before resizing.
     "user32.dll": set("""
-        CharNextA EqualRect
+        CharNextA EqualRect GetIconInfo
         GetKeyboardLayout GetKeyboardLayoutList
         CreateIconIndirect
         SetWindowsHookExA CallNextHookEx UnhookWindowsHookEx

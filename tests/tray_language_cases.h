@@ -37,3 +37,28 @@ static void TrayLanguageTests(HWND bar,HWND application)
     RemovePropA(application,"Explorer95.LayoutRequest"); SaveScreen("build/tray-language.bmp");
     if(original!=layouts[choice]) { PostMessageA(application,WM_INPUTLANGCHANGEREQUEST,0,(LPARAM)original); PumpFor(350); }
 }
+static void KeyboardIconSettingsTests(HWND bar,HWND application,const char *settings)
+{
+    HWND tray=FindWindowExA(bar,NULL,"TrayNotifyWnd",NULL),indicator,properties; RECT before,after; char code[8];
+    indicator=FindWindowExA(tray,NULL,"Explorer95.TrayLanguage",NULL); GetWindowRect(indicator,&before);
+    properties=OpenSettings(bar); SettingsPage(properties,SETTINGS_TRAY,-1);
+    Check(SendDlgItemMessageA(properties,ID_KEYBOARDICON,BM_GETCHECK,0,0)==BST_CHECKED,"keyboard artwork is enabled by default");
+    SendMessageA(GetDlgItem(properties,ID_KEYBOARDICON),BM_CLICK,0,0); SendMessageA(properties,WM_COMMAND,IDCANCEL,0);
+    GetWindowRect(indicator,&after);
+    Check(after.right-after.left==before.right-before.left,"Cancel leaves the keyboard icon and tray width unchanged");
+    properties=OpenSettings(bar); SettingsPage(properties,SETTINGS_TRAY,-1);
+    Check(SendDlgItemMessageA(properties,ID_KEYBOARDICON,BM_GETCHECK,0,0)==BST_CHECKED,"Cancel discards the pending keyboard icon preference");
+    SendMessageA(GetDlgItem(properties,ID_KEYBOARDICON),BM_CLICK,0,0); SendMessageA(properties,WM_COMMAND,0x3021,0);
+    GetWindowRect(indicator,&after); GetWindowTextA(indicator,code,sizeof(code));
+    Check(before.right-before.left-(after.right-after.left)==16 && code[0] && IsWindowVisible(indicator) &&
+        GetPrivateProfileIntA("Taskbar","KeyboardIcon",1,settings)==0,"Apply removes only keyboard artwork and its 16px space, preserving the language code");
+    SendMessageA(properties,WM_COMMAND,IDCANCEL,0);
+    TrayLanguageTests(bar,application);
+    properties=OpenSettings(bar); SettingsPage(properties,SETTINGS_TRAY,-1);
+    Check(SendDlgItemMessageA(properties,ID_KEYBOARDICON,BM_GETCHECK,0,0)==BST_UNCHECKED,"the hidden keyboard preference survives reopening settings");
+    SaveScreen("build/keyboard-icon-settings.bmp");
+    SendMessageA(GetDlgItem(properties,ID_KEYBOARDICON),BM_CLICK,0,0); SendMessageA(properties,WM_COMMAND,IDOK,0);
+    GetWindowRect(indicator,&after);
+    Check(after.right-after.left==before.right-before.left && GetPrivateProfileIntA("Taskbar","KeyboardIcon",0,settings)==1,
+        "OK restores keyboard artwork and the original tray width");
+}

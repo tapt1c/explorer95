@@ -90,7 +90,7 @@ typedef struct ShellOptions {
     int edge, rows, taskWidth, recentCount, quickSize;
     BOOL locked, autoHide, topmost, clock, quick, largeIcons, largeStartIcons, group, hideInactive, taskTiles, hideTaskLabels, searchBox, showDesktopButton;
     BOOL classicStart, hoverMenus, allowDrop, highlightNew, desktopIcons, autoArrange, classicShutdown, showWelcome;
-    BOOL lockDesktopIcons, snapDesktopIcons, desktopLabelShadows;
+    BOOL lockDesktopIcons, snapDesktopIcons, desktopLabelShadows, trayKeyboardIcon;
     int desktopGridX, desktopGridY, desktopIconSize, language;
     UINT startMenus, traySeconds;
     UINT startItems;
@@ -172,6 +172,7 @@ void EnvPaintQuickGrip(HDC dc, const RECT *bounds, BOOL vertical, BOOL locked);
 void EnvPaintDesktopButton(HDC dc, const RECT *bounds, BOOL down, BOOL hot, BOOL focus);
 
 BOOL TrayCreate(void);
+void TraySetKeyboardIcon(BOOL visible);
 int TrayWidth(int height);
 void TrayLayout(int width, int height);
 void TrayPrune(void);

@@ -120,6 +120,7 @@ static BOOL WriteOptions(const char *ini, const ShellOptions *o)
     SAVE("Taskbar", "QuickLaunchSize", quickSize);
     SAVE("Taskbar", "SearchBox", searchBox);
     SAVE("Taskbar", "ShowDesktopButton", showDesktopButton);
+    SAVE("Taskbar", "KeyboardIcon", trayKeyboardIcon);
     SAVE("Taskbar", "GroupTasks", group); SAVE("Taskbar", "HideInactive", hideInactive); SAVE("Taskbar", "InactiveSeconds", traySeconds);
     SAVE("Start", "VisibleItems", startItems); SAVE("Start", "FolderMenus", startMenus); SAVE("Start", "LargeIcons", largeStartIcons);
     SAVE("Start", "RecentCount", recentCount); SAVE("Start", "Classic", classicStart); SAVE("Start", "HoverMenus", hoverMenus);
@@ -366,6 +367,7 @@ static BOOL Apply(HWND window)
     options.taskTiles=Checked(window,ID_TASKTILES);
     options.hideTaskLabels=Checked(window,ID_HIDETASKLABELS);
     options.group = Checked(window, ID_GROUP); options.hideInactive = Checked(window, ID_INACTIVE);
+    options.trayKeyboardIcon = Checked(window, ID_KEYBOARDICON);
     options.searchBox=Checked(window,ID_SEARCHBAR);
     options.showDesktopButton=Checked(window,ID_SHOWDESKTOP_EDGE);
     options.showWelcome=Checked(window,ID_WELCOME);

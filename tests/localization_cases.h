@@ -454,6 +454,7 @@ static void LanguageRestartTests(const char *directory,const char *executable)
     PumpFor(80); SaveScreen("build/taskbar-settings-ru.bmp");
     SettingsPage(properties,SETTINGS_SHELL,-1);
     Check(LanguageWideEqual(GetDlgItem(properties,ID_WELCOME),L"Показывать приветствие при запуске"),"the startup welcome preference has its Russian label");
+    Check(LanguageWideEqual(GetDlgItem(properties,ID_KEYBOARDICON),L"Показывать значок клавиатуры у раскладки"),"the keyboard artwork preference has its Russian label");
     PumpFor(80); SaveScreen("build/welcome-settings-ru.bmp");
     SettingsPage(properties,SETTINGS_START,0); SendDlgItemMessageA(properties,1002,CB_SETCURSEL,1,0); SendMessageA(properties,WM_COMMAND,0x3021,0);
     PostMessageA(bar,WM_COMMAND,100,0);

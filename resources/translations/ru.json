@@ -622,5 +622,6 @@
   "Cannot restore the index. Its previous snapshot remains in SearchIndex.dat.bak.": "Не удалось восстановить индекс. Предыдущий снимок сохранён в SearchIndex.dat.bak.",
   "Use drop shadows for icon labels": "Тени под подписями значков",
   "Keyboard layout": "Раскладка клавиатуры",
+  "Show keyboard icon next to input language": "Показывать значок клавиатуры у раскладки",
   "Windows could not open the selected item.": "Windows не удалось открыть выбранный объект."
 }

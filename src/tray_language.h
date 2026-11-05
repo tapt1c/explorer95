@@ -3,4 +3,5 @@
 #include <windows.h>
 HWND TrayLanguageCreate(HWND parent, HINSTANCE instance, HFONT font);
 int TrayLanguageWidth(void);
+void TrayLanguageShowIcon(HWND window, BOOL visible);
 #endif

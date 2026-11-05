@@ -15,6 +15,29 @@ static PaintBuffer buffer;
 static int indicatorWidth;
 static char code[4];
 static BOOL choosing;
+static BOOL showKeyboard=TRUE;
+
+static HICON KeyboardIcon(const char *path)
+{
+    HICON original=NULL,result=NULL; ICONINFO info; BITMAP bitmap;
+    /* Win95's compact Program Manager keyboard. Neither this group nor the
+     * MAIN.CPL keyboard contains a 16px frame. ExtractIconEx's small output
+     * can therefore still be 32px on Win95: normalize both image planes. */
+    ExtractIconExA(path,-13,&original,NULL,1);
+    if (!original) return NULL;
+    ZeroMemory(&info,sizeof(info));
+    if (GetIconInfo(original,&info)) {
+        if (GetObjectA(info.hbmColor ? info.hbmColor : info.hbmMask,sizeof(bitmap),&bitmap)) {
+            int height=info.hbmColor ? bitmap.bmHeight : bitmap.bmHeight/2;
+            if (bitmap.bmWidth==16 && height==16) { result=original; original=NULL; }
+            else result=PaintScaleIcon(original,bitmap.bmWidth,height,16,16);
+        }
+        if (info.hbmColor) DeleteObject(info.hbmColor);
+        if (info.hbmMask) DeleteObject(info.hbmMask);
+    }
+    if (original) DestroyIcon(original);
+    return result;
+}
 
 static void LanguageCode(HKL layout, char text[4])
 {
@@ -86,7 +109,7 @@ static void PaintKeyboard(HDC dc)
 {
     int row,column; RECT box={2,5,18,15};
     if (keyboard) { DrawIconEx(dc,2,2,keyboard,16,16,0,NULL,DI_NORMAL); return; }
-    /* Missing optional MAIN.CPL resource must leave a readable indicator. */
+    /* Missing optional PIFMGR resource must leave a readable indicator. */
     DrawEdge(dc,&box,EDGE_RAISED,BF_RECT);
     for(row=0;row<2;++row) for(column=0;column<4;++column) {
         SetRect(&box,5+column*3,8+row*3,7+column*3,9+row*3);
@@ -109,9 +132,9 @@ static LRESULT CALLBACK LanguageProc(HWND window,UINT message,WPARAM wp,LPARAM l
         PAINTSTRUCT paint; RECT rect; HGDIOBJ font;
         HDC targetDC=BeginPaint(window,&paint),dc;
         GetClientRect(window,&rect); dc=PaintBufferBegin(&buffer,targetDC,&rect);
-        FillRect(dc,&rect,(HBRUSH)(COLOR_BTNFACE+1)); PaintKeyboard(dc);
+        FillRect(dc,&rect,(HBRUSH)(COLOR_BTNFACE+1)); if(showKeyboard) PaintKeyboard(dc);
         font=SelectObject(dc,labelFont); SetBkMode(dc,TRANSPARENT); SetTextColor(dc,GetSysColor(COLOR_BTNTEXT));
-        rect.left=22; DrawTextA(dc,code,-1,&rect,DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_NOPREFIX);
+        rect.left=showKeyboard ? 22 : 4; DrawTextA(dc,code,-1,&rect,DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_NOPREFIX);
         SelectObject(dc,font);
         if(GetFocus()==window) { GetClientRect(window,&rect); InflateRect(&rect,-1,-1); DrawFocusRect(dc,&rect); }
         GetClientRect(window,&rect); PaintBufferEnd(&buffer,targetDC,&rect);
@@ -137,14 +160,18 @@ HWND TrayLanguageCreate(HWND parent,HINSTANCE instance,HFONT font)
     if(GetTextExtentPoint32A(dc,"WW",2,&size)) indicatorWidth=24+size.cx;
     SelectObject(dc,old); ReleaseDC(parent,dc);
     length=GetSystemDirectoryA(path,sizeof(path));
-    if(length && length+10<sizeof(path)) {
-        lstrcatA(path,"\\main.cpl");
-        /* Win95 MAIN.CPL: mouse 100, keyboard 200, printers 300, fonts 400. */
-        ExtractIconExA(path,-200,NULL,&keyboard,1);
+    if(length && length+12<sizeof(path)) {
+        lstrcatA(path,"\\pifmgr.dll");
+        keyboard=KeyboardIcon(path);
     }
     HWND window=CreateWindowExA(0,"Explorer95.TrayLanguage","",WS_CHILD|WS_VISIBLE|WS_TABSTOP,
         0,0,indicatorWidth,20,parent,NULL,instance,NULL);
     if (!window && keyboard) { DestroyIcon(keyboard); keyboard=NULL; }
     return window;
 }
-int TrayLanguageWidth(void) { return indicatorWidth; }
+int TrayLanguageWidth(void) { return indicatorWidth-(showKeyboard ? 0 : 16); }
+void TrayLanguageShowIcon(HWND window,BOOL visible)
+{
+    if(showKeyboard==!!visible) return;
+    showKeyboard=!!visible; InvalidateRect(window,NULL,FALSE);
+}

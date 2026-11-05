@@ -37,7 +37,7 @@ static int taskCount, windowCount, savedCount, quickCount;
 static BOOL previousGrouping, previousTaskTiles;
 static BOOL quickLarge;
 static DWORD awaySince, quickChecked;
-static BOOL hotkeyDesktop, hotkeyStart;
+static BOOL hotkeyDesktop, hotkeyStart, hotkeyRun;
 static BOOL hotkeyLeftWin, hotkeyRightWin, winPending, winUsed;
 static PaintColors desktopColors;
 static BOOL changingDesktopColors;
@@ -202,6 +202,7 @@ static BOOL SettingsPath(void)
     env.options.quick = !!Option("QuickLaunch", FALSE); env.options.largeIcons = !!Option("LargeIcons", FALSE);
     env.options.searchBox = !!Option("SearchBox", TRUE);
     env.options.showDesktopButton = !!Option("ShowDesktopButton", TRUE);
+    env.options.trayKeyboardIcon = !!Option("KeyboardIcon", TRUE);
     env.options.quickSize = Clamp(Option("QuickLaunchSize", 0), 0, 4096);
     env.options.group = !!Option("GroupTasks", FALSE); env.options.hideInactive = !!Option("HideInactive", FALSE);
     env.options.classicStart = !!GetPrivateProfileIntA("Start", "Classic", FALSE, env.ini);
@@ -802,6 +803,7 @@ void EnvPositionBar(void)
 }
 void EnvApplyOptions(void)
 {
+    TraySetKeyboardIcon(env.options.trayKeyboardIcon);
     LONG style = GetWindowLongA(env.bar, GWL_STYLE);
     style &= ~(WS_BORDER | WS_THICKFRAME);
     /* Draw the classic raised bar ourselves; a thick frame eats client height. */
@@ -1246,6 +1248,7 @@ static LRESULT CALLBACK BarProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
         if (wp == 1) { winUsed = TRUE; EnvShowDesktop(); }
         else if (wp == 2) { winUsed = TRUE; StartToggle(); }
         else if (wp == 3 || wp == 4) WinKeyBegin();
+        else if (wp == 5) { winUsed = TRUE; StartHide(); EnvCommand(ID_RUN); }
         return 0;
     case WM_SYSCOMMAND:
         if ((wp & 0xfff0) == SC_TASKLIST) {
@@ -1418,6 +1421,7 @@ HWND EnvironmentCreate(const EnvironmentHost *callbacks)
     hotkeyDesktop = RegisterHotKey(env.bar, 1, MOD_WIN, 'D'); hotkeyStart = RegisterHotKey(env.bar, 2, MOD_CONTROL, VK_ESCAPE);
     hotkeyLeftWin = RegisterHotKey(env.bar, 3, MOD_WIN, VK_LWIN);
     hotkeyRightWin = RegisterHotKey(env.bar, 4, MOD_WIN, VK_RWIN);
+    hotkeyRun = RegisterHotKey(env.bar, 5, MOD_WIN, 'R');
     if(env.primary && (GetVersion()&0x80000000UL)) {
         HMODULE shell=GetModuleHandleA("shell32.dll");
         registerShellNotifications=(RegisterShellNotifications)(void *)GetProcAddress(shell,MAKEINTRESOURCEA(181));
@@ -1466,6 +1470,7 @@ void EnvironmentShutdown(void)
     if (hotkeyStart) UnregisterHotKey(env.bar, 2);
     if (hotkeyLeftWin) UnregisterHotKey(env.bar, 3);
     if (hotkeyRightWin) UnregisterHotKey(env.bar, 4);
+    if (hotkeyRun) UnregisterHotKey(env.bar, 5);
     /* Browser windows own shell objects too: release them while the desktop
      * and its shell services are still alive. */
     RenderTraceShutdown("exit.folders",S_OK,0);

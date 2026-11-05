@@ -1,5 +1,29 @@
 # Следующие задачи Explorer95
 
+## Реализовано: компактная клавиатура, её отключение и Win+R
+
+Клавиатура MAIN.CPL/200 в настоящей Win95 имеет только 32×32 кадры. Проверены
+ресурсы MAIN.CPL, PIFMGR.DLL, Shell32, Sysdm и Setupx; выбран компактный PIFMGR/13.
+GetIconInfo + PaintScaleIcon создают настоящие 16×16 color/mask, без растягивания
+неподходящего HICON в старой DrawIconEx. Извлечённые системные файлы остаются
+только в ignored build/keyboard-icons, в Git не добавлялись.
+Notifications → Show keyboard icon next to input language отключает только рисунок,
+сохраняя RU/EN и меню. `[Taskbar] KeyboardIcon=1` — default, общий Apply/Cancel,
+освобождение 16px и восстановление после запуска.
+Win+R зарегистрирован через обычный RegisterHotKey, вызывает общий ShellRun,
+не открывает Start после отпускания Win, освобождается при завершении оболочки.
+Focused Wine прошёл обе Win-клавиши, native Run/Cancel, actual 16px color/mask
+из кадров Win95, настройку рисунка, работающий выбор языка без рисунка и restart.
+Для Wine исходный NE PIFMGR обёрнут в тестовый PE resource-only DLL без изменения
+кадров: x64 ExtractIconEx падает на исходном Win16-модуле. Это не проверка Win95.
+RU Notifications визуально проверен при подтверждённых 640×480 и 1024×768;
+пройдена группа language, включая новую подпись и перезапуск EN/RU.
+make check/check-build прошли, целевой EXE/PE — 340 импортов без CRT.
+Логи/снимки: build/keyboard-icons/. На настоящей Win95 изменения ещё не проверены;
+новый full-прогон не проводился, прежние ограничения full описаны ниже.
+EXE SHA256: `767305316939a6076b613f77c6705c376d4e850c67d0439e26dda750cefeba92`.
+Публикации ещё нет.
+
 ## Реализовано: ассоциации, MS-DOS, раскладка и подписи
 
 Добавлен native Shell32 OpenAs_RunDLL только при отсутствии ассоциации существующего

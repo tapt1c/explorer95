@@ -24,6 +24,7 @@ static HWND WaitFor(const char *kind,const char *title);
 static void NativeSelectItem(HWND list, int index);
 static int NativeItemIndex(HWND list, const char *name);
 static HFONT PixelTestFont(HFONT source);
+static HWND NativeRunWindow(HWND owner);
 typedef enum TestGroup { GROUP_FULL, GROUP_CORE, GROUP_MENU, GROUP_BROWSER, GROUP_LANGUAGE, GROUP_SESSION } TestGroup;
 
 void *memset(void *destination, int value, size_t count)
@@ -1279,6 +1280,19 @@ static void WinKeyTests(HWND bar, HWND menu)
     keybd_event('A', 0, 0, 0); keybd_event('A', 0, KEYEVENTF_KEYUP, 0); PumpFor(80);
     WinKeyEvent(VK_LWIN, TRUE); PumpFor(160);
     Check(!IsWindowVisible(menu), "a brief unregistered Win chord does not open Start");
+    for (key=VK_LWIN;key<=VK_RWIN;++key) {
+        HWND run; DWORD started;
+        SetForegroundWindow(fixture); Check(WaitWinInputReady(fixture),"Win+R starts with stable external focus");
+        WinKeyEvent(key,FALSE); PumpFor(60);
+        keybd_event('R',0,0,0); PumpFor(60); keybd_event('R',0,KEYEVENTF_KEYUP,0);
+        WinKeyEvent(key,TRUE); started=GetTickCount();
+        do { PumpFor(20); run=NativeRunWindow(bar); } while(!run && GetTickCount()-started<3000);
+        Check(run && IsWindowVisible(run) && !IsWindowVisible(menu),
+            "either Win+R opens Shell32 Run without also opening Start on Win release");
+        PostMessageA(run,WM_COMMAND,IDCANCEL,0); started=GetTickCount();
+        while(IsWindow(run) && GetTickCount()-started<2000) PumpFor(20);
+        Check(!IsWindow(run) && IsWindowEnabled(bar),"cancelling Win+R restores the shell without executing a command");
+    }
     keybd_event(VK_CONTROL, 0, 0, 0); keybd_event(VK_ESCAPE, 0, 0, 0);
     keybd_event(VK_ESCAPE, 0, KEYEVENTF_KEYUP, 0); keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0); PumpFor(160);
     Check(WaitStartVisible(menu, TRUE), "Ctrl+Esc still opens Start");
@@ -1756,6 +1770,7 @@ static void EnvironmentTests(HWND bar, HWND browser, HWND childWindow, HWND menu
     char title[128], value[MAX_PATH], quickPath[MAX_PATH], module[MAX_PATH];
     DWORD started;
     TrayLanguageTests(bar,childWindow);
+    KeyboardIconSettingsTests(bar,childWindow,settings);
     GetWindowTextA(GetDlgItem(menu, 800), title, sizeof(title));
     Check(title[0] != 0, "Run updates the recent-program list in Start");
     GetPrivateProfileStringA("Recent", "Program0", "", value, sizeof(value), settings);

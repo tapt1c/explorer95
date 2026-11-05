@@ -214,6 +214,7 @@ static BOOL HasHidden(void)
     return env.options.hideInactive;
 }
 static int IconRows(int height) { return height >= 40 ? 2 : 1; }
+void TraySetKeyboardIcon(BOOL visible) { TrayLanguageShowIcon(languageButton,visible); }
 int TrayWidth(int height)
 {
     int i, count = 0, rows = IconRows(height);
@@ -496,8 +497,10 @@ void TraySettingsCreate(HWND w)
     CTRL("STATIC", "Inactive timeout (seconds):", 0, 0, 30, 88, 250, 20);
     CTRL("EDIT", "", WS_BORDER | WS_TABSTOP | ES_NUMBER, ID_TRAYSECONDS, 292, 84, 70, 23); SetDlgItemInt(w, ID_TRAYSECONDS, env.options.traySeconds, FALSE);
     CTRL("STATIC", "5 - 3600", 0, 0, 374, 88, 110, 20);
-    CTRL("STATIC", "Current and remembered notifications:", 0, 0, 30, 124, 454, 20);
-    control = CTRL("LISTBOX", "", WS_BORDER | WS_VSCROLL | WS_TABSTOP | LBS_NOTIFY | LBS_NOINTEGRALHEIGHT, ID_NOTIFYLIST, 30, 148, 454, 118);
+    control = CTRL("BUTTON", "Show keyboard icon next to input language", WS_TABSTOP | BS_AUTOCHECKBOX, ID_KEYBOARDICON, 30, 110, 454, 23);
+    SendMessageA(control,BM_SETCHECK,env.options.trayKeyboardIcon ? BST_CHECKED : BST_UNCHECKED,0);
+    CTRL("STATIC", "Current and remembered notifications:", 0, 0, 30, 138, 454, 20);
+    control = CTRL("LISTBOX", "", WS_BORDER | WS_VSCROLL | WS_TABSTOP | LBS_NOTIFY | LBS_NOINTEGRALHEIGHT, ID_NOTIFYLIST, 30, 160, 454, 106);
     for (i = 0; i < draftCount; ++i) {
         wsprintfA(label, "%s  (%s, %u)", draftPolicies[i].label[0] ? draftPolicies[i].label : "Notification", draftPolicies[i].module, draftPolicies[i].id);
         SendMessageA(control, LB_ADDSTRING, 0, (LPARAM)label);
