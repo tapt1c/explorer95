@@ -478,6 +478,22 @@ LRESULT WINAPI UiSendMessageA(HWND window,UINT message,WPARAM wp,LPARAM lp)
             return SendMessageA(window,message,wp,(LPARAM)value);
         }
     }
+    /* Only explicitly catalogue-encoded labels belong to this boundary.
+     * Browser trees contain literal native filenames and must not be translated. */
+    if(message==TVM_INSERTITEMA && lp) {
+        TVINSERTSTRUCTA *item=(TVINSERTSTRUCTA *)lp;
+        if((item->item.mask&TVIF_TEXT) && Localized(item->item.pszText)) {
+            ControlFont(window);
+            if(sendWide) {
+                WCHAR *wide=Wide(item->item.pszText);
+                if(wide) {
+                    TVINSERTSTRUCTA copy=*item; copy.item.pszText=(LPSTR)wide;
+                    result=sendWide(window,TVM_INSERTITEMW,wp,(LPARAM)&copy);
+                    HeapFree(GetProcessHeap(),0,wide); return result;
+                }
+            }
+        }
+    }
     if(message==TCM_INSERTITEMA || message==TCM_SETITEMA) {
         TCITEMA *item=(TCITEMA *)lp;
         if(item && (item->mask&TCIF_TEXT) && (UINT_PTR)item->pszText>0xffff) {

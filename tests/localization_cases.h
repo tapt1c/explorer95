@@ -452,7 +452,7 @@ static void LanguageRestartTests(const char *directory,const char *executable)
     Check(LanguageWideEqual(GetDlgItem(properties,ID_SHOWDESKTOP_EDGE),L"\u041a\u043d\u043e\u043f\u043a\u0430 \u0440\u0430\u0431\u043e\u0447\u0435\u0433\u043e \u0441\u0442\u043e\u043b\u0430"),
         "the desktop edge-button setting has its Russian label");
     PumpFor(80); SaveScreen("build/taskbar-settings-ru.bmp");
-    SettingsPage(properties,SETTINGS_SHELL,-1);
+    SettingsPage(properties,SETTINGS_LANGUAGE,-1);
     Check(LanguageWideEqual(GetDlgItem(properties,ID_WELCOME),L"Показывать приветствие при запуске"),"the startup welcome preference has its Russian label");
     Check(LanguageWideEqual(GetDlgItem(properties,ID_KEYBOARDICON),L"Показывать значок клавиатуры у раскладки"),"the keyboard artwork preference has its Russian label");
     PumpFor(80); SaveScreen("build/welcome-settings-ru.bmp");

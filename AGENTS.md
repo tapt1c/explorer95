@@ -87,8 +87,8 @@ Explorer95 — любительская нативная оболочка для
 | `src/start_menu.c` | «Пуск», история запусков, значки, меню программ/документов, контекстные действия и размещение контролов. |
 | `src/start_layout.c`, `src/start_layout.h` | Расчёт геометрии меню без обращения к Shell32 или живому дисплею; используется интерфейсом и тестами. |
 | `src/program_history.c`, `src/program_history.h` | Проверка программ и целей ярлыков для истории; исключение документов и объектов Recent Documents без запуска программ. |
-| `src/start_settings.c` | Страницы General / Advanced / Pinned programs в общем окне, черновик закреплений и ограничения недавних программ. |
-| `src/settings.c`, `src/settings_internal.h` | Единое окно с вкладками, общий Apply/Cancel, запись профиля через временный файл, preview и действия системной оболочки. |
+| `src/start_settings.c` | Страницы Appearance / Contents / Pins в общем окне, черновик закреплений и ограничения недавних программ. |
+| `src/settings.c`, `src/settings_internal.h` | Единое окно с деревом категорий слева, общий Apply/Cancel, запись профиля через временный файл, preview и действия системной оболочки. |
 | `src/shell_config.c` | Подготовка копии EXE, изменение `[boot] shell=`, резервирование и восстановление. |
 | `src/file_operations.c`, `src/file_operations.h` | Общие SHFileOperationA для clipboard и Drag and Drop, пары путей MOVE и штатные подтверждения конфликтов. |
 | `src/shell_commands.c/.h`, `tests/shell_commands_cases.h` | Native background IContextMenu с Win95 fallback, состояние Paste/Paste Shortcut/Undo, числовые offsets и сочетания рабочего стола. |
@@ -786,9 +786,10 @@ explorer95.exe --settings="C:\EX95TEST\Explorer95.ini"
 
 ## Общее окно настроек окружения
 
-- `Explorer95.Properties` — единственное окно: Taskbar / Start Menu / Desktop /
-  Notifications / System Shell. General / Advanced / Pinned programs — внутренние
-  вкладки Start Menu. Не возвращайте отдельное окно `Explorer95.StartSettings`.
+- `Explorer95.Properties` — единственное окно с навигацией слева: Taskbar /
+  Start Menu / Desktop / Notifications / General / Integration. Taskbar содержит
+  Placement / Task buttons / Components; Start Menu — Appearance / Contents / Pins.
+  Не возвращайте отдельное окно `Explorer95.StartSettings`.
   Параметры файлового Проводника остаются в его собственном окне.
 - Общие OK / Cancel / Apply работают со всем черновиком. Clear program list и
   Clear recent documents только отмечают очистку до успешного Apply. После Apply
@@ -798,12 +799,13 @@ explorer95.exe --settings="C:\EX95TEST\Explorer95.ini"
   не добавляйте неподдерживаемые MoveFileEx / ReplaceFile. При сбое восстановления
   сохраняйте резерв и сообщайте его путь. Не меняйте живые options/pins/policies
   до успешной записи; read-only профиль должен остаться неизменным.
-- Вкладки — штатный Win95 TabControl. Все элементы принадлежат одному окну;
-  SettingsControl хранит их страницу/подстраницу. Фоновые tab/groupbox располагаются
+- Навигация — штатный Win95 TreeView с системными значками Shell32 16×16.
+  Все элементы принадлежат одному окну; SettingsControl хранит страницу/подстраницу.
+  Изображения принадлежат окну и освобождаются при закрытии. Фоновые groupbox располагаются
   позади полей, с WS_CLIPSIBLINGS, иначе подстраницы могут исчезать при перерисовке.
   У анонимных подписей уникальные ID: не используйте IDOK/IDCANCEL для groupbox.
 - Нужны работоспособные Ctrl+Tab, Escape, обычный Tab и окно целиком на 640×480.
-  В UI-тестах переключайте вкладки через TCM_SETCURFOCUS. Нельзя передавать указатель
+  В UI-тестах выбирайте реальные узлы через TVM_GETNEXTITEM/TVM_SELECTITEM. Нельзя передавать указатель
   на NMHDR в WM_NOTIFY из другого процесса: это не поддерживаемая межпроцессная передача.
 - Во время Apply SPI work-area broadcast приходит до фактического перемещения
   панели. Не пересчитывайте лимиты по промежуточной геометрии при loading=true.

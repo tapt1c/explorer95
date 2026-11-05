@@ -1144,14 +1144,22 @@ static void ConfigTests(const char *directory)
 
 static void SettingsPage(HWND window, int mainPage, int startPage)
 {
-    if (mainPage >= 0) SendDlgItemMessageA(window, 1000, TCM_SETCURFOCUS, mainPage, 0);
-    if (startPage >= 0) SendDlgItemMessageA(window, 1001, TCM_SETCURFOCUS, startPage, 0);
+    HWND tree=GetDlgItem(window,ID_SETTINGS_TREE); int i,ordinal=mainPage==SETTINGS_SHELL ? 5 : mainPage==SETTINGS_LANGUAGE ? 4 : mainPage;
+    HTREEITEM item=(HTREEITEM)SendMessageA(tree,TVM_GETNEXTITEM,TVGN_ROOT,0);
+    for(i=0;i<ordinal && item;++i) item=(HTREEITEM)SendMessageA(tree,TVM_GETNEXTITEM,TVGN_NEXT,(LPARAM)item);
+    if((mainPage==SETTINGS_TASKBAR || mainPage==SETTINGS_START) && startPage>=0) {
+        item=(HTREEITEM)SendMessageA(tree,TVM_GETNEXTITEM,TVGN_CHILD,(LPARAM)item);
+        for(i=0;i<startPage && item;++i) item=(HTREEITEM)SendMessageA(tree,TVM_GETNEXTITEM,TVGN_NEXT,(LPARAM)item);
+    }
+    Check(item!=NULL,"the requested settings category exists in the native navigation tree");
+    SendMessageA(tree,TVM_SELECTITEM,TVGN_CARET,(LPARAM)item);
 }
 static HWND OpenSettings(HWND bar)
 {
     HWND window; SendMessageA(bar, WM_COMMAND, 600, 0); window = WaitFor("Explorer95.Properties", NULL);
     Check(window != NULL, "unified environment properties open"); return window;
 }
+#include "settings_navigation_cases.h"
 static int DesktopIconPixels(HWND list)
 {
     RECT icon; void *remote; BOOL okay;
@@ -1371,7 +1379,7 @@ static void LogoffTests(HWND bar, int style)
 static void ShutdownStyleTests(HWND bar, const char *settings)
 {
     HWND properties = OpenSettings(bar), dialog; RECT rect, client, button; HDC dc; int style, id;
-    SettingsPage(properties, 2, -1);
+    SettingsPage(properties, SETTINGS_LANGUAGE, -1);
     Check(IsWindowVisible(GetDlgItem(properties, 1029)) && SendDlgItemMessageA(properties, 1029, CB_GETCOUNT, 0, 0) == 2,
           "Desktop settings offer Windows XP and Windows 95 shutdown styles");
     for (style = 1; style >= 0; --style) {
@@ -1423,7 +1431,7 @@ static void ShutdownStyleTests(HWND bar, const char *settings)
         SaveScreen(style ? "build/shutdown-dos-95.bmp" : "build/shutdown-dos-xp.bmp");
         SendMessageA(dialog, WM_COMMAND, IDCANCEL, 0); /* Cleanup only; never execute a power action. */
         LogoffTests(bar, style);
-        properties = OpenSettings(bar); SettingsPage(properties, 2, -1);
+        properties = OpenSettings(bar); SettingsPage(properties, SETTINGS_LANGUAGE, -1);
         Check(SendDlgItemMessageA(properties, 1029, CB_GETCURSEL, 0, 0) == style,
               "reopening settings retains the selected shutdown style");
     }
@@ -1501,8 +1509,9 @@ static void SettingsPaintingTests(HWND window, HWND bar)
 {
     HWND preview, cover; RECT rect; int i, barHeight;
     BOOL large = SendDlgItemMessageA(window, 607, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    SettingsNavigationTests(window);
     barHeight = large ? 40 : 28;
-    Check(DialogBackground(window, 40, 256, FALSE), "Taskbar page erases behind transparent Win95 tabs and groupboxes");
+    Check(DialogBackground(window, 610, 350, FALSE), "Taskbar page erases behind native groupboxes");
     preview = GetDlgItem(window, 1018); GetClientRect(preview, &rect);
     Check(PreviewStartMatches(preview, GetDlgItem(bar, 100), 4, (rect.bottom - barHeight) / 2 + 3),
         "Taskbar preview Start matches every pixel of the real Start button at native size");
@@ -1520,7 +1529,7 @@ static void SettingsPaintingTests(HWND window, HWND bar)
     for (i = 0; i < 3; ++i) SettingsPage(window, 1, i);
     SettingsPage(window, 2, -1);
     Check(IsWindowVisible(GetDlgItem(window, 1010)), "Desktop controls are visible after cycling main and Start tabs");
-    Check(DialogBackground(window, 505, 300, TRUE), "Desktop page erases old page contents behind the native tab");
+    Check(DialogBackground(window, 610, 350, TRUE), "Desktop page erases old page contents behind native groupboxes");
     preview = GetDlgItem(window, 1020); GetClientRect(preview, &rect);
     Check(PreviewStartMatches(preview, GetDlgItem(bar, 100), 6, rect.bottom - 4 - barHeight + 3),
         "Desktop preview contains the complete native Start button instead of a floating flag");

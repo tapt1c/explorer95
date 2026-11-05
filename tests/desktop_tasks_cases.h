@@ -52,7 +52,7 @@ static void LabelShadowSettingsTests(HWND bar,const char *settings)
     HWND properties=OpenSettings(bar); RECT box,page;
     SettingsPage(properties,SETTINGS_DESKTOP,-1);
     Check(SendDlgItemMessageA(properties,ID_LABELSHADOWS,BM_GETCHECK,0,0)==BST_CHECKED,"existing profiles retain shadows by default");
-    GetWindowRect(GetDlgItem(properties,ID_LABELSHADOWS),&box); GetWindowRect(GetDlgItem(properties,ID_SETTINGS_TABS),&page);
+    GetWindowRect(GetDlgItem(properties,ID_LABELSHADOWS),&box); GetWindowRect(properties,&page);
     Check(box.bottom<=page.bottom && box.left>=page.left && box.right<=page.right,"shadow preference fits the Desktop tab");
     SendMessageA(GetDlgItem(properties,ID_LABELSHADOWS),BM_CLICK,0,0); SendMessageA(properties,WM_COMMAND,IDCANCEL,0);
     properties=OpenSettings(bar); SettingsPage(properties,SETTINGS_DESKTOP,-1);

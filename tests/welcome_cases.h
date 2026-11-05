@@ -22,13 +22,13 @@ static void WelcomeSettingsTest(HWND bar,const char *settings)
 {
     HWND properties; RECT box,client;
     SendMessageA(bar,WM_COMMAND,ID_PROPERTIES,0); properties=WaitFor("Explorer95.Properties",NULL);
-    Check(properties!=NULL,"open settings for the startup welcome preference"); SettingsPage(properties,SETTINGS_SHELL,-1);
+    Check(properties!=NULL,"open settings for the startup welcome preference"); SettingsPage(properties,SETTINGS_LANGUAGE,-1);
     Check(SendDlgItemMessageA(properties,ID_WELCOME,BM_GETCHECK,0,0)==BST_CHECKED,"the welcome preference starts enabled");
     GetWindowRect(GetDlgItem(properties,ID_WELCOME),&box); GetWindowRect(properties,&client);
     Check(IsWindowVisible(GetDlgItem(properties,ID_WELCOME)) && box.left>client.left && box.right<client.right && box.bottom<client.bottom,
         "the welcome checkbox is visible inside the System Shell settings page");
     SendMessageA(GetDlgItem(properties,ID_WELCOME),BM_CLICK,0,0); SendMessageA(properties,WM_COMMAND,IDCANCEL,0);
-    SendMessageA(bar,WM_COMMAND,ID_PROPERTIES,0); properties=WaitFor("Explorer95.Properties",NULL); SettingsPage(properties,SETTINGS_SHELL,-1);
+    SendMessageA(bar,WM_COMMAND,ID_PROPERTIES,0); properties=WaitFor("Explorer95.Properties",NULL); SettingsPage(properties,SETTINGS_LANGUAGE,-1);
     Check(SendDlgItemMessageA(properties,ID_WELCOME,BM_GETCHECK,0,0)==BST_CHECKED &&
         GetPrivateProfileIntA("Interface","ShowWelcome",1,settings)==1,"Cancel discards a pending welcome preference change");
     SendMessageA(GetDlgItem(properties,ID_WELCOME),BM_CLICK,0,0); SendMessageA(properties,WM_COMMAND,0x3021,0);
