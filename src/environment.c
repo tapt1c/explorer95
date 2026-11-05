@@ -1,5 +1,6 @@
 #define WIN32_LEAN_AND_MEAN
 #include "shell_internal.h"
+#include "shell_launch.h"
 #include "file_drag.h"
 #include "render_trace.h"
 #include "tray_mirror.h"
@@ -209,6 +210,7 @@ static BOOL SettingsPath(void)
     env.options.highlightNew = !!GetPrivateProfileIntA("Start", "HighlightNew", FALSE, env.ini);
     env.options.startMenus = GetPrivateProfileIntA("Start", "FolderMenus", (1U << 1) | (1U << 5) | (1U << 12), env.ini);
     env.options.desktopIcons = !!GetPrivateProfileIntA("Desktop", "ShowIcons", TRUE, env.ini);
+    env.options.desktopLabelShadows = !!GetPrivateProfileIntA("Desktop", "LabelShadows", TRUE, env.ini);
     env.options.autoArrange = !!GetPrivateProfileIntA("Desktop", "AutoArrange", FALSE, env.ini);
     env.options.lockDesktopIcons = !!GetPrivateProfileIntA("Desktop", "LockIcons", FALSE, env.ini);
     env.options.snapDesktopIcons = !!GetPrivateProfileIntA("Desktop", "SnapToGrid", FALSE, env.ini);
@@ -231,17 +233,18 @@ BOOL EnvironmentLaunch(HWND owner, const char *path, const char *arguments, cons
         DWORD attributes=GetFileAttributesA(path);
         if(attributes!=INVALID_FILE_ATTRIBUTES && !(attributes&FILE_ATTRIBUTE_DIRECTORY)) return BrowserOpen(path)!=NULL;
     }
-    TaskbarLink *shortcut=NULL; int length=lstrlenA(path); HINSTANCE result;
+    TaskbarLink *shortcut=NULL; int length=lstrlenA(path); DWORD error;
     /* Execute the original .lnk, but retain the program in history even if
      * its taskbar shortcut is subsequently unpinned or renamed. */
     if(length>4 && !lstrcmpiA(path+length-4,".lnk") && (!arguments || !*arguments)) {
         shortcut=EnvAlloc(sizeof(*shortcut));
         if(shortcut && (!TaskbarLinkRead(path,shortcut) || !TaskbarLinkExists(shortcut))) { EnvFree(shortcut); shortcut=NULL; }
     }
-    result = ShellExecuteA(owner, "open", path, arguments && *arguments ? arguments : NULL, directory, SW_SHOWNORMAL);
-    if ((INT_PTR)result <= 32) {
-        char text[896]; wsprintfA(text, "Windows could not open:\r\n%s\r\n\r\nShell error %ld.", path, (LONG)(INT_PTR)result);
-        EnvFree(shortcut); MessageBoxA(owner, text, "Explorer95", MB_OK | MB_ICONEXCLAMATION); return FALSE;
+    error = ShellLaunch(owner,path,arguments,directory,ShellExecuteExA);
+    if (error) {
+        EnvFree(shortcut);
+        if (error != ERROR_CANCELLED) EnvError(owner,"Windows could not open the selected item.",error);
+        return FALSE;
     }
     EnvironmentRecordLaunch(shortcut ? shortcut->target : path, shortcut ? shortcut->arguments : arguments);
     EnvFree(shortcut); return TRUE;
@@ -812,6 +815,7 @@ void EnvApplyOptions(void)
     if (env.desktopView) {
         HWND view = NativeViewWindow(env.desktopView);
         ShowWindow(view, env.options.desktopIcons ? SW_SHOWNA : SW_HIDE);
+        NativeViewSetLabelShadows(env.desktopView, env.options.desktopLabelShadows);
         NativeViewConfigureDesktop(env.desktopView, env.ini, env.options.autoArrange, env.options.lockDesktopIcons,
             env.options.snapDesktopIcons, env.options.desktopGridX, env.options.desktopGridY, env.options.desktopIconSize);
         InvalidateRect(env.desktop, NULL, FALSE);

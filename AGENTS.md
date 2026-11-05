@@ -67,6 +67,8 @@ Explorer95 — любительская нативная оболочка для
 | `src/browser_history.c` | До 32 сохраняемых посещений на профиль; отключение и очистка отдельно от Back/Forward окна. |
 | `src/environment.h` | Интерфейс `EnvironmentHost`, публичные функции окружения и файловый backend установки shell. |
 | `src/environment.c` | Общее состояние, панель задач, группировка окон, Quick Launch, часы, appbar, горячие клавиши и выполнение команд. |
+| `src/shell_launch.c/.h` | Исполнение ассоциации через ShellExecuteExA; только ERROR_NO_ASSOCIATION существующего файла без аргументов вызывает штатный Unknown/openas из Shell32. Архивы перехватываются раньше в EnvironmentLaunch. |
+| `src/tray_language.c/.h` | Значок клавиатуры MAIN.CPL и код языка foreground thread; native меню установленных HKL и WM_INPUTLANGCHANGEREQUEST исходному приложению. |
 | `src/appbar.c/.h`, `tests/appbar_cases.h` | Broker основной оболочки для сторонних панелей Win95: ограниченный список, четыре края, autohide, уведомления и исходный 44-байтовый IPC. |
 | `src/shell_applet.c/.h`, `src/shell_applet_cpl.c`, `src/shell_applet.rc`, `tests/shell_applet_cases.h` | Встроенный native CPL, атомарная запись установки, безопасное снятие регистрации и отдельная команда `--properties`. |
 | `src/shell_startup.c/.h`, `tests/shell_startup_cases.h` | Потоковое чтение личной/общей Startup, снимок HKLM/HKCU Run/RunOnce, отложенное удаление !; запуск только primary session, проверки на частных registry roots и собственном ярлыке. |
@@ -906,6 +908,12 @@ explorer95.exe --settings="C:\EX95TEST\Explorer95.ini"
   Одной проверки сходства более 90% недостаточно — она пропускала второй силуэт.
   ImageList_Remove/GetIconSize/ReplaceIcon — API исходной Comctl32 4.0/Win95.
 - Подписи desktop остаются текстом системного ListView. Desktop WM_ERASEBKGND
+  `[Desktop] LabelShadows` по умолчанию TRUE; NativeViewSetLabelShadows меняет
+  только режим подписи без перечитывания папки. FALSE использует штатный
+  COLOR_DESKTOP для TextBkColor; TRUE — CLR_NONE и собственную тень. Образ
+  переноса использует тот же TextBkColor, системные цвета сохраняют выбранный режим.
+  Настройка проходит через общий черновик/атомарный Apply/Cancel.
+  Desktop WM_ERASEBKGND
   только возвращает TRUE: он не должен стирать готовые значки или оставлять
   на экране один фон с тенями до следующего WM_PAINT. В WM_PAINT NativeView
   собирает фон, PaintDesktopLabelShadows и штатный foreground через исходную
@@ -1617,6 +1625,15 @@ ArchiveUiTests проверяет EN/RU и отмену выбора места 
 
 ## Основная оболочка, системные команды и трей
 
+- `tray_language` — отдельный дочерний контрол трея: системная клавиатура из
+  абсолютного MAIN.CPL resource 200 и двухбуквенный код без синего квадрата.
+  Часы остаются 58×20, слоты уведомлений — 20×20. Timer наблюдает HKL foreground
+  thread; при открытом меню цель фиксируется. Выбор отправляет
+  WM_INPUTLANGCHANGEREQUEST исходному HWND после проверки прежнего thread ID,
+  а не ActivateKeyboardLayout в потоке оболочки. GetKeyboardLayout/List и
+  GetLocaleInfoA входят в базовую Win95; неподдерживаемый ISO flag откатывается
+  на LOCALE_SABBREVLANGNAME. Нет установки раскладок, hooks или записи реестра.
+
 - Та же primary-session очередь сначала обрабатывает снимок Run/RunOnce из
   HKLM/HKCU CurrentVersion. Не перечисляйте и не удаляйте живые значения в одном
   цикле индексов. REG_SZ сохраняет команду буквально; REG_EXPAND_SZ разворачивает
@@ -2189,7 +2206,9 @@ ArchiveUiTests проверяет EN/RU и отмену выбора места 
 - Пользователь подтвердил, что alpha.47 показывает заглушку вместо нужного
   перехода в DOS. Не возвращайте поиск готового Exit to Dos.pif и запасной
   диалог ordinal 60 для этой команды. Галочка Restart in MS-DOS mode меняет
-  только Restart; переключение самой галочки не выполняет действие питания.
+  Restart; при включённой галочке Stand By и Turn Off отключены, включая
+  обработчик команды. Снятие восстанавливает исходную доступность питания.
+  Переключение самой галочки не выполняет действие питания.
   Размер 314×200 и три главные кнопки сохранены; XP использует синий фон checkbox.
 - На Win95 `shutdown_dos` динамически получает PifMgr_Open/Get/Set/CloseProperties
   из Shell32 (ordinals 9/10/11/13). OpenProperties у Win95 — ANSI, hProps — int,

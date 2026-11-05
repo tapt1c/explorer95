@@ -41,8 +41,9 @@ ALLOWED = {
     # CreateProcessA is stock Win95: a separate GUI caller requests Log Off so
     # Windows includes the shell itself in its session-end notifications.
     # VirtualQuery is stock Win95; bound the shared appbar RECT reply.
+    # GetLocaleInfoA is stock Win95; ISO-name flags have an older-flag fallback.
     "kernel32.dll": set("""
-        VirtualQuery
+        VirtualQuery GetLocaleInfoA
         SetFilePointer SetFileTime DosDateTimeToFileTime LocalFileTimeToFileTime
         FlushFileBuffers
         GetDriveTypeA
@@ -73,8 +74,10 @@ ALLOWED = {
     # GetMenuItemInfoA is stock Win95; callers use its original cbSize.
     # GetSubMenu / ModifyMenuA are base Win95 menu APIs for native edit commands.
     # EqualRect is a classic USER rectangle helper, present before Win95.
+    # GetKeyboardLayout/List and WM_INPUTLANGCHANGEREQUEST are stock Win95.
     "user32.dll": set("""
         CharNextA EqualRect
+        GetKeyboardLayout GetKeyboardLayoutList
         CreateIconIndirect
         SetWindowsHookExA CallNextHookEx UnhookWindowsHookEx
         CharUpperBuffA SetScrollInfo GetScrollInfo IsRectEmpty SetRectEmpty OffsetRect

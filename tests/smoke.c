@@ -212,6 +212,7 @@ static void Navigate(HWND browser, const char *path)
 
 static LRESULT CALLBACK ChildProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam)
 {
+    if(message==WM_INPUTLANGCHANGEREQUEST) SetPropA(window,"Explorer95.LayoutRequest",(HANDLE)lParam);
     if(message==WM_KEYDOWN && wParam==VK_TAB) SetPropA(window,"Explorer95.PlainTabs",(HANDLE)((UINT_PTR)GetPropA(window,"Explorer95.PlainTabs")+1));
     if(message==WM_APP+36) {
         HWND modal=CreateWindowExA(WS_EX_DLGMODALFRAME,"STATIC","Own modal fixture",WS_POPUP|WS_VISIBLE|WS_CAPTION,100,100,180,90,window,NULL,GetModuleHandleA(NULL),NULL);
@@ -1388,11 +1389,19 @@ static void ShutdownStyleTests(HWND bar, const char *settings)
           Check((GetWindowLongA(GetDlgItem(dialog,1703),GWL_STYLE) & BS_TYPEMASK) == BS_AUTOCHECKBOX &&
                 SendDlgItemMessageA(dialog,1703,BM_GETCHECK,0,0) == BST_UNCHECKED,
                 "MS-DOS is an initially unchecked option, not a separate power command");
-          /* Set/read a checkbox state only; never click Restart or execute power. */
+          /* Set/read states only; never execute power actions. */
+          BOOL sleepEnabled=IsWindowEnabled(GetDlgItem(dialog,1700));
           SendDlgItemMessageA(dialog,1703,BM_SETCHECK,BST_CHECKED,0);
           SendMessageA(dialog,WM_COMMAND,1703,0);
           Check(IsWindow(dialog) && SendDlgItemMessageA(dialog,1703,BM_GETCHECK,0,0) == BST_CHECKED,
-                "selecting MS-DOS only changes the option and performs no power action"); }
+                "selecting MS-DOS only changes the option and performs no power action");
+          PumpFor(120);
+          Check(!IsWindowEnabled(GetDlgItem(dialog,1700)) && !IsWindowEnabled(GetDlgItem(dialog,1701)) &&
+                IsWindowEnabled(GetDlgItem(dialog,1702)),"MS-DOS disables Stand By and Turn Off across timer ticks, keeping Restart available");
+          SendDlgItemMessageA(dialog,1703,BM_SETCHECK,BST_UNCHECKED,0); SendMessageA(dialog,WM_COMMAND,1703,0);
+          Check(IsWindowEnabled(GetDlgItem(dialog,1700))==sleepEnabled && IsWindowEnabled(GetDlgItem(dialog,1701)),
+                "unchecking MS-DOS restores original power capabilities");
+          SendDlgItemMessageA(dialog,1703,BM_SETCHECK,BST_CHECKED,0); SendMessageA(dialog,WM_COMMAND,1703,0); }
         PumpFor(80); dc = GetDC(dialog);
         Check(GetPixel(dc, 8, 8) == (style ? GetSysColor(COLOR_BTNFACE) : RGB(0,45,140)),
               "selected style paints the classic system face or XP blue header");
@@ -1736,6 +1745,7 @@ static void RecentMembershipUiTests(HWND bar, HWND menu, const char *settings)
         "Run launches of an installed program return to recents with the All Programs shortcut's label");
     SendMessageA(GetDlgItem(bar,100),BM_CLICK,0,0);
 }
+#include "tray_language_cases.h"
 static void EnvironmentTests(HWND bar, HWND browser, HWND childWindow, HWND menu, const char *settings)
 {
     typedef struct Packet { DWORD signature, operation; NOTIFYICONDATAA icon; } Packet;
@@ -1745,6 +1755,7 @@ static void EnvironmentTests(HWND bar, HWND browser, HWND childWindow, HWND menu
     RECT rect;
     char title[128], value[MAX_PATH], quickPath[MAX_PATH], module[MAX_PATH];
     DWORD started;
+    TrayLanguageTests(bar,childWindow);
     GetWindowTextA(GetDlgItem(menu, 800), title, sizeof(title));
     Check(title[0] != 0, "Run updates the recent-program list in Start");
     GetPrivateProfileStringA("Recent", "Program0", "", value, sizeof(value), settings);
@@ -1961,6 +1972,7 @@ static void EnvironmentTests(HWND bar, HWND browser, HWND childWindow, HWND menu
 #include "localization_cases.h"
 #include "shell_run_cases.h"
 #include "archive_cases.h"
+#include "desktop_tasks_cases.h"
 
 void start(void)
 {
@@ -2041,6 +2053,7 @@ void start(void)
     }
     if(group==GROUP_SESSION) goto cleanup;
     if(group==GROUP_LANGUAGE) { ShutdownDosTests(settingsDir); LanguageTests(settingsDir); LanguageRestartTests(settingsDir,executable); goto cleanup; }
+    if(group==GROUP_FULL || group==GROUP_CORE) ShellLaunchTests(settingsDir);
     if(group==GROUP_FULL || group==GROUP_CORE || group==GROUP_BROWSER) SearchStoreTests(settingsDir);
     if(group==GROUP_FULL || group==GROUP_CORE || group==GROUP_BROWSER) SearchUpgradeBackendTests(settingsDir);
     if(group==GROUP_FULL || group==GROUP_CORE || group==GROUP_BROWSER) ArchiveTests(settingsDir);
@@ -2115,6 +2128,7 @@ void start(void)
     if (group != GROUP_BROWSER) FirstStartDefaultsTests(bar, FindWindowA("Explorer95.Start", NULL), settings);
     if(group==GROUP_MENU || group==GROUP_FULL) StartEnterTests(bar,FindWindowA("Explorer95.Start",NULL));
     WelcomeSettingsTest(bar,settings);
+    LabelShadowSettingsTests(bar,settings);
     if (group != GROUP_BROWSER) WinKeyTests(bar, FindWindowA("Explorer95.Start", NULL));
     /* Finish the cold-start folder activation check before deliberately
      * moving foreground among independent Alt+Tab fixture processes. */

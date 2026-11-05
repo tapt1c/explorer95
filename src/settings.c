@@ -129,6 +129,7 @@ static BOOL WriteOptions(const char *ini, const ShellOptions *o)
     SAVE("Desktop", "LockIcons", lockDesktopIcons); SAVE("Desktop", "SnapToGrid", snapDesktopIcons);
     SAVE("Desktop", "GridWidth", desktopGridX); SAVE("Desktop", "GridHeight", desktopGridY);
     SAVE("Desktop", "IconSize", desktopIconSize);
+    SAVE("Desktop", "LabelShadows", desktopLabelShadows);
     SAVE("Interface", "ShowWelcome", showWelcome);
 #undef SAVE
     okay &= WritePrivateProfileStringA("Interface","Language",o->language ? "ru" : "en",ini);
@@ -369,6 +370,7 @@ static BOOL Apply(HWND window)
     options.showDesktopButton=Checked(window,ID_SHOWDESKTOP_EDGE);
     options.showWelcome=Checked(window,ID_WELCOME);
     options.desktopIcons = Checked(window, ID_DESKTOPICONS); options.autoArrange = Checked(window, ID_AUTOARRANGE);
+    options.desktopLabelShadows = Checked(window, ID_LABELSHADOWS);
     options.desktopIconSize = SendDlgItemMessageA(window, ID_DESKTOPSIZE, CB_GETCURSEL, 0, 0) == 1 ? 48 : 32;
     options.lockDesktopIcons = Checked(window, ID_LOCKICONS); options.snapDesktopIcons = Checked(window, ID_SNAPICONS);
     options.desktopGridX = GetDlgItemInt(window, ID_GRIDX, &valid, FALSE);
@@ -438,9 +440,9 @@ static LRESULT CALLBACK PropertiesProc(HWND window, UINT message, WPARAM wp, LPA
         control = Control(window, SETTINGS_DESKTOP, "COMBOBOX", "", WS_TABSTOP | CBS_DROPDOWNLIST, ID_SHUTDOWNSTYLE, 206, 264, 278, 100);
         SendMessageA(control, CB_ADDSTRING, 0, (LPARAM)"Windows XP"); SendMessageA(control, CB_ADDSTRING, 0, (LPARAM)"Windows 95");
         SendMessageA(control, CB_SETCURSEL, env.options.classicShutdown ? 1 : 0, 0);
-        Control(window, SETTINGS_DESKTOP, "BUTTON", "Line up icons now", WS_TABSTOP, ID_LINEUP, 30, 298, 212, 26);
-        Control(window, SETTINGS_DESKTOP, "BUTTON", "Background / display settings...", WS_TABSTOP, ID_BACKGROUND, 252, 298, 232, 26);
-        Control(window, SETTINGS_DESKTOP, "STATIC", "Wallpaper, colors and screen saver use Windows display properties.", 0, 0, 30, 326, 454, 16);
+        Control(window, SETTINGS_DESKTOP, "BUTTON", "Line up icons now", WS_TABSTOP, ID_LINEUP, 30, 292, 212, 26);
+        Control(window, SETTINGS_DESKTOP, "BUTTON", "Background / display settings...", WS_TABSTOP, ID_BACKGROUND, 252, 292, 232, 26);
+        Checkbox(window, SETTINGS_DESKTOP, "Use drop shadows for icon labels", ID_LABELSHADOWS, env.options.desktopLabelShadows, 30, 320, 454);
         TraySettingsBegin(); TraySettingsCreate(window);
         Control(window, SETTINGS_SHELL, "BUTTON", "Windows 95 startup shell", BS_GROUPBOX, 0, 24, 48, 472, 128);
         Control(window, SETTINGS_SHELL, "STATIC", "Select which shell starts with Windows.\r\nThe change takes effect after restart.", 0, 0, 38, 68, 442, 34);

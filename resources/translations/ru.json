@@ -619,5 +619,8 @@
   "%lu folder(s) skipped. First %lu problems:": "Пропущено папок: %lu. Первые %lu ошибок:",
   "Index file is unrecognized. Rename SearchIndex.dat before rebuilding. Normal search still works.": "Файл индекса не распознан. Переименуйте SearchIndex.dat перед созданием индекса. Обычный поиск работает.",
   "Unrecognized SearchIndex.dat was kept. Rename it before creating a new index.": "Нераспознанный SearchIndex.dat сохранён. Переименуйте его перед созданием индекса.",
-  "Cannot restore the index. Its previous snapshot remains in SearchIndex.dat.bak.": "Не удалось восстановить индекс. Предыдущий снимок сохранён в SearchIndex.dat.bak."
+  "Cannot restore the index. Its previous snapshot remains in SearchIndex.dat.bak.": "Не удалось восстановить индекс. Предыдущий снимок сохранён в SearchIndex.dat.bak.",
+  "Use drop shadows for icon labels": "Тени под подписями значков",
+  "Keyboard layout": "Раскладка клавиатуры",
+  "Windows could not open the selected item.": "Windows не удалось открыть выбранный объект."
 }

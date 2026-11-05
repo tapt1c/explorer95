@@ -47,7 +47,7 @@ struct NativeView {
     HIMAGELIST desktopLargeImages, desktopScaledImages, desktopOverlayImages;
     BOOL desktopImagesDirty;
     int desktopIconSize;
-    BOOL sharedDesktopImages;
+    BOOL sharedDesktopImages, labelShadows;
     char createdPath[MAX_PATH];
     int renameAttempts;
 };
@@ -527,7 +527,8 @@ static void PaintDesktopFrame(NativeView *view, HWND window)
     dc=PaintBufferBegin(&view->desktopFrame,target,&area); saved=SaveDC(dc);
     if(saved) IntersectClipRect(dc,paint.rcPaint.left,paint.rcPaint.top,paint.rcPaint.right,paint.rcPaint.bottom);
     if(view->desktopIconSize==48) DesktopImages48(view);
-    PaintBackground(view,dc,window); PaintDesktopLabelShadows(window,dc);
+    PaintBackground(view,dc,window);
+    if (view->labelShadows) PaintDesktopLabelShadows(window,dc);
     /* Call the saved shell/control procedure rather than our WM_PAINT entry.
      * A control that forwards printing as WM_PAINT with an HDC still reaches
      * its own procedure through the nonzero-wParam path below. */
@@ -1103,6 +1104,7 @@ NativeView *NativeViewCreateEx(HWND parent, LPCITEMIDLIST absolute, BOOL desktop
             LONG style = GetWindowLongA(view->list,GWL_STYLE);
             view->sharedDesktopImages = !!(style & LVS_SHAREIMAGELISTS);
             view->desktopIconSize = 32;
+            view->labelShadows = TRUE;
             view->desktopLargeImages = ListView_GetImageList(view->list,LVSIL_NORMAL);
             SetWindowLongA(view->list,GWL_STYLE,style | WS_CLIPCHILDREN | LVS_SHAREIMAGELISTS);
             ReadWallpaper(view);
@@ -1195,7 +1197,17 @@ void NativeViewDesktopSettingsChanged(NativeView *view)
     if (!view || !view->desktop) return;
     /* Wallpaper/color changes need fresh pixels, not a Shell32 re-enumeration. */
     ReadWallpaper(view);
-    if (view->list) ListView_SetTextColor(view->list, GetSysColor(COLOR_WINDOW));
+    if (view->list) {
+        ListView_SetTextColor(view->list, GetSysColor(COLOR_WINDOW));
+        ListView_SetTextBkColor(view->list, view->labelShadows ? CLR_NONE : GetSysColor(COLOR_DESKTOP));
+    }
+    RedrawWindow(view->window, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+}
+void NativeViewSetLabelShadows(NativeView *view, BOOL enabled)
+{
+    if (!view || !view->desktop || view->labelShadows == !!enabled) return;
+    view->labelShadows = !!enabled;
+    if (view->list) ListView_SetTextBkColor(view->list, enabled ? CLR_NONE : GetSysColor(COLOR_DESKTOP));
     RedrawWindow(view->window, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
 }
 void NativeViewRefresh(NativeView *view)

@@ -90,7 +90,7 @@ typedef struct ShellOptions {
     int edge, rows, taskWidth, recentCount, quickSize;
     BOOL locked, autoHide, topmost, clock, quick, largeIcons, largeStartIcons, group, hideInactive, taskTiles, hideTaskLabels, searchBox, showDesktopButton;
     BOOL classicStart, hoverMenus, allowDrop, highlightNew, desktopIcons, autoArrange, classicShutdown, showWelcome;
-    BOOL lockDesktopIcons, snapDesktopIcons;
+    BOOL lockDesktopIcons, snapDesktopIcons, desktopLabelShadows;
     int desktopGridX, desktopGridY, desktopIconSize, language;
     UINT startMenus, traySeconds;
     UINT startItems;

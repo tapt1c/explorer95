@@ -6,6 +6,7 @@
 #include <tlhelp32.h>
 #include "tray_mirror.h"
 #include "render_trace.h"
+#include "tray_language.h"
 #define EX95_LOCALIZE_UI
 #include "localization.h"
 
@@ -26,7 +27,7 @@ typedef struct TrayIcon {
 } TrayIcon;
 
 static TrayIcon icons[ICON_LIMIT];
-static HWND tooltip, moreButton;
+static HWND tooltip, moreButton, languageButton;
 static HMODULE mirrorModule;
 static HWND mirrorShell;
 static TrayMirrorStopProc mirrorStop;
@@ -218,19 +219,19 @@ int TrayWidth(int height)
     int i, count = 0, rows = IconRows(height);
     for (i = 0; i < ICON_LIMIT; ++i) if (Visible(&icons[i])) ++count;
     if (count > 7) count = 7;
-    return ((count + rows - 1) / rows) * 20 + (env.options.clock ? 58 : 0) + (HasHidden() ? 20 : 0) + 10;
+    return ((count + rows - 1) / rows) * 20 + (env.options.clock ? 58 : 0) + (HasHidden() ? 20 : 0) + TrayLanguageWidth() + 10;
 }
 void TrayLayout(int width, int height)
 {
     int i, count = 0, rows = IconRows(height), columns, capacity, shown = 0;
     int y = (height - 20) / 2, iconY;
-    int clockWidth = env.options.clock ? 58 : 0;
+    int clockWidth = env.options.clock ? 58 : 0, languageWidth = TrayLanguageWidth();
     BOOL changed = FALSE, overflow = HasHidden();
     for (i = 0; i < ICON_LIMIT; ++i) if (Visible(&icons[i])) ++count;
-    columns = (width - clockWidth - (overflow ? 20 : 0) - 8) / 20;
+    columns = (width - clockWidth - languageWidth - (overflow ? 20 : 0) - 8) / 20;
     if (count > columns * rows) {
         overflow = TRUE;
-        columns = (width - clockWidth - 20 - 8) / 20;
+        columns = (width - clockWidth - languageWidth - 20 - 8) / 20;
     }
     if (columns < 0) columns = 0;
     capacity = columns * rows;
@@ -249,6 +250,7 @@ void TrayLayout(int width, int height)
     }
     changed |= EnvShowControl(moreButton, overflow);
     changed |= EnvMoveControl(moreButton, 4 + ((shown + rows - 1) / rows) * 20, y, 18, 20);
+    changed |= EnvMoveControl(languageButton, width - clockWidth - languageWidth - 2, y, languageWidth, 20);
     changed |= EnvShowControl(env.clock, env.options.clock); changed |= EnvMoveControl(env.clock, width - clockWidth - 2, y, clockWidth, 20);
     if (changed) InvalidateRect(env.tray, NULL, TRUE);
 }
@@ -467,7 +469,9 @@ BOOL TrayCreate(void)
         CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, env.tray, NULL, env.host.instance, NULL);
     moreButton = EnvControl(env.tray, "BUTTON", "Hidden icons", BS_OWNERDRAW, ID_TRAYMORE);
     env.clock = EnvControl(env.tray, "STATIC", "", SS_CENTER | SS_CENTERIMAGE | SS_NOTIFY, 1);
-    return env.tray && tooltip && env.clock;
+    languageButton = TrayLanguageCreate(env.tray,env.host.instance,env.host.font);
+    Tip(languageButton,UiText("Keyboard layout"));
+    return env.tray && tooltip && env.clock && languageButton;
 }
 void TrayDestroy(void)
 {

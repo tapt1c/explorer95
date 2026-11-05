@@ -493,7 +493,12 @@ static HIMAGELIST CreateGhost(DesktopIcons *icons, POINT *origin)
         label.left -= bounds.left; label.right -= bounds.left; label.top -= bounds.top; label.bottom -= bounds.top;
         if (Name(icons->list,index,text)) {
             UINT flags=PaintListLabelFlags(icons->list,index);
-            PaintTextShadow(colorDC,text,&label,flags);
+            COLORREF background = ListView_GetTextBkColor(icons->list);
+            if (background == CLR_NONE) PaintTextShadow(colorDC,text,&label,flags);
+            else {
+                HBRUSH brush = CreateSolidBrush(background);
+                FillRect(colorDC,&label,brush); DeleteObject(brush);
+            }
             DrawTextA(colorDC,text,-1,&label,flags);
         }
     }

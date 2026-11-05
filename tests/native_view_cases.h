@@ -307,6 +307,19 @@ static void NativeDesktopPaintTests(HWND parent)
       Check(NativeDesktopPixels(list,&item)==paused,"desktop buffering honors native WM_SETREDRAW holds instead of forcing PrintClient during shell updates"); }
     SendMessageA(list,WM_SETREDRAW,TRUE,0); RedrawWindow(list,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_UPDATENOW);
     Check(NativeDesktopPixels(list,&item)==pixels,"resuming native redraw reconstructs the complete desktop frame");
+    NativeViewSetLabelShadows(view,FALSE);
+    RedrawWindow(list,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_UPDATENOW);
+    Check(ListView_GetTextBkColor(list)==GetSysColor(COLOR_DESKTOP) && NativeDesktopPixels(list,&item)!=pixels,
+        "disabling shadows restores native opaque Win95 captions");
+    { DWORD plain=NativeDesktopPixels(list,&item);
+      dc=GetDC(list); SendMessageA(list,WM_ERASEBKGND,(WPARAM)dc,0); ReleaseDC(list,dc);
+      Check(NativeDesktopPixels(list,&item)==plain,"classic labels retain the completed frame through standalone erase");
+      NativeViewDesktopSettingsChanged(view);
+      Check(ListView_GetTextBkColor(list)==GetSysColor(COLOR_DESKTOP),"system colors preserve classic label mode"); }
+    NativeViewSetLabelShadows(view,TRUE);
+    RedrawWindow(list,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_UPDATENOW);
+    Check(ListView_GetTextBkColor(list)==CLR_NONE && NativeDesktopPixels(list,&item)==pixels,
+        "restoring shadows reproduces the original transparent desktop frame");
     SaveScreen("build/desktop-native-frame.bmp");
     nativeDesktopList=list; nativeDesktopItem=item; nativeDesktopFrame=pixels;
     nativeDeletePaint=TRUE; nativeDeleteFrameRetained=FALSE;

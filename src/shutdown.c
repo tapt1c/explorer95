@@ -82,7 +82,9 @@ static void SleepChoice(void)
         shiftMode = shift; SetWindowTextA(button, shift ? "Hibernate" : "Stand By");
         InvalidateRect(choice, NULL, FALSE);
     }
-    EnableWindow(button, shift ? hibernating : sleeping);
+    BOOL dos = SendDlgItemMessageA(choice, ID_DOS, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    EnableWindow(button, !dos && (shift ? hibernating : sleeping));
+    EnableWindow(GetDlgItem(choice, ID_OFF), !dos);
 }
 static BOOL CaptureScreen(void)
 {
@@ -208,6 +210,7 @@ static void PowerAction(int id)
 {
     DWORD error = ERROR_SUCCESS; BOOL okay;
     BOOL hibernate = shiftMode;
+    if (id != ID_RESTART && SendDlgItemMessageA(choice, ID_DOS, BM_GETCHECK, 0, 0) == BST_CHECKED) return;
     if (!Windows95()) {
         MessageBoxA(choice, "Power actions are supported only on Windows 95.\r\nNo system power action was performed.", "Explorer95", MB_OK | MB_ICONINFORMATION); return;
     }
@@ -313,6 +316,7 @@ static LRESULT CALLBACK ChoiceProc(HWND window, UINT message, WPARAM wp, LPARAM 
         break;
     case WM_COMMAND:
         if (LOWORD(wp) == IDCANCEL) ShutdownClose();
+        else if (!logoffMode && LOWORD(wp) == ID_DOS) SleepChoice();
         else if (logoffMode && LOWORD(wp) == ID_LOGOFF) LogoffAction();
         else if (!logoffMode && LOWORD(wp) >= ID_SLEEP && LOWORD(wp) <= ID_RESTART) PowerAction(LOWORD(wp));
         return 0;
