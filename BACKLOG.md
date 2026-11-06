@@ -68,8 +68,27 @@ x86/PE (341 импорт без CRT) и живые OLE/F5/Delete/Корзина/
 paint: READY» и переносит новую копию в прежний TEMP\EX95D12.EXE. EXE внутри
 ISO сверен побайтно с локальной сборкой; копия и SHA256 сохранены в
 build/desktop-video12/explorer95-nested.exe и nested-sha256.txt.
-Ожидается проверка только с включёнными значками на Win95. Скрытый фон и
-исправленные скачки значков пользователь уже подтвердил; повтор не запрашивался.
+Пользователь проверил nested-сборку на Win95: с видимыми значками следы остались.
+Скрытый фон и исправленные скачки значков подтверждены. Воспроизведённая nested
+ошибка исправлена отдельно, но не объяснила весь исходный дефект.
+
+Следующая диагностика — desktop12-print.iso, UPDATE12.EXE показывает «Explorer95
+print probe: READY». Обычный build/explorer95.exe не менялся. PAINTDBG.EXE
+собирается отдельным printprobe32.o с forced-include printprobe.h; эти файлы
+лежат только в игнорируемом build/desktop-video12/. При первом переносе Tasks
+сохраняет в TEMP: EX95P0.BMP до Shell32, EX95P1.BMP после старой оконной
+процедуры, EX95P2.BMP через class procedure/WM_PRINTCLIENT, EX95P3.BMP через
+class procedure/WM_PAINT с DC, EX95P.LOG с clip/rect и same-procedure.
+Это диагностическая сборка, не кандидат для публикации: она пишет BMP и
+дополнительно вызывает системную отрисовку в частную поверхность один раз.
+Диагностика проверена на Wine с собственным движущимся окном: все четыре BMP
+созданы (640×480, 24bpp), правильные foreground/background осмотрены;
+там same-procedure=1. Отдельный x86 PAINTDBG прошёл обычную PE-проверку
+с теми же 341 разрешённым импортом, без правки allowlist. EXE в ISO сверен
+побайтно; diagnostic SHA256 97be8d82e3e1d7ea3422a4ea1f63144895a0538dbf8a1595039b30c8d76b377d.
+Ожидаются EX95P*.BMP/EX95P.LOG из Win95, чтобы проверить сам offscreen-print,
+а не предлагать следующий непроверенный обход. Raw class proc вызывается
+только через CallWindowProc для собственного ListView, PIDL не читаются.
 Логи: build/desktop-video12/.
 
 ## Выпуск 1.2.0
