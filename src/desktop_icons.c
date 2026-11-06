@@ -26,7 +26,7 @@ struct DesktopIcons {
     HIMAGELIST sourceImages;
     BOOL ghostEntered, ghostActive, fileDragging, fileDropped;
     POINT ghostOrigin, filePoint;
-    BOOL refreshing, redrawPaused, nativeRedrawPaused, changingRedraw;
+    BOOL refreshing, redrawPaused, nativeRedrawPaused, changingRedraw, shellRedrawPaused, shellRedrawVisible;
 };
 static void EndDrag(DesktopIcons *icons, BOOL commit);
 static void MoveDrag(DesktopIcons *icons, POINT point);
@@ -265,7 +265,8 @@ BOOL DesktopIconsBeginRefresh(DesktopIcons *icons)
      * this in memory even when the profile is read-only; F5 needs no disk I/O. */
     if (icons->ready && !icons->pending) Capture(icons);
     icons->refreshing = TRUE; icons->pending = TRUE;
-    if (!icons->redrawPaused && (GetWindowLongA(icons->list,GWL_STYLE) & WS_VISIBLE)) {
+    if (!icons->redrawPaused && ((GetWindowLongA(icons->list,GWL_STYLE) & WS_VISIBLE) ||
+        (icons->shellRedrawPaused && icons->shellRedrawVisible))) {
         icons->redrawPaused = TRUE; icons->nativeRedrawPaused = TRUE; icons->changingRedraw = TRUE;
         SendMessageA(icons->list,WM_SETREDRAW,FALSE,0);
         icons->changingRedraw = FALSE;
@@ -666,8 +667,21 @@ BOOL DesktopIconsMessage(DesktopIcons *icons, UINT message, WPARAM wp, LPARAM lp
     if (!icons) return FALSE;
     if (message == WM_TIMER && wp == RESTORE_TIMER) {
         KillTimer(icons->list,RESTORE_TIMER);
-        if (!icons->refreshing && !icons->fileDragging) Restore(icons);
+        if (!icons->refreshing && !icons->fileDragging && !icons->shellRedrawPaused) Restore(icons);
         return TRUE;
+    }
+    /* Association notifications refresh DefView without going through F5.
+     * Snapshot before its first mutation and keep enumeration offscreen until
+     * positions are restored. A native redraw hold can outlive our timer. */
+    if(message==WM_SETREDRAW && !icons->changingRedraw) {
+        if(!wp && !icons->shellRedrawPaused)
+            icons->shellRedrawVisible=!!(GetWindowLongA(icons->list,GWL_STYLE)&WS_VISIBLE);
+        icons->shellRedrawPaused=!wp;
+        if(wp && icons->redrawPaused) DesktopIconsChanged(icons);
+    }
+    if(!icons->restoring && (message==LVM_DELETEALLITEMS || message==LVM_DELETEITEM || message==LVM_INSERTITEMA ||
+       message==LVM_INSERTITEMW || message==LVM_SORTITEMS)) {
+        if(DesktopIconsBeginRefresh(icons)) DesktopIconsEndRefresh(icons);
     }
     /* Shell32 may enable redraw before its asynchronous enumeration settles.
      * Only the layout controller can expose the final restored positions. */

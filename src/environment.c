@@ -1011,7 +1011,9 @@ static LRESULT CALLBACK DesktopProc(HWND window, UINT message, WPARAM wp, LPARAM
     if (message == WM_PAINT) {
         PAINTSTRUCT paint; HDC dc = BeginPaint(window, &paint); NativeViewPaintDesktop(env.desktopView, dc, window); EndPaint(window, &paint); return 0;
     }
-    if (message == WM_ERASEBKGND) return TRUE;
+    if (message == WM_ERASEBKGND) {
+        NativeViewPaintDesktop(env.desktopView,(HDC)wp,window); return TRUE;
+    }
     if (message == WM_ACTIVATE) {
         LRESULT result = DefWindowProcA(window, message, wp, lp);
         /* Native view activation can finish after the pre-position guard.

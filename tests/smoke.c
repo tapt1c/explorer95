@@ -631,9 +631,29 @@ static void DesktopRefreshTests(HWND desktop)
     Check(found && IsWindowVisible(list) && !(GetWindowLongA(list,GWL_STYLE) & LVS_AUTOARRANGE),
           "actual repeated F5 retains a manually moved namespace icon and resumes the native desktop");
 }
+static void DesktopHiddenExposureTest(HWND desktop,HWND browser)
+{
+    HWND view=FindWindowExA(desktop,NULL,NULL,NULL); BOOL visible=IsWindowVisible(view);
+    RECT previous,area,patch; HDC dc; HBRUSH ink; COLORREF before,after;
+    GetWindowRect(browser,&previous); MoveWindow(browser,0,0,280,170,TRUE);
+    ShowWindow(view,SW_HIDE); PumpFor(60);
+    RedrawWindow(desktop,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_UPDATENOW);
+    GetClientRect(desktop,&area); SetRect(&patch,area.right-24,area.bottom-24,area.right-12,area.bottom-12);
+    dc=GetDC(desktop); before=GetPixel(dc,patch.left+2,patch.top+2);
+    Check(before!=CLR_INVALID,"hidden desktop exposure fixture has accessible background pixels");
+    ink=CreateSolidBrush(RGB(249,5,233)); FillRect(dc,&patch,ink); DeleteObject(ink);
+    InvalidateRect(desktop,&patch,TRUE); SendMessageA(desktop,WM_ERASEBKGND,(WPARAM)dc,0);
+    after=GetPixel(dc,patch.left+2,patch.top+2); ReleaseDC(desktop,dc);
+    Check(after==before && GetUpdateRect(desktop,NULL,FALSE),
+        "hidden-icon desktop erases exposed window trails immediately without waiting for or consuming WM_PAINT");
+    if(visible) ShowWindow(view,SW_SHOWNA);
+    MoveWindow(browser,previous.left,previous.top,previous.right-previous.left,previous.bottom-previous.top,TRUE);
+    PumpFor(60);
+}
 static void DesktopStackTests(HWND bar, HWND desktop, HWND browser)
 {
     HWND menu; DWORD started;
+    DesktopHiddenExposureTest(desktop,browser);
     SetForegroundWindow(browser);
     /* Activation handlers alone do not protect the desktop against a raise
      * without activation. Exercise the actual USER z-order operation. */

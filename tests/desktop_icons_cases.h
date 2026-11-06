@@ -277,6 +277,24 @@ static void DesktopIconTests(const char *directory)
             "repeated F5 preserves the complete layout and manual mode through partial enumeration");
         Check(IsWindowVisible(list) && GetPixel(dc,450,300) != color && testDesktopPaints > paints,
             "refresh resumes native painting only after the saved positions are restored"); ReleaseDC(list,dc);
+        saved=DesktopPoint(list,0); paints=testDesktopPaints;
+        SendMessageA(list,WM_SETREDRAW,FALSE,0);
+        ListView_DeleteAllItems(list); DesktopItem(list,0,"Two",30,20); DesktopItem(list,1,"One",30,100);
+        RedrawWindow(list,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_UPDATENOW); DesktopPump();
+        Check(testDesktopPaints==paints,"an external Shell32 redraw hold stays active across the restoration timer");
+        SendMessageA(list,WM_SETREDRAW,TRUE,0);
+        RedrawWindow(list,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_UPDATENOW);
+        Check(testDesktopPaints==paints,"external association refresh cannot expose re-enumerated icon positions before restoration");
+        DesktopPump(); a=DesktopPoint(list,1);
+        Check(a.x==saved.x && a.y==saved.y && testDesktopPaints>paints && IsWindowVisible(list),
+            "external Shell32 enumeration restores positions by name before releasing redraw without requiring F5");
+        paints=testDesktopPaints;
+        ListView_DeleteAllItems(list); DesktopItem(list,0,"One",30,20); DesktopItem(list,1,"Two",30,100);
+        RedrawWindow(list,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_UPDATENOW);
+        Check(testDesktopPaints==paints,"shell enumeration without WM_SETREDRAW also hides intermediate placements");
+        DesktopPump(); a=DesktopPoint(list,0);
+        Check(a.x==saved.x && a.y==saved.y && testDesktopPaints>paints,
+            "unannounced shell enumeration preserves the same named icon's saved position");
         ShowWindow(list,SW_HIDE); DesktopIconsBeginRefresh(testDesktopIcons); DesktopIconsEndRefresh(testDesktopIcons); DesktopPump();
         Check(!(GetWindowLongA(list,GWL_STYLE) & WS_VISIBLE),"refresh does not show a previously hidden icon list");
         ShowWindow(list,SW_SHOW);

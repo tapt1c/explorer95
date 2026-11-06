@@ -40,7 +40,7 @@ struct NativeView {
     HBITMAP wallpaper;
     BOOL tiled, backgroundDirty, sized;
     PaintBuffer background, desktopFrame;
-    BOOL paintingDesktop, desktopRedrawDisabled, desktopFramePending;
+    BOOL paintingDesktop, desktopRedrawDisabled, desktopFramePending, desktopFrameValid;
     BOOL desktopRefreshing, desktopRefreshPending, desktopRefreshPosted;
     int desktopMutationDepth, desktopCallDepth;
     DesktopIcons *icons;
@@ -521,7 +521,7 @@ static void PaintBackground(NativeView *view, HDC target, HWND window)
  * is the original Win95 control painting contract, also used by layout restore. */
 static void PaintDesktopFrame(NativeView *view, HWND window)
 {
-    PAINTSTRUCT paint; RECT area; HDC target,dc; int saved;
+    PAINTSTRUCT paint; RECT area; HDC target,dc; int saved; BOOL complete;
     /* Internal/reentrant WM_PAINT can have no damaged pixels. Forcing a print
      * in that case calls shell callbacks again and can perpetually invalidate
      * the desktop. Do not enter BeginPaint recursively while a frame is live. */
@@ -538,8 +538,12 @@ static void PaintDesktopFrame(NativeView *view, HWND window)
     view->paintingDesktop=TRUE; target=BeginPaint(window,&paint);
     if(!target) { EndPaint(window,&paint); view->paintingDesktop=FALSE; ResumeDesktop(view); return; }
     GetClientRect(window,&area);
+    complete=view->desktopFrameValid && view->desktopFrame.width==area.right && view->desktopFrame.height==area.bottom;
+    view->desktopFrameValid=FALSE;
     dc=PaintBufferBegin(&view->desktopFrame,target,&area); saved=SaveDC(dc);
-    if(saved) IntersectClipRect(dc,paint.rcPaint.left,paint.rcPaint.top,paint.rcPaint.right,paint.rcPaint.bottom);
+    /* A retained surface must be complete even when its first update is small.
+     * Later erase-only exposure can need pixels outside this paint rectangle. */
+    if(saved && (complete || dc==target)) IntersectClipRect(dc,paint.rcPaint.left,paint.rcPaint.top,paint.rcPaint.right,paint.rcPaint.bottom);
     if(view->desktopIconSize==48) DesktopImages48(view);
     PaintBackground(view,dc,window);
     if (view->labelShadows) PaintDesktopLabelShadows(window,dc);
@@ -550,6 +554,7 @@ static void PaintDesktopFrame(NativeView *view, HWND window)
     PaintDesktopOverlays(view,dc);
     if(saved) RestoreDC(dc,saved);
     if(dc!=target) PaintBufferEnd(&view->desktopFrame,target,&paint.rcPaint);
+    view->desktopFrameValid=dc!=target;
     EndPaint(window,&paint); view->paintingDesktop=FALSE;
     ResumeDesktop(view);
 }
@@ -847,9 +852,15 @@ static LRESULT CALLBACK Subclass(HWND window, UINT message, WPARAM wp, LPARAM lp
         if (message == LVM_INSERTITEMA || message == LVM_INSERTITEMW || message == LVM_DELETEITEM ||
             message == LVM_DELETEALLITEMS || message == LVM_SETITEMTEXTA || message == LVM_SETITEMTEXTW || message == WM_SIZE)
             { view->fileHover=-1; DesktopIconsChanged(view->icons); }
-        /* A separate erase must never expose wallpaper plus black shadows
-         * while the native foreground is still waiting for WM_PAINT. */
-        if (message == WM_ERASEBKGND) return TRUE;
+        /* Win95 full-window dragging can erase exposed pixels before sending
+         * WM_PAINT. Restore the last complete frame, never call Shell32 here. */
+        if (message == WM_ERASEBKGND) {
+            RECT area; GetClientRect(window,&area);
+            if(wp && !view->paintingDesktop && !view->desktopRedrawDisabled && view->desktopFrameValid &&
+               view->desktopFrame.width==area.right && view->desktopFrame.height==area.bottom)
+                PaintBufferEnd(&view->desktopFrame,(HDC)wp,&area);
+            return TRUE;
+        }
         if (message == WM_PAINT && !wp) { PaintDesktopFrame(view,window); return 0; }
         if (message == WM_CONTEXTMENU) {
             POINT point;

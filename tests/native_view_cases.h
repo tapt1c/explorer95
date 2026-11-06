@@ -390,6 +390,12 @@ static void NativeDesktopPaintTests(HWND parent)
       ReleaseDC(list,image);
       Check(foreground>5 && shadow>5,"buffered native desktop paints both foreground text and its shadow, not just the background"); }
     pixels=NativeDesktopPixels(list,&item);
+    { RECT marker={item.left+8,item.top+8,item.left+16,item.top+16}; HBRUSH ink=CreateSolidBrush(RGB(249,5,233));
+      dc=GetDC(list); FillRect(dc,&marker,ink); ReleaseDC(list,dc); DeleteObject(ink);
+      InvalidateRect(list,&item,TRUE);
+      dc=GetDC(list); SendMessageA(list,WM_ERASEBKGND,(WPARAM)dc,0); ReleaseDC(list,dc);
+      Check(NativeDesktopPixels(list,&item)==pixels && GetUpdateRect(list,NULL,FALSE),
+          "exposure erase restores the completed desktop frame without waiting for WM_PAINT or consuming its update region"); }
     dc=GetDC(list); SendMessageA(list,WM_ERASEBKGND,(WPARAM)dc,0); ReleaseDC(list,dc);
     /* Inspect immediately, before WM_PAINT: the video shows an intermediate
      * frame containing only the shadow while all native icons are erased. */
