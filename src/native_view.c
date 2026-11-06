@@ -515,23 +515,40 @@ static void PaintBackground(NativeView *view, HDC target, HWND window)
     PaintBufferEnd(&view->background, target, &rect);
 }
 
+/* Repair exposure without querying items owned by an active shell callback. */
+static void PaintRetainedDesktop(NativeView *view,HWND window,HDC target,const RECT *damage)
+{
+    RECT area; GetClientRect(window,&area);
+    if(target && !view->paintingDesktop && !view->desktopRedrawDisabled && view->desktopFrameValid &&
+       view->desktopFrame.width==area.right && view->desktopFrame.height==area.bottom)
+        PaintBufferEnd(&view->desktopFrame,target,damage ? damage : &area);
+}
 /* Win95's native view can erase during sizing without painting its icons yet.
  * Keep the last complete screen image until background, shadows and native
  * foreground have all been painted into one retained surface. WM_PRINTCLIENT
  * is the original Win95 control painting contract, also used by layout restore. */
 static void PaintDesktopFrame(NativeView *view, HWND window)
 {
-    PAINTSTRUCT paint; RECT area; HDC target,dc; int saved; BOOL complete;
+    PAINTSTRUCT paint; RECT area,damage; HDC target,dc; int saved; BOOL complete;
     /* Internal/reentrant WM_PAINT can have no damaged pixels. Forcing a print
      * in that case calls shell callbacks again and can perpetually invalidate
      * the desktop. Do not enter BeginPaint recursively while a frame is live. */
-    if(!GetUpdateRect(window,NULL,FALSE)) { ValidateRect(window,NULL); return; }
+    if(!GetUpdateRect(window,&damage,FALSE)) { ValidateRect(window,NULL); return; }
     /* Shell callbacks can pump messages after releasing an item's PIDL but
      * before Common Controls removes the item. Preserve the completed frame
      * until the native mutation/callback has returned. The stable source OLE
      * loop can paint drop feedback without allowing a refresh. */
     if(DesktopPaintBusy(view) || view->desktopRedrawDisabled) {
-        view->desktopFramePending=TRUE; ValidateRect(window,NULL); return;
+        /* A shell callback can expose screen pixels while native items are
+         * unsafe to query. Repair those pixels from the finished frame before
+         * validating; rebuild the scene only after the outer call returns.
+         * No nested BeginPaint or native callback is needed for this copy. */
+        view->desktopFramePending=TRUE;
+        if(!view->paintingDesktop && !view->desktopRedrawDisabled) {
+            target=GetDC(window);
+            if(target) { PaintRetainedDesktop(view,window,target,&damage); ReleaseDC(window,target); }
+        }
+        ValidateRect(window,NULL); return;
     }
     view->desktopFramePending=FALSE;
     /* BeginPaint/EndPaint can themselves send synchronous window messages. */
@@ -855,10 +872,7 @@ static LRESULT CALLBACK Subclass(HWND window, UINT message, WPARAM wp, LPARAM lp
         /* Win95 full-window dragging can erase exposed pixels before sending
          * WM_PAINT. Restore the last complete frame, never call Shell32 here. */
         if (message == WM_ERASEBKGND) {
-            RECT area; GetClientRect(window,&area);
-            if(wp && !view->paintingDesktop && !view->desktopRedrawDisabled && view->desktopFrameValid &&
-               view->desktopFrame.width==area.right && view->desktopFrame.height==area.bottom)
-                PaintBufferEnd(&view->desktopFrame,(HDC)wp,&area);
+            PaintRetainedDesktop(view,window,(HDC)wp,NULL);
             return TRUE;
         }
         if (message == WM_PAINT && !wp) { PaintDesktopFrame(view,window); return 0; }

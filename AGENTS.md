@@ -949,8 +949,15 @@ explorer95.exe --settings="C:\EX95TEST\Explorer95.ini"
   Прямой путь при нехватке буфера сохраняется; память кадра освобождается при
   уничтожении view. WM_PAINT с переданным HDC не запускает новый BeginPaint.
   Перед печатью проверяйте GetUpdateRect: пустой/internal WM_PAINT не должен
-  повторно обходить Shell32. Вложенный/удержанный paint валидируется через
-  ValidateRect без рекурсивного BeginPaint. Оба API входят в USER32 Win95;
+  повторно обходить Shell32. Вложенный/удержанный paint перед ValidateRect
+  восстанавливает повреждённый прямоугольник через PaintRetainedDesktop и GetDC:
+  только готовый кадр, без обхода элементов, native callbacks и BeginPaint.
+  Активная запись в буфер/native redraw hold запрещают и эту копию.
+  После возврата внешнего вызова строится новый кадр. Не ограничивайтесь одним
+  ValidateRect: поверх готового экрана могут оставаться чужие пиксели окна.
+  NativeDesktopPaintTests воспроизводит такой paint из LVN_GETDISPINFO и
+  проверяет возврат пикселей и отсутствие повторного callback.
+  Оба API GetUpdateRect/ValidateRect входят в USER32 Win95;
   их явное разрешение в PE-проверке не меняет минимальную версию системы.
   Не вызывайте штатное рисование во время WM_SETREDRAW(FALSE), изменения
   элементов/сортировки/геометрии native ListView или внутри native callbacks.

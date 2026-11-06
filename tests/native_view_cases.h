@@ -263,6 +263,7 @@ static void NativeShellCommandTests(HWND parent)
 static WNDPROC nativeDesktopOriginal;
 static int nativeBackgroundClicks;
 static BOOL nativeDeletePaint, nativeDeleteFrameRetained;
+static BOOL nativeExposePaint, nativeExposeActive, nativeExposeRestored, nativeExposeReentered;
 static HWND nativeDesktopList;
 static RECT nativeDesktopItem;
 static DWORD nativeDesktopFrame;
@@ -306,6 +307,18 @@ static DWORD NativeDesktopPixels(HWND list, const RECT *area)
 static LRESULT CALLBACK NativeDesktopObserver(HWND window, UINT message, WPARAM wp, LPARAM lp)
 {
     LRESULT result;
+    if(message==WM_NOTIFY && (((NMHDR *)lp)->code==LVN_GETDISPINFOA || ((NMHDR *)lp)->code==LVN_GETDISPINFOW)) {
+        if(nativeExposeActive) nativeExposeReentered=TRUE;
+        if(nativeExposePaint) {
+            HDC dc; HBRUSH ink=CreateSolidBrush(RGB(249,5,233));
+            RECT marker={nativeDesktopItem.left+8,nativeDesktopItem.top+8,nativeDesktopItem.left+16,nativeDesktopItem.top+16};
+            nativeExposePaint=FALSE; nativeExposeActive=TRUE;
+            dc=GetDC(nativeDesktopList); FillRect(dc,&marker,ink); ReleaseDC(nativeDesktopList,dc); DeleteObject(ink);
+            InvalidateRect(nativeDesktopList,&nativeDesktopItem,FALSE); SendMessageA(nativeDesktopList,WM_PAINT,0,0);
+            nativeExposeRestored=NativeDesktopPixels(nativeDesktopList,&nativeDesktopItem)==nativeDesktopFrame;
+            nativeExposeActive=FALSE;
+        }
+    }
     if(message==WM_NOTIFY && ((NMHDR *)lp)->code==NM_DBLCLK) ++nativeBackgroundClicks;
     if(nativeDisplayRefresh && message==WM_NOTIFY &&
        (((NMHDR *)lp)->code==LVN_GETDISPINFOA || ((NMHDR *)lp)->code==LVN_GETDISPINFOW)) {
@@ -402,6 +415,12 @@ static void NativeDesktopPaintTests(HWND parent)
     Check(NativeDesktopPixels(list,&item)==pixels,"standalone desktop erase preserves the finished icon, text and shadow until the next complete paint");
     RedrawWindow(list,&item,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_UPDATENOW);
     Check(NativeDesktopPixels(list,&item)==pixels,"partial desktop repaint reconstructs the same icon, native text and shadow");
+    { char text[MAX_PATH];
+      nativeDesktopList=list; nativeDesktopItem=item; nativeDesktopFrame=pixels;
+      nativeExposePaint=TRUE; nativeExposeActive=nativeExposeRestored=nativeExposeReentered=FALSE;
+      ListView_GetItemText(list,0,0,text,sizeof(text));
+      Check(text[0] && !nativeExposePaint && nativeExposeRestored && !nativeExposeReentered,
+          "nested shell exposure restores the completed frame without querying live native item callbacks"); }
     { int height; BOOL retained=TRUE,complete=TRUE;
       for(height=140;height<=200;height+=60) {
           area.bottom=height; NativeViewResize(view,&area);
