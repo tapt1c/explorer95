@@ -519,7 +519,7 @@ static void PaintBackground(NativeView *view, HDC target, HWND window)
 static void PaintRetainedDesktop(NativeView *view,HWND window,HDC target,const RECT *damage)
 {
     RECT area; GetClientRect(window,&area);
-    if(target && !view->paintingDesktop && !view->desktopRedrawDisabled && view->desktopFrameValid &&
+    if(target && !view->desktopRedrawDisabled && view->desktopFrameValid &&
        view->desktopFrame.width==area.right && view->desktopFrame.height==area.bottom)
         PaintBufferEnd(&view->desktopFrame,target,damage ? damage : &area);
 }
@@ -544,7 +544,7 @@ static void PaintDesktopFrame(NativeView *view, HWND window)
          * validating; rebuild the scene only after the outer call returns.
          * No nested BeginPaint or native callback is needed for this copy. */
         view->desktopFramePending=TRUE;
-        if(!view->paintingDesktop && !view->desktopRedrawDisabled) {
+        if(!view->desktopRedrawDisabled && view->desktopFrameValid) {
             target=GetDC(window);
             if(target) { PaintRetainedDesktop(view,window,target,&damage); ReleaseDC(window,target); }
         }
@@ -554,6 +554,11 @@ static void PaintDesktopFrame(NativeView *view, HWND window)
     /* BeginPaint/EndPaint can themselves send synchronous window messages. */
     view->paintingDesktop=TRUE; target=BeginPaint(window,&paint);
     if(!target) { EndPaint(window,&paint); view->paintingDesktop=FALSE; ResumeDesktop(view); return; }
+    /* Exposure can arrive without erase. Present the finished frame before
+     * querying native items to compose its replacement. BeginPaint's own
+     * synchronous erase may use this frame too; validity, not the broader
+     * reentrancy guard, excludes copies while the buffer is being written. */
+    PaintRetainedDesktop(view,window,target,&paint.rcPaint);
     GetClientRect(window,&area);
     complete=view->desktopFrameValid && view->desktopFrame.width==area.right && view->desktopFrame.height==area.bottom;
     view->desktopFrameValid=FALSE;

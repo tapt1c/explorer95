@@ -270,6 +270,8 @@ static DWORD nativeDesktopFrame;
 static WNDPROC nativeRefreshOriginal;
 static NativeView *nativeRefreshView;
 static BOOL nativeRefreshTrigger, nativeRefreshCallback, nativeRefreshReentered;
+static BOOL nativeEarlyPaintCheck, nativeEarlyPaintRestored;
+static BOOL nativeEarlyEraseCheck, nativeEarlyEraseRestored, nativeComposingFrameHeld;
 static int nativeRefreshClears;
 static BOOL nativeDisplayRefresh;
 /* Reproduce the installed view's data-only rename update with an unspecified
@@ -336,6 +338,25 @@ static LRESULT CALLBACK NativeDesktopObserver(HWND window, UINT message, WPARAM 
 }
 static LRESULT CALLBACK NativeRefreshObserver(HWND window, UINT message, WPARAM wp, LPARAM lp)
 {
+    if(message==WM_GETFONT && nativeEarlyPaintCheck) {
+        HDC dc; DWORD marked; HBRUSH ink=CreateSolidBrush(RGB(249,5,233));
+        RECT marker={nativeDesktopItem.left+8,nativeDesktopItem.top+8,nativeDesktopItem.left+16,nativeDesktopItem.top+16};
+        nativeEarlyPaintCheck=FALSE;
+        nativeEarlyPaintRestored=NativeDesktopPixels(window,&nativeDesktopItem)==nativeDesktopFrame;
+        /* The memory frame now contains only its background. Nested erase or
+         * paint must not publish that unfinished image over the screen. */
+        dc=GetDC(window); FillRect(dc,&marker,ink); ReleaseDC(window,dc); DeleteObject(ink);
+        marked=NativeDesktopPixels(window,&nativeDesktopItem);
+        dc=GetDC(window); SendMessageA(window,WM_ERASEBKGND,(WPARAM)dc,0); ReleaseDC(window,dc);
+        InvalidateRect(window,&nativeDesktopItem,FALSE); SendMessageA(window,WM_PAINT,0,0);
+        nativeComposingFrameHeld=NativeDesktopPixels(window,&nativeDesktopItem)==marked;
+    }
+    if(message==WM_ERASEBKGND && nativeEarlyEraseCheck) {
+        LRESULT result; nativeEarlyEraseCheck=FALSE;
+        result=CallWindowProcA(nativeRefreshOriginal,window,message,wp,lp);
+        nativeEarlyEraseRestored=NativeDesktopPixels(window,&nativeDesktopItem)==nativeDesktopFrame;
+        return result;
+    }
     if(message==LVM_DELETEALLITEMS) {
         ++nativeRefreshClears;
         if(nativeRefreshCallback) nativeRefreshReentered=TRUE;
@@ -415,6 +436,23 @@ static void NativeDesktopPaintTests(HWND parent)
     Check(NativeDesktopPixels(list,&item)==pixels,"standalone desktop erase preserves the finished icon, text and shadow until the next complete paint");
     RedrawWindow(list,&item,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_UPDATENOW);
     Check(NativeDesktopPixels(list,&item)==pixels,"partial desktop repaint reconstructs the same icon, native text and shadow");
+    { int erase; BOOL restored=TRUE;
+      nativeDesktopItem=item; nativeDesktopFrame=pixels;
+      nativeRefreshOriginal=(WNDPROC)SetWindowLongPtrA(list,GWLP_WNDPROC,(LONG_PTR)NativeRefreshObserver);
+      for(erase=0;erase<=1;++erase) {
+          RECT marker={item.left+8,item.top+8,item.left+16,item.top+16};
+          HBRUSH ink=CreateSolidBrush(RGB(249,5,233));
+          dc=GetDC(list); FillRect(dc,&marker,ink); ReleaseDC(list,dc); DeleteObject(ink);
+          Check(NativeDesktopPixels(list,&item)!=pixels,"simulate newly exposed foreign pixels before desktop paint");
+          nativeEarlyPaintCheck=TRUE; nativeEarlyPaintRestored=FALSE;
+          nativeEarlyEraseCheck=erase; nativeEarlyEraseRestored=nativeComposingFrameHeld=FALSE;
+          InvalidateRect(list,&item,erase); UpdateWindow(list);
+          restored &= !nativeEarlyPaintCheck && nativeEarlyPaintRestored && NativeDesktopPixels(list,&item)==pixels;
+          Check(nativeComposingFrameHeld,"nested erase and paint never copy a desktop buffer while its replacement is being composed");
+          if(erase) Check(!nativeEarlyEraseCheck && nativeEarlyEraseRestored,"BeginPaint synchronous erase can still present the last finished desktop frame");
+      }
+      SetWindowLongPtrA(list,GWLP_WNDPROC,(LONG_PTR)nativeRefreshOriginal);
+      Check(restored,"desktop exposure presents the finished frame before native shadow and icon queries, with or without erase"); }
     { char text[MAX_PATH];
       nativeDesktopList=list; nativeDesktopItem=item; nativeDesktopFrame=pixels;
       nativeExposePaint=TRUE; nativeExposeActive=nativeExposeRestored=nativeExposeReentered=FALSE;
