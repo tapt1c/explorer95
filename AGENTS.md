@@ -511,6 +511,16 @@ Wine хранит Unix-корзину через XDG_DATA_HOME вне prefix п�
   Без BMP-обоев PaintBackground использует PaintBackgroundDirect и штатный FillRect:
   однотонному фону не нужен отдельный полноэкранный bitmap/BitBlt. Завершённый
   desktopFrame со значками и защиту вложенного рисования это не отменяет.
+  BMP-кэш desktop привязан к client rect view->parent, а не к очередному HWND
+  стирания/печати. Desktop и меньший ListView (640×480/640×452 в Win95) должны
+  брать участки одной поверхности. BackgroundCanvas переводит начало целевого
+  окна в координаты родителя; direct fallback сохраняет тот же центр/фазу мозаики.
+  Не добавляйте по полноэкранному bitmap на каждый HWND и не используйте scratch
+  API для этого retained-кэша. Реальный resize родителя и смена обоев обновляют его.
+  NativeWallpaperTests проверяет center/tile, смещения, разные размеры и выход
+  дочернего target за canvas. В одноразовом Wine prefix/тестовой ВМ fixture
+  сохраняет точные типы/байты Wallpaper и TileWallpaper, восстанавливает их
+  также через Check при ошибке; SPI/глобальное уведомление обоев не вызываются.
 - Не рассылайте SPI_SETWORKAREA/ABM_SETPOS при неизменившейся рабочей области:
   Win95 Shell32 может перестроить все открытые системные папки. Видимость значков
   рабочего стола не требует полного EnvApplyOptions. WM_SETTINGCHANGE для

@@ -20,6 +20,7 @@ static HWND child;
 static char programsShortcut[MAX_PATH];
 static char startupShortcut[MAX_PATH];
 static void PumpFor(DWORD duration);
+static BOOL NativeWallpaperRestore(void);
 static HWND WaitFor(const char *kind,const char *title);
 static void NativeSelectItem(HWND list, int index);
 static int NativeItemIndex(HWND list, const char *name);
@@ -137,6 +138,7 @@ static void Check(BOOL okay, const char *description)
             if (WaitForSingleObject(process.hProcess, 3000) != WAIT_OBJECT_0) TerminateProcess(process.hProcess, 1);
         }
         if(startupShortcut[0]) DeleteFileA(startupShortcut);
+        if(!NativeWallpaperRestore()) Log("FAIL: restore wallpaper fixture registry values\r\n");
         RestoreTestAppearance(); ExitProcess(1);
     }
 }

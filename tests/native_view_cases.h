@@ -881,6 +881,7 @@ static void NativeSelectionTests(HWND parent)
           "Control Panel recovers the selected object's real PIDL and attributes by public enumeration without a transfer request"); }
     shell->lpVtbl=original; IShellView_Release(shell); NativeViewDestroy(view);
 }
+#include "native_wallpaper_cases.h"
 static void NativeViewMessageTests(void)
 {
     HRESULT ole = OleInitialize(NULL); HWND parent, list; NativeView *view; RECT rect = {0, 0, 320, 200};
@@ -920,6 +921,6 @@ static void NativeViewMessageTests(void)
     Check(nativePositionCalls == 1, "unchanged native geometry does not move or invalidate the view again");
     SetWindowLongPtrA(NativeViewWindow(view), GWLP_WNDPROC, (LONG_PTR)nativePositionOriginal);
     NativeViewSetNavigator(view, NULL); NativeViewDestroy(view);
-    NativeDesktopPaintTests(parent); DestroyWindow(parent); OleUninitialize();
+    NativeDesktopPaintTests(parent); NativeWallpaperTests(); DestroyWindow(parent); OleUninitialize();
     NativeDesktopIconSizeTests();
 }

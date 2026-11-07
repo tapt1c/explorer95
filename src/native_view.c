@@ -472,10 +472,21 @@ static void ReadWallpaper(NativeView *view)
     RegCloseKey(key);
 }
 
+/* Parent erases and the smaller DefView/ListView share one desktop canvas.
+ * Keeping their individual sizes as the cache key rebuilds the wallpaper
+ * twice per exposed frame (for example, 640x480 then 640x452 on Win95). */
+static HWND BackgroundCanvas(NativeView *view,HWND window,POINT *origin)
+{
+    HWND canvas=view->desktop ? view->parent : window;
+    origin->x=origin->y=0;
+    if(canvas!=window) { ClientToScreen(window,origin); ScreenToClient(canvas,origin); }
+    return canvas;
+}
 static void PaintBackgroundDirect(NativeView *view, HDC dc, HWND window)
 {
-    RECT rect;
+    RECT rect,canvas; POINT origin; HWND owner=BackgroundCanvas(view,window,&origin);
     GetClientRect(window, &rect);
+    GetClientRect(owner,&canvas);
     FillRect(dc, &rect, (HBRUSH)(COLOR_BACKGROUND + 1));
     if (view->wallpaper) {
         BITMAP bitmap;
@@ -484,11 +495,13 @@ static void PaintBackgroundDirect(NativeView *view, HDC dc, HWND window)
         GetObjectA(view->wallpaper, sizeof(bitmap), &bitmap);
         if (bitmap.bmWidth > 0 && bitmap.bmHeight > 0) {
             if (view->tiled) {
-                int x, y;
-                for (y = 0; y < rect.bottom; y += bitmap.bmHeight)
-                    for (x = 0; x < rect.right; x += bitmap.bmWidth)
+                int x,y,left=(-origin.x)%bitmap.bmWidth,top=(-origin.y)%bitmap.bmHeight;
+                if(left>0) left-=bitmap.bmWidth;
+                if(top>0) top-=bitmap.bmHeight;
+                for (y = top; y < rect.bottom; y += bitmap.bmHeight)
+                    for (x = left; x < rect.right; x += bitmap.bmWidth)
                         BitBlt(dc, x, y, bitmap.bmWidth, bitmap.bmHeight, memory, 0, 0, SRCCOPY);
-            } else BitBlt(dc, (rect.right - bitmap.bmWidth) / 2, (rect.bottom - bitmap.bmHeight) / 2,
+            } else BitBlt(dc, (canvas.right - bitmap.bmWidth) / 2-origin.x, (canvas.bottom - bitmap.bmHeight) / 2-origin.y,
                           bitmap.bmWidth, bitmap.bmHeight, memory, 0, 0, SRCCOPY);
         }
         SelectObject(memory, old); DeleteDC(memory);
@@ -505,17 +518,25 @@ void NativeViewPaintDesktop(NativeView *view, HDC dc, HWND window)
  * after a settings/size change, then restore exposed pixels in one GDI copy. */
 static void PaintBackground(NativeView *view, HDC target, HWND window)
 {
-    RECT rect; HDC dc; BOOL resize;
+    RECT rect,canvas; POINT origin; HDC dc; BOOL resize; HWND owner;
     /* A solid system color needs no screen-sized bitmap or GDI copy. This
      * path also serves the parent's erase during full-window dragging. */
     if(!view->wallpaper) { PaintBackgroundDirect(view,target,window); return; }
     GetClientRect(window, &rect);
-    resize = view->background.width != rect.right || view->background.height != rect.bottom;
-    dc = PaintBufferBegin(&view->background, target, &rect);
-    if (dc == target || resize || view->backgroundDirty) {
-        PaintBackgroundDirect(view, dc, window); view->backgroundDirty = FALSE;
+    owner=BackgroundCanvas(view,window,&origin); GetClientRect(owner,&canvas);
+    /* Off-canvas targets and allocation failures still paint directly, with
+     * the same centering/tile phase, without changing the shared cache key. */
+    if(origin.x<0 || origin.y<0 || origin.x>canvas.right-rect.right || origin.y>canvas.bottom-rect.bottom) {
+        PaintBackgroundDirect(view,target,window); return;
     }
-    PaintBufferEnd(&view->background, target, &rect);
+    resize = view->background.width != canvas.right || view->background.height != canvas.bottom;
+    dc = PaintBufferBegin(&view->background, target, &canvas);
+    if(dc==target) { PaintBackgroundDirect(view,target,window); return; }
+    if (resize || view->backgroundDirty) {
+        PaintBackgroundDirect(view, dc, owner); view->backgroundDirty = FALSE;
+    }
+    if(!origin.x && !origin.y) PaintBufferEnd(&view->background, target, &rect);
+    else BitBlt(target,0,0,rect.right,rect.bottom,dc,origin.x,origin.y,SRCCOPY);
 }
 
 /* Repair exposure without querying items owned by an active shell callback. */

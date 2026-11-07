@@ -122,11 +122,51 @@ core-solid.log, ui-solid.log, ui1024-after.log, solid-timing-ui.log, timing-live
 
 Пользователю передан work/vm-alpha86/browser-solid12.iso, UPDTIME.EXE,
 «Explorer95 solid background: READY». Перенос остаётся в TEMP\EX95T12.EXE с
-прежним INI. Новый EX95LAG.LOG нужно прочитать из F:\WINDOWS\TEMP после трёх
-переносов; задан вопрос о плавности. Результат ожидается, задача не закрыта.
+прежним INI. Новый EX95LAG.LOG получен из F:\WINDOWS\TEMP и разобран ниже.
+Субъективная оценка плавности пользователем не дана; задача не закрыта.
 ISO сверено побайтно, SHA256 диагностического EX95TIME.EXE:
 d4dc8d98f54f8b3ab39307d2fe73ce0ecb85a6c321f662521577e1d81e3f69ac.
 Новый образ не заменяет browser-timing12.iso; релиз/тег не публиковались.
+
+Получен второй журнал: build/browser-lag-20261107/win95-solid-timing.log,
+SHA256 00170fbb83b958586b3add8a565168cd14034ab0c5db4e4672df02ae6bec4e62.
+Он подтвердил BMP-обои (PaintWallpaper), поэтому предыдущая оптимизация
+однотонного фона здесь не использовалась. В трёх переносах по 29/35/32 раза
+срабатывали ОБЕ PaintBackgroundDirect — родитель и ListView, около 40 мс на
+каждый вызов. Повторная растеризация обоев занимала 2,35/2,85/2,65 с self.
+Полная папка Control Panel при этом рисовалась существенно дешевле.
+Причина в общем background PaintBuffer: родитель запрашивал 640×480,
+список — 640×452, точный размер менялся дважды на каждом проходе, bitmap
+уничтожался и обои рисовались заново. Данные scoped/clip-журнала и условие
+resize в исходнике согласуются; таймер задач менять не требуется.
+
+Исправление: единственный cache canvas — client rect desktop parent.
+BackgroundCanvas переводит начало целевого HWND к родителю, а target получает
+соответствующий участок общего bitmap. Center/tile сохраняют общие координаты
+также в direct fallback. Выход target за canvas и нехватка буфера используют
+прямое рисование без изменения ключа общего кэша. Смена обоев/цвета и реальный
+resize родителя сохраняют прежнюю invalidation, дополнительных полноэкранных
+буферов и импортов нет. Завершённый desktopFrame и native reentrancy не менялись.
+
+Регрессия NativeWallpaperTests сначала упала на старом коде на центрировании
+при parent/child paints (core-wallpaper-before.log). После исправления пройдены
+центр и мозаика на собственном асимметричном BMP, разные размеры/ненулевые
+смещения, resize корня, off-canvas direct fallback и возврат обратно в кэш.
+Fixture восстанавливает точные типы/байты двух registry values и собственный
+файл также при Check failure, не рассылает SPI/смену системных обоев.
+Пройдены ordinary x86 make check/PE (341 импорт), core и прежний browser fixture
+640×480/1024×768. Новый diagnostic controlled-move fixture использует настоящий
+8×6 BMP в одноразовом Wine prefix: после прогрева нет ни одного вызова
+PaintBackgroundDirect за 30 экспозиций. Проверены журнал, отсутствие потерь
+scopes и штатное закрытие. Это подтверждает reuse, но скорость Win95 ещё
+нужно подтвердить; полный UI перед публикацией не засчитан как выполненный.
+
+Пользователю передан work/vm-alpha86/browser-wallpaper12.iso, UPDTIME.EXE,
+«Explorer95 wallpaper cache: READY». Журнал диагностической версии v4 остаётся
+TEMP\EX95LAG.LOG; после трёх переносов нужно прочитать F:\WINDOWS\TEMP\EX95LAG.LOG
+и получить оценку плавности. SHA256 EX95TIME.EXE:
+c2299a7b7dbe4f050269734539ba4341288d894311cb7f9d4ec555b6c016ab64.
+ISO app/updater сверены побайтно; старые образы сохранены, публикации нет.
 
 ## Опубликован EXE 1.2.1: проверка скрытого рабочего стола
 
