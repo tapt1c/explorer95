@@ -50,7 +50,7 @@ work/vm-alpha86/browser-timing12.iso с UPDTIME.EXE. Он штатно закр�
 После переноса окна полной Control Panel и отпускания мыши журнал пишется
 в гостевой TEMP\EX95LAG.LOG; во время переноса записи на диск нет. Пользователю
 предложены три переноса по 3–5 секунд и перенос журнала на рабочий стол хоста.
-Результат этого измерения ещё не получен; диагностический EXE не является релизом.
+Результат этого измерения получен и разобран ниже; диагностический EXE не является релизом.
 
 29 scopes в сгенерированных копиях модулей измеряют callbacks Browser, native view,
 Sidebar, toolbar и taskbar, а также UpdateTasks/EnvWindowIcon/TrayPrune/панели.
@@ -85,6 +85,48 @@ EX95TIME.EXE содержит 343 импорта, UPDTIME.EXE — 21; CRT не �
 Стенды, генератор, исходники переноса, результаты и manifest сохранены в
 игнорируемом build/browser-lag-20261107/ (timing*, generate-timing.py,
 prepare-timing.py, package-timing.py, check-timing.py). Релиз не опубликован.
+
+Пользователь передал F:\WINDOWS\TEMP\EX95LAG.LOG. Точная копия —
+build/browser-lag-20261107/win95-user-timing.log. Самопроверка пройдена,
+QPC=1193180, пропусков scopes/ошибок часов нет. В первом переносе длительностью
+2,972 с общий Subclass/SysListView32 WM_PAINT занял 1,490 с self, DesktopProc
+WM_ERASEBKGND — 0,905 с. Три taskbar timer 1 заняли лишь 3,768 мс. Следующие
+переносы подтвердили преобладание этих paint-путей. Общий класс Subclass пока
+не разделял desktop и folder list, поэтому не приписывайте всё время одной
+Панели управления и не меняйте UpdateTasks на основании этого журнала.
+
+Кандидат исправления: PaintBackground сразу использует имеющийся
+PaintBackgroundDirect/FillRect, если BMP-обоев нет. Однотонному системному цвету
+не нужен отдельный полноэкранный bitmap и его BitBlt при каждом erase/paint.
+Кэш BMP-обоев, законченный desktopFrame со значками, клиппинг и защита вложенных
+native callbacks сохранены. Новых импортов обычного приложения нет.
+В управляемом Wine-сценарии 30 экспозиций удалены два набора запросов копирования
+по 9 216 000 пикселей: из background в memory frame и в родительский Desktop.
+У всех 30 родительских DC в прежнем стенде был NULLREGION. Это площади запросов,
+не объём видеотрафика и не измерение ускорения Win95. Копирование готового кадра
+SysListView32 осталось, как и прежде. Диагностические роли теперь различают
+DesktopList/DesktopView/FolderView; добавлены scopes фона/кадра/теней и площади
+копирований с типом clip, всего 37 scopes. Старые локальные результаты сохранены
+с суффиксами .v2 и .v3-before.
+
+Пройдены обычная x86 сборка make check/PE (341 импорт), core/Wine 10 с
+NativeDesktopPaintTests, erase/частичным кадром/resize/redraw hold/вложенными
+callback/48px-цветом и восстановлением, browser fixture с настоящими окнами
+на 640×480 и 1024×768: цвета, repaint/transition, Sidebar scrollbar tracking,
+полная/краткая Control Panel и native exposure/resize/reopen. Диагностическая
+самопроверка и controlled-move fixture тоже прошли; подтверждено отсутствие
+копии фонового bitmap на родительский Desktop. Полный UI перед публикацией
+и скорость настоящей Win95 ещё не подтверждены. Сырые результаты — build-solid.log,
+core-solid.log, ui-solid.log, ui1024-after.log, solid-timing-ui.log, timing-live.log
+в том же диагностическом каталоге.
+
+Пользователю передан work/vm-alpha86/browser-solid12.iso, UPDTIME.EXE,
+«Explorer95 solid background: READY». Перенос остаётся в TEMP\EX95T12.EXE с
+прежним INI. Новый EX95LAG.LOG нужно прочитать из F:\WINDOWS\TEMP после трёх
+переносов; задан вопрос о плавности. Результат ожидается, задача не закрыта.
+ISO сверено побайтно, SHA256 диагностического EX95TIME.EXE:
+d4dc8d98f54f8b3ab39307d2fe73ce0ecb85a6c321f662521577e1d81e3f69ac.
+Новый образ не заменяет browser-timing12.iso; релиз/тег не публиковались.
 
 ## Опубликован EXE 1.2.1: проверка скрытого рабочего стола
 

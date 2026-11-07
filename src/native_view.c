@@ -506,6 +506,9 @@ void NativeViewPaintDesktop(NativeView *view, HDC dc, HWND window)
 static void PaintBackground(NativeView *view, HDC target, HWND window)
 {
     RECT rect; HDC dc; BOOL resize;
+    /* A solid system color needs no screen-sized bitmap or GDI copy. This
+     * path also serves the parent's erase during full-window dragging. */
+    if(!view->wallpaper) { PaintBackgroundDirect(view,target,window); return; }
     GetClientRect(window, &rect);
     resize = view->background.width != rect.right || view->background.height != rect.bottom;
     dc = PaintBufferBegin(&view->background, target, &rect);
