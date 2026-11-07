@@ -1,7 +1,29 @@
 /* Real WH_KEYBOARD delivery from independent processes, not WM_APP simulation. */
 static void SwitchKey(BYTE key,BOOL up)
 { keybd_event(key,0,up ? KEYEVENTF_KEYUP : 0,0); PumpFor(70); }
-static void SwitchTab(void) { SwitchKey(VK_TAB,FALSE); SwitchKey(VK_TAB,TRUE); }
+static void SwitchTab(void)
+{
+    HWND popup=FindWindowA("Explorer95.TaskSwitch",NULL),list=NULL;
+    int count=0,before=-1,expected=-1; DWORD started;
+    if(popup && IsWindowVisible(popup)) {
+        list=GetDlgItem(popup,TASK_SWITCH_LIST); count=(int)SendMessageA(list,LB_GETCOUNT,0,0);
+        before=(int)SendMessageA(list,LB_GETCURSEL,0,0);
+        if(count>0 && before>=0) expected=(before+count+((GetAsyncKeyState(VK_SHIFT)&0x8000) ? -1 : 1))%count;
+    }
+    SwitchKey(VK_TAB,FALSE); SwitchKey(VK_TAB,TRUE);
+    if(expected<0) return;
+    /* The hook posts the switch command. A fixed delay or synchronous LB
+     * query can overtake that queued command while the shell is painting.
+     * Observe completion; never inject a replacement/retry key press. */
+    started=GetTickCount();
+    while(IsWindowVisible(popup) && SendMessageA(list,LB_GETCURSEL,0,0)!=expected && GetTickCount()-started<2000) PumpFor(20);
+    if(GetTickCount()!=started) {
+        char note[220]; wsprintfA(note,"Task switch completion: before=%d expected=%d actual=%d count=%d wait-ms=%lu visible=%d alt=%d\r\n",
+            before,expected,(int)SendMessageA(list,LB_GETCURSEL,0,0),count,GetTickCount()-started,IsWindowVisible(popup),!!(GetAsyncKeyState(VK_MENU)&0x8000)); Log(note);
+    }
+    Check(IsWindowVisible(popup) && SendMessageA(list,LB_GETCURSEL,0,0)==expected,
+        "one real Alt+Tab press completes exactly one queued selection step");
+}
 static HWND SwitchOpen(HWND foreground)
 {
     DWORD started=GetTickCount(),settled=started; DWORD_PTR result; HWND popup,bar=FindWindowA("Explorer95.Taskbar",NULL);
