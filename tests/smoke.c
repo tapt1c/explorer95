@@ -390,8 +390,31 @@ static void DesktopLabelPaintTests(void)
 }
 
 #include "icon_scale_cases.h"
+static void PaintScratchTests(void)
+{
+    PaintBuffer scratch={0},canvas={0}; RECT full={0,0,200,140},large={5,7,165,87};
+    HDC screen=GetDC(NULL),target=PaintBufferBegin(&canvas,screen,&full),dc;
+    HBRUSH ink=CreateSolidBrush(RGB(31,79,157)); HBITMAP bitmap; HDC memory; int i;
+    dc=PaintBufferBeginScratch(&scratch,target,&large);
+    Check(dc!=target,"allocate an owned scratch surface for variable-height browser rows");
+    bitmap=scratch.bitmap; memory=scratch.dc;
+    for(i=0;i<12;++i) {
+        RECT row={17,13,97,37}; if(i&1) row=large;
+        FillRect(target,&full,(HBRUSH)GetStockObject(BLACK_BRUSH));
+        dc=PaintBufferBeginScratch(&scratch,target,&row);
+        Check(dc==memory && scratch.bitmap==bitmap,
+            "alternating browser row sizes reuse the warmed scratch bitmap and DC");
+        FillRect(dc,&row,ink); PaintBufferEnd(&scratch,target,&row);
+        Check(GetPixel(target,row.left+1,row.top+1)==RGB(31,79,157) &&
+            GetPixel(target,row.right-1,row.bottom-1)==RGB(31,79,157) &&
+            GetPixel(target,row.right+1,row.bottom+1)==RGB(0,0,0),
+            "scratch reuse preserves nonzero drawing origins and copies only the requested row");
+    }
+    PaintBufferFree(&scratch); PaintBufferFree(&canvas); DeleteObject(ink); ReleaseDC(NULL,screen);
+}
 static void PaintTests(void)
 {
+    PaintScratchTests();
     IconScaleTests();
     {
         int size;

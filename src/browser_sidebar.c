@@ -455,13 +455,22 @@ static LRESULT CALLBACK SidebarProc(HWND window, UINT message, WPARAM wp, LPARAM
     }
     case WM_DRAWITEM: {
         DRAWITEMSTRUCT draw = *(DRAWITEMSTRUCT *)lp; HDC target = draw.hDC;
-        draw.hDC = PaintBufferBegin(&s->rowBuffer, target, &draw.rcItem); DrawRow(browser, &draw);
+        draw.hDC = PaintBufferBeginScratch(&s->rowBuffer, target, &draw.rcItem); DrawRow(browser, &draw);
         PaintBufferEnd(&s->rowBuffer, target, &draw.rcItem); return TRUE;
     }
     case WM_ERASEBKGND: return TRUE;
     case WM_PAINT: {
         PAINTSTRUCT paint; RECT rect; HDC target = BeginPaint(window, &paint), dc;
+        int saved;
+        if(!target || IsRectEmpty(&paint.rcPaint)) { EndPaint(window,&paint); return 0; }
+        /* The viewport has only one solid background. Painting it directly is
+         * already one complete operation and leaves the content buffer alone. */
+        if(window==s->window) {
+            FillRect(target,&paint.rcPaint,(HBRUSH)(COLOR_BTNFACE+1)); EndPaint(window,&paint); return 0;
+        }
         GetClientRect(window, &rect); dc = PaintBufferBegin(&s->background, target, &rect);
+        saved=SaveDC(dc);
+        if(saved) IntersectClipRect(dc,paint.rcPaint.left,paint.rcPaint.top,paint.rcPaint.right,paint.rcPaint.bottom);
         FillRect(dc, &rect, (HBRUSH)(COLOR_BTNFACE + 1));
         if (window == s->content && browser->options.pane == BROWSER_PANE_TASKS) {
             int i;
@@ -469,7 +478,8 @@ static LRESULT CALLBACK SidebarProc(HWND window, UINT message, WPARAM wp, LPARAM
                 RECT group = s->groups[i]; FillRect(dc, &group, (HBRUSH)(COLOR_WINDOW + 1)); DrawEdge(dc, &group, BDR_SUNKENOUTER, BF_RECT);
             }
         }
-        PaintBufferEnd(&s->background, target, &rect); EndPaint(window, &paint); return 0;
+        if(saved) RestoreDC(dc,saved);
+        PaintBufferEnd(&s->background, target, &paint.rcPaint); EndPaint(window, &paint); return 0;
     }
     case WM_SYSCOLORCHANGE: InvalidateRect(window, NULL, TRUE); return 0;
     }

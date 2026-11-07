@@ -209,7 +209,7 @@ static void Reflow(Browser *browser)
 static void DrawLink(Browser *browser,const DRAWITEMSTRUCT *draw)
 {
     BrowserControlPanel *c=browser->controlPanel; RECT rect=draw->rcItem,text; int index=(int)draw->CtlID-ID_CONTROL_ITEM,top;
-    HDC dc=PaintBufferBegin(&c->row,draw->hDC,&rect); HGDIOBJ old; BOOL all=draw->CtlID==ID_CONTROL_ALL;
+    HDC dc=PaintBufferBeginScratch(&c->row,draw->hDC,&rect); HGDIOBJ old; BOOL all=draw->CtlID==ID_CONTROL_ALL;
     FillRect(dc,&rect,(HBRUSH)(COLOR_WINDOW+1)); SetBkMode(dc,TRANSPARENT);
     if(!all && (index<0 || index>=CONTROL_ITEMS)) { PaintBufferEnd(&c->row,draw->hDC,&draw->rcItem); return; }
     text=rect; text.left+=all ? 0 : 52; text.right-=4; text.top+=all ? 4 : 3;

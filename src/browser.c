@@ -949,7 +949,7 @@ static LRESULT CALLBACK BrowserProc(HWND window, UINT message, WPARAM wp, LPARAM
         if (browser && BrowserAddressDraw(browser, (DRAWITEMSTRUCT *)lp)) return TRUE;
         if (browser && ((DRAWITEMSTRUCT *)lp)->CtlID == ID_FOLDERS_LABEL) {
             DRAWITEMSTRUCT *draw = (DRAWITEMSTRUCT *)lp; RECT text = draw->rcItem; char title[32]; HGDIOBJ old;
-            HDC dc = PaintBufferBegin(&browser->tiles, draw->hDC, &draw->rcItem);
+            HDC dc = PaintBufferBeginScratch(&browser->tiles, draw->hDC, &draw->rcItem);
             FillRect(dc, &text, (HBRUSH)(INT_PTR)((browser->captionActive ? COLOR_ACTIVECAPTION : COLOR_INACTIVECAPTION) + 1));
             old = SelectObject(dc, browser->captionFont ? browser->captionFont : browserFont);
             SetBkMode(dc, TRANSPARENT); SetTextColor(dc, GetSysColor(browser->captionActive ? COLOR_CAPTIONTEXT : COLOR_INACTIVECAPTIONTEXT));
@@ -959,7 +959,7 @@ static LRESULT CALLBACK BrowserProc(HWND window, UINT message, WPARAM wp, LPARAM
         }
         if (browser && ((DRAWITEMSTRUCT *)lp)->CtlID == ID_FOLDERS_CLOSE) {
             DRAWITEMSTRUCT *draw = (DRAWITEMSTRUCT *)lp; RECT glyph = draw->rcItem;
-            HDC dc = PaintBufferBegin(&browser->tiles, draw->hDC, &draw->rcItem); HGDIOBJ old;
+            HDC dc = PaintBufferBeginScratch(&browser->tiles, draw->hDC, &draw->rcItem); HGDIOBJ old;
             BOOL pressed = !!(draw->itemState & ODS_SELECTED);
             FillRect(dc, &glyph, (HBRUSH)(COLOR_BTNFACE + 1)); DrawEdge(dc, &glyph, pressed ? EDGE_SUNKEN : EDGE_RAISED, BF_RECT);
             if (pressed) OffsetRect(&glyph, 1, 1);
@@ -970,7 +970,7 @@ static LRESULT CALLBACK BrowserProc(HWND window, UINT message, WPARAM wp, LPARAM
         }
         if (browser && ((DRAWITEMSTRUCT *)lp)->CtlType == ODT_LISTVIEW) {
         DRAWITEMSTRUCT draw = *(DRAWITEMSTRUCT *)lp; HDC target = draw.hDC;
-        draw.hDC = PaintBufferBegin(&browser->tiles, target, &draw.rcItem); BrowserFilesDraw(browser, &draw);
+        draw.hDC = PaintBufferBeginScratch(&browser->tiles, target, &draw.rcItem); BrowserFilesDraw(browser, &draw);
         PaintBufferEnd(&browser->tiles, target, &draw.rcItem); return TRUE; } break;
     case WM_CONTEXTMENU:
         if (browser && ((HWND)wp == browser->toolbar || (HWND)wp == window)) {
@@ -1021,8 +1021,16 @@ static LRESULT CALLBACK BrowserProc(HWND window, UINT message, WPARAM wp, LPARAM
         } break;
     case WM_PAINT:
         if (browser) { PAINTSTRUCT paint; RECT rect; HDC target = BeginPaint(window, &paint), dc;
-            GetClientRect(window, &rect); dc = PaintBufferBegin(&browser->background, target, &rect);
-            PaintFrame(browser, dc); PaintBufferEnd(&browser->background, target, &rect); EndPaint(window, &paint); return 0; } break;
+            if(target && !IsRectEmpty(&paint.rcPaint)) {
+                int saved;
+                GetClientRect(window, &rect); dc = PaintBufferBegin(&browser->background, target, &rect);
+                saved=SaveDC(dc);
+                if(saved) IntersectClipRect(dc,paint.rcPaint.left,paint.rcPaint.top,paint.rcPaint.right,paint.rcPaint.bottom);
+                PaintFrame(browser, dc);
+                if(saved) RestoreDC(dc,saved);
+                PaintBufferEnd(&browser->background, target, &paint.rcPaint);
+            }
+            EndPaint(window, &paint); return 0; } break;
     case WM_ERASEBKGND:
         if (browser) {
             /* Own WM_PAINT fills the frame. Never paint a whole frame into

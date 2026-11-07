@@ -139,6 +139,16 @@ HDC PaintBufferBegin(PaintBuffer *buffer, HDC target, const RECT *rect)
     SetWindowOrgEx(buffer->dc, rect->left, rect->top, NULL);
     return buffer->dc;
 }
+HDC PaintBufferBeginScratch(PaintBuffer *buffer, HDC target, const RECT *rect)
+{
+    RECT capacity=*rect;
+    if(rect->right<=rect->left || rect->bottom<=rect->top) return target;
+    if(buffer->dc) {
+        if(buffer->width>rect->right-rect->left) capacity.right=rect->left+buffer->width;
+        if(buffer->height>rect->bottom-rect->top) capacity.bottom=rect->top+buffer->height;
+    }
+    return PaintBufferBegin(buffer,target,&capacity);
+}
 void PaintBufferEnd(PaintBuffer *buffer, HDC target, const RECT *rect)
 {
     if (buffer->dc) BitBlt(target, rect->left, rect->top, rect->right - rect->left,

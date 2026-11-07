@@ -16,6 +16,9 @@ typedef struct PaintBuffer {
     int width, height;
 } PaintBuffer;
 HDC PaintBufferBegin(PaintBuffer *buffer, HDC target, const RECT *rect);
+/* Scratch rows are repainted in full. Keep capacity when row sizes alternate;
+ * retained scene buffers must continue using exact-size PaintBufferBegin. */
+HDC PaintBufferBeginScratch(PaintBuffer *buffer, HDC target, const RECT *rect);
 void PaintBufferEnd(PaintBuffer *buffer, HDC target, const RECT *rect);
 void PaintBufferFree(PaintBuffer *buffer);
 /* Caller owns the returned icon. Sample the native XOR/AND planes together;
