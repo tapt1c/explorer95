@@ -635,17 +635,27 @@ static void DesktopHiddenExposureTest(HWND desktop,HWND browser)
 {
     HWND view=FindWindowExA(desktop,NULL,NULL,NULL); BOOL visible=IsWindowVisible(view);
     RECT previous,area,patch; HDC dc; HBRUSH ink; COLORREF before,after;
+    POINT point; int x,y; BOOL exposed=FALSE;
     GetWindowRect(browser,&previous); MoveWindow(browser,0,0,280,170,TRUE);
     ShowWindow(view,SW_HIDE); PumpFor(60);
     RedrawWindow(desktop,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_UPDATENOW);
-    GetClientRect(desktop,&area); SetRect(&patch,area.right-24,area.bottom-24,area.right-12,area.bottom-12);
+    GetClientRect(desktop,&area);
+    for(y=area.bottom-24;y>=12 && !exposed;y-=32) for(x=area.right-24;x>=12;x-=32) {
+        point.x=x+2; point.y=y+2; ClientToScreen(desktop,&point);
+        if(WindowFromPoint(point)==desktop) { SetRect(&patch,x,y,x+12,y+12); exposed=TRUE; break; }
+    }
+    Check(exposed,"hidden desktop exposure fixture uses a point outside other windows and the taskbar");
     dc=GetDC(desktop); before=GetPixel(dc,patch.left+2,patch.top+2);
     Check(before!=CLR_INVALID,"hidden desktop exposure fixture has accessible background pixels");
     ink=CreateSolidBrush(RGB(249,5,233)); FillRect(dc,&patch,ink); DeleteObject(ink);
-    InvalidateRect(desktop,&patch,TRUE); SendMessageA(desktop,WM_ERASEBKGND,(WPARAM)dc,0);
+    Check(GetPixel(dc,patch.left+2,patch.top+2)==RGB(249,5,233),"hidden desktop exposure fixture draws its visible damage marker");
+    /* Let USER supply a DC owned by the target process. Its message pump may
+     * also consume WM_PAINT before we can read GetUpdateRect from here; the
+     * erase-only/update-region contract is checked separately in-process. */
+    Check(RedrawWindow(desktop,&patch,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_ERASENOW|RDW_NOCHILDREN),
+        "request native erase of the exposed hidden-icon desktop in its owning process");
     after=GetPixel(dc,patch.left+2,patch.top+2); ReleaseDC(desktop,dc);
-    Check(after==before && GetUpdateRect(desktop,NULL,FALSE),
-        "hidden-icon desktop erases exposed window trails immediately without waiting for or consuming WM_PAINT");
+    Check(after==before,"hidden-icon desktop restores exposed window trails through the native erase path");
     if(visible) ShowWindow(view,SW_SHOWNA);
     MoveWindow(browser,previous.left,previous.top,previous.right-previous.left,previous.bottom-previous.top,TRUE);
     PumpFor(60);

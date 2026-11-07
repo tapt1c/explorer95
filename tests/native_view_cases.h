@@ -398,6 +398,28 @@ static void NativeDesktopRefreshPaintTest(NativeView *view)
         "refresh requested by native display callbacks runs once after the outer control call");
     SetWindowLongPtrA(list,GWLP_WNDPROC,(LONG_PTR)nativeRefreshOriginal);
 }
+static void NativeDesktopHiddenPaintTest(NativeView *view,HWND parent)
+{
+    HWND child=NativeViewWindow(view); RECT area,patch; HDC dc; HBRUSH ink; COLORREF before,after;
+    BOOL visible=IsWindowVisible(child);
+    ShowWindow(child,SW_HIDE); GetClientRect(parent,&area);
+    SetRect(&patch,area.right-24,area.bottom-24,area.right-12,area.bottom-12);
+    dc=GetDC(parent); NativeViewPaintDesktop(view,dc,parent);
+    before=GetPixel(dc,patch.left+2,patch.top+2);
+    Check(before!=CLR_INVALID,"in-process hidden desktop fixture has accessible wallpaper pixels");
+    ink=CreateSolidBrush(RGB(249,5,233)); FillRect(dc,&patch,ink); DeleteObject(ink);
+    Check(GetPixel(dc,patch.left+2,patch.top+2)==RGB(249,5,233),"in-process hidden desktop fixture draws its damage marker");
+    InvalidateRect(parent,&patch,TRUE);
+    /* Same helper used by DesktopProc's WM_ERASEBKGND. No message pump can
+     * deliver WM_PAINT between this call and the update-region assertion. */
+    NativeViewPaintDesktop(view,dc,parent);
+    after=GetPixel(dc,patch.left+2,patch.top+2); ReleaseDC(parent,dc);
+    Check(after==before && GetUpdateRect(parent,NULL,FALSE),
+        "hidden desktop erase restores wallpaper before WM_PAINT without consuming its update region");
+    ValidateRect(parent,NULL);
+    if(visible) ShowWindow(child,SW_SHOWNA);
+    RedrawWindow(parent,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_UPDATENOW|RDW_ALLCHILDREN);
+}
 static void NativeDesktopPaintTests(HWND parent)
 {
     RECT area={0,0,320,200},item; NativeView *view; HWND list; HDC dc; DWORD pixels; LPARAM empty; HFONT labelFont;
@@ -488,6 +510,7 @@ static void NativeDesktopPaintTests(HWND parent)
     RedrawWindow(list,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_UPDATENOW);
     Check(ListView_GetTextBkColor(list)==CLR_NONE && NativeDesktopPixels(list,&item)==pixels,
         "restoring shadows reproduces the original transparent desktop frame");
+    NativeDesktopHiddenPaintTest(view,parent);
     SaveScreen("build/desktop-native-frame.bmp");
     nativeDesktopList=list; nativeDesktopItem=item; nativeDesktopFrame=pixels;
     nativeDeletePaint=TRUE; nativeDeleteFrameRetained=FALSE;
